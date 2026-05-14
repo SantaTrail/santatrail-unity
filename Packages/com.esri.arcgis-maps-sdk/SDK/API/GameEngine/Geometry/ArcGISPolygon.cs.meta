@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 05e9da5b33ea94a738dc95421010e5f9
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/GameEngine/Geometry/ArcGISPolygon.cs
+  uploadId: 904236

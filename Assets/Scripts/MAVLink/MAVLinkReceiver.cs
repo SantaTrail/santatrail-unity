@@ -1,0 +1,857 @@
+using UnityEngine;
+using System.Net;
+using System.Net.Sockets;
+using System.IO;
+using System.Text;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
+
+using Esri.ArcGISMapsSDK.Components;
+using Esri.GameEngine.Geometry;
+
+public class MAVLinkReceiver : MonoBehaviour
+{
+    public static MAVLinkReceiver Active { get; private set; }
+
+    private UdpClient client;
+    private UdpClient commandClient;
+    private IPEndPoint endPoint;
+    private IPEndPoint commandEndPoint;
+
+    private MAVLink.MavlinkParse parser;
+    private MAVLink.MavlinkParse txParser;
+
+    [Header("ArcGIS")]
+    public ArcGISLocationComponent locationComponent;
+
+    [Header("Debug Overlay")]
+    public bool showDebugOverlay = true;
+    public KeyCode toggleDebugKey = KeyCode.F8;
+
+    [Header("Attitude")]
+    public float roll;
+    public float pitch;
+    public float yaw;
+
+    public float headingDeg;
+    public bool hasHeadingDeg;
+    public float lastAttitudeTime { get; private set; }
+    public float lastPositionTime { get; private set; }
+
+    [Header("Smoothing")]
+    [Tooltip("Higher = faster response")]
+    public float positionSmoothSpeed = 60f;
+
+    [Tooltip("Predicts motion between MAVLink packets")]
+    public float extrapolationTime = 0.03f;
+
+    [Tooltip("Max seconds to continue dead-reckoning when GPS packets pause")]
+    public float maxExtrapolationGap = 10f;
+
+    [Tooltip("Snap when close to target position (meters) to avoid apparent short-stop lag")]
+    public float snapDistanceMeters = 0.8f;
+
+    [Header("Velocity Recovery")]
+    [Tooltip("Treat speeds below this as potentially stale (m/s)")]
+    public float staleSpeedThreshold = 0.15f;
+
+    [Tooltip("Continue using last non-zero velocity for this long when stream reports near-zero speed")]
+    public float coastSeconds = 2.0f;
+
+    [Header("Guided Assist")]
+    [Tooltip("When enabled, Unity can keep moving visually if GUIDED stalls. Keep OFF to match QGroundControl exactly.")]
+    public bool enableGuidedAssist = false;
+
+    [Tooltip("When GUIDED is stalled but target is still far, resend reposition command to wake ArduPilot motion.")]
+    public bool enableGuidedRepositionNudge = true;
+
+    [Tooltip("Seconds of near-zero speed before sending a reposition nudge.")]
+    public float guidedStallSecondsBeforeNudge = 2.0f;
+
+    [Tooltip("Minimum seconds between reposition nudges.")]
+    public float guidedNudgeIntervalSeconds = 0.5f;
+
+    private double targetLat;
+    private double targetLon;
+    private double targetAlt;
+    private float targetRelativeAlt;
+
+    private double smoothLat;
+    private double smoothLon;
+    private double smoothAlt;
+
+    private bool hasTargetPosition;
+    private bool hasSmoothedPosition;
+    private float lastGpsPacketTime;
+    private float velNorthMps;
+    private float velEastMps;
+    private float velDownMps;
+    private float lastNonZeroVelTime;
+    private float lastNonZeroNorthMps;
+    private float lastNonZeroEastMps;
+    private float lastNonZeroDownMps;
+    private bool hasPrevGpsSample;
+    private double prevLat;
+    private double prevLon;
+    private double prevAlt;
+    private float prevGpsSampleTime;
+
+    private bool hasLoggedInvalidGps;
+    private bool hasLoggedInvalidAttitude;
+    private string debugVelocitySource = "raw";
+    private bool usingGuidedAssist;
+    private string debugAttitudeSource = "none";
+    private float lastAnyPacketTime;
+    private int gpsMsgCount;
+    private int attMsgCount;
+    private int quatMsgCount;
+    private StringBuilder debugSb;
+    private bool hbArmed;
+    private bool hbGuided;
+    private uint hbCustomMode;
+    private byte hbSystemStatus;
+    private MAVLink.MAV_LANDED_STATE landedState = MAVLink.MAV_LANDED_STATE.UNDEFINED;
+    private string lastStatusText = "";
+    private bool hasNavTargetDist;
+    private float navTargetDistM;
+    private float navTargetBearingDeg;
+    private float guidedStallTimer;
+    private float lastGuidedNudgeTime = -1000f;
+    private ushort lastCommandAckCommand;
+    private byte lastCommandAckResult;
+    private bool hasCommandAck;
+    private byte vehicleSystemId = 1;
+    private byte vehicleComponentId = 1;
+
+    public bool IsGuidedArmed => hbGuided && hbArmed;
+    public bool HasNavTargetDistance => hasNavTargetDist;
+    public float NavTargetDistanceMeters => navTargetDistM;
+
+    string GetCopterModeName(uint customMode)
+    {
+        switch (customMode)
+        {
+            case 0: return "STABILIZE";
+            case 1: return "ACRO";
+            case 2: return "ALT_HOLD";
+            case 3: return "AUTO";
+            case 4: return "GUIDED";
+            case 5: return "LOITER";
+            case 6: return "RTL";
+            case 7: return "CIRCLE";
+            case 9: return "LAND";
+            case 11: return "DRIFT";
+            case 13: return "SPORT";
+            case 14: return "FLIP";
+            case 15: return "AUTOTUNE";
+            case 16: return "POSHOLD";
+            case 17: return "BRAKE";
+            case 18: return "THROW";
+            case 19: return "AVOID_ADSB";
+            case 20: return "GUIDED_NOGPS";
+            case 21: return "SMART_RTL";
+            case 22: return "FLOWHOLD";
+            case 23: return "FOLLOW";
+            case 24: return "ZIGZAG";
+            case 25: return "SYSTEMID";
+            case 26: return "AUTOROTATE";
+            case 27: return "AUTO_RTL";
+            default: return "UNKNOWN";
+        }
+    }
+
+    void Start()
+    {
+        if (Active != null && Active != this)
+        {
+            Debug.LogWarning($"⚠️ Duplicate MAVLinkReceiver on {name} disabled (active: {Active.name})");
+            enabled = false;
+            return;
+        }
+
+        Active = this;
+
+        client = new UdpClient();
+
+        client.Client.SetSocketOption(
+            SocketOptionLevel.Socket,
+            SocketOptionName.ReuseAddress,
+            true
+        );
+
+        try
+        {
+            client.Client.Bind(new IPEndPoint(IPAddress.Any, 14551));
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ MAVLink bind failed on UDP 14551: {e.Message}");
+            enabled = false;
+            return;
+        }
+
+        parser = new MAVLink.MavlinkParse();
+        txParser = new MAVLink.MavlinkParse();
+        debugSb = new StringBuilder(512);
+        commandClient = new UdpClient();
+        commandEndPoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14550);
+
+        if (locationComponent == null)
+        {
+            locationComponent = GetComponent<ArcGISLocationComponent>();
+        }
+
+        if (locationComponent == null)
+        {
+            Debug.LogError("❌ ArcGISLocationComponent NOT FOUND");
+        }
+
+    }
+
+    void Update()
+    {
+        if (client == null)
+            return;
+
+        if (IsTogglePressed())
+        {
+            showDebugOverlay = !showDebugOverlay;
+        }
+
+        while (client.Available > 0)
+        {
+            byte[] data = client.Receive(ref endPoint);
+            lastAnyPacketTime = Time.time;
+
+            if (data == null || data.Length == 0)
+                return;
+
+            using (MemoryStream stream = new MemoryStream(data))
+            {
+                try
+                {
+                    MAVLink.MAVLinkMessage msg;
+
+                    while ((msg = parser.ReadPacket(stream)) != null)
+                    {
+                        HandleMessage(msg);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    void FixedUpdate()
+    {
+        ApplySmoothedTransform();
+    }
+
+    void HandleMessage(MAVLink.MAVLinkMessage msg)
+    {
+        if (msg != null)
+        {
+            if (msg.sysid != 0)
+                vehicleSystemId = msg.sysid;
+            if (msg.compid != 0)
+                vehicleComponentId = msg.compid;
+        }
+
+        // =========================================================
+        // GPS POSITION
+        // =========================================================
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.GLOBAL_POSITION_INT)
+        {
+            var gps = (MAVLink.mavlink_global_position_int_t)msg.data;
+
+            double lat = gps.lat / 1e7;
+            double lon = gps.lon / 1e7;
+            double alt = gps.alt / 1000.0;
+
+            if (!IsValidGeo(lat, lon, alt))
+            {
+                if (!hasLoggedInvalidGps)
+                {
+                    Debug.LogWarning(
+                        $"⚠️ Invalid GPS: {lat}, {lon}, {alt}"
+                    );
+
+                    hasLoggedInvalidGps = true;
+                }
+
+                return;
+            }
+
+            hasLoggedInvalidGps = false;
+
+            targetLat = lat;
+            targetLon = lon;
+            targetAlt = alt;
+            targetRelativeAlt = gps.relative_alt * 0.001f;
+            lastGpsPacketTime = Time.time;
+            lastPositionTime = Time.time;
+
+
+            float rawNorthMps = gps.vx * 0.01f;
+            float rawEastMps = gps.vy * 0.01f;
+            float rawDownMps = gps.vz * 0.01f;
+
+            float derivedNorthMps = 0f;
+            float derivedEastMps = 0f;
+            float derivedDownMps = 0f;
+            bool hasDerivedVel = false;
+            bool hasGpsMotion = false;
+
+            if (hasPrevGpsSample)
+            {
+                float sampleDt = Time.time - prevGpsSampleTime;
+                if (sampleDt > 0.02f)
+                {
+                    double metersPerDegLat = 111320.0;
+                    double cosLat = System.Math.Cos(lat * System.Math.PI / 180.0);
+                    double metersPerDegLon = 111320.0 * System.Math.Max(0.0001, cosLat);
+
+                    derivedNorthMps = (float)(((lat - prevLat) * metersPerDegLat) / sampleDt);
+                    derivedEastMps = (float)(((lon - prevLon) * metersPerDegLon) / sampleDt);
+                    derivedDownMps = (float)(-(alt - prevAlt) / sampleDt);
+                    hasDerivedVel = true;
+
+                    float deltaNorthM = (float)((lat - prevLat) * metersPerDegLat);
+                    float deltaEastM = (float)((lon - prevLon) * metersPerDegLon);
+                    float deltaUpM = (float)(alt - prevAlt);
+                    hasGpsMotion =
+                        (deltaNorthM * deltaNorthM +
+                         deltaEastM * deltaEastM +
+                         deltaUpM * deltaUpM) > 0.0025f;
+                }
+            }
+
+            float rawSpeed = Mathf.Sqrt(rawNorthMps * rawNorthMps + rawEastMps * rawEastMps + rawDownMps * rawDownMps);
+            float derivedSpeed = Mathf.Sqrt(derivedNorthMps * derivedNorthMps + derivedEastMps * derivedEastMps + derivedDownMps * derivedDownMps);
+
+            float useNorthMps = rawNorthMps;
+            float useEastMps = rawEastMps;
+            float useDownMps = rawDownMps;
+
+            if (hasDerivedVel && rawSpeed < staleSpeedThreshold && derivedSpeed > staleSpeedThreshold)
+            {
+                useNorthMps = derivedNorthMps;
+                useEastMps = derivedEastMps;
+                useDownMps = derivedDownMps;
+            }
+            else if (!hasGpsMotion &&
+                     rawSpeed < staleSpeedThreshold &&
+                     (Time.time - lastNonZeroVelTime) <= coastSeconds)
+            {
+                useNorthMps = lastNonZeroNorthMps;
+                useEastMps = lastNonZeroEastMps;
+                useDownMps = lastNonZeroDownMps;
+            }
+
+            velNorthMps = useNorthMps;
+            velEastMps = useEastMps;
+            velDownMps = useDownMps;
+
+            float useSpeed = Mathf.Sqrt(useNorthMps * useNorthMps + useEastMps * useEastMps + useDownMps * useDownMps);
+            if (useSpeed >= staleSpeedThreshold)
+            {
+                lastNonZeroVelTime = Time.time;
+                lastNonZeroNorthMps = useNorthMps;
+                lastNonZeroEastMps = useEastMps;
+                lastNonZeroDownMps = useDownMps;
+            }
+
+            if (hasDerivedVel && rawSpeed < staleSpeedThreshold && derivedSpeed > staleSpeedThreshold)
+            {
+                debugVelocitySource = "derived";
+            }
+            else if (!hasGpsMotion &&
+                     rawSpeed < staleSpeedThreshold &&
+                     (Time.time - lastNonZeroVelTime) <= coastSeconds)
+            {
+                debugVelocitySource = "coast";
+            }
+            else
+            {
+                debugVelocitySource = "raw";
+            }
+
+            hasPrevGpsSample = true;
+            prevLat = lat;
+            prevLon = lon;
+            prevAlt = alt;
+            prevGpsSampleTime = Time.time;
+            gpsMsgCount++;
+
+            hasTargetPosition = true;
+
+            // =====================================================
+            // GPS HEADING
+            // =====================================================
+
+            if (gps.hdg != ushort.MaxValue)
+            {
+                headingDeg = gps.hdg / 100.0f;
+                hasHeadingDeg = true;
+            }
+
+        }
+
+        // =========================================================
+        // ATTITUDE
+        // =========================================================
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.ATTITUDE)
+        {
+            var att = (MAVLink.mavlink_attitude_t)msg.data;
+
+            if (!IsFinite(att.roll) ||
+                !IsFinite(att.pitch) ||
+                !IsFinite(att.yaw))
+            {
+                if (!hasLoggedInvalidAttitude)
+                {
+                    Debug.LogWarning(
+                        $"⚠️ Invalid ATTITUDE"
+                    );
+
+                    hasLoggedInvalidAttitude = true;
+                }
+
+                return;
+            }
+
+            hasLoggedInvalidAttitude = false;
+
+            roll = att.roll;
+            pitch = att.pitch;
+            yaw = att.yaw;
+            lastAttitudeTime = Time.time;
+            debugAttitudeSource = "ATTITUDE";
+            attMsgCount++;
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.ATTITUDE_QUATERNION)
+        {
+            var attQ = (MAVLink.mavlink_attitude_quaternion_t)msg.data;
+
+            if (!IsFinite(attQ.q1) || !IsFinite(attQ.q2) || !IsFinite(attQ.q3) || !IsFinite(attQ.q4))
+                return;
+
+            float w = attQ.q1;
+            float x = attQ.q2;
+            float y = attQ.q3;
+            float z = attQ.q4;
+
+            float sinrCosp = 2f * (w * x + y * z);
+            float cosrCosp = 1f - 2f * (x * x + y * y);
+            float newRoll = Mathf.Atan2(sinrCosp, cosrCosp);
+
+            float sinp = 2f * (w * y - z * x);
+            float newPitch = Mathf.Abs(sinp) >= 1f
+                ? Mathf.Sign(sinp) * Mathf.PI * 0.5f
+                : Mathf.Asin(sinp);
+
+            float sinyCosp = 2f * (w * z + x * y);
+            float cosyCosp = 1f - 2f * (y * y + z * z);
+            float newYaw = Mathf.Atan2(sinyCosp, cosyCosp);
+
+            if (IsFinite(newRoll) && IsFinite(newPitch) && IsFinite(newYaw))
+            {
+                roll = newRoll;
+                pitch = newPitch;
+                yaw = newYaw;
+                lastAttitudeTime = Time.time;
+                debugAttitudeSource = "ATT_QUAT";
+                quatMsgCount++;
+            }
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.NAV_CONTROLLER_OUTPUT)
+        {
+            var nav = (MAVLink.mavlink_nav_controller_output_t)msg.data;
+            navTargetDistM = nav.wp_dist;
+            navTargetBearingDeg = nav.target_bearing;
+            hasNavTargetDist = true;
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.COMMAND_ACK)
+        {
+            var ack = (MAVLink.mavlink_command_ack_t)msg.data;
+            lastCommandAckCommand = ack.command;
+            lastCommandAckResult = ack.result;
+            hasCommandAck = true;
+            lastStatusText = $"CMD_ACK cmd={ack.command} result={ack.result}";
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.HEARTBEAT)
+        {
+            var hb = (MAVLink.mavlink_heartbeat_t)msg.data;
+            hbCustomMode = hb.custom_mode;
+            hbSystemStatus = hb.system_status;
+            hbArmed = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.SAFETY_ARMED) != 0;
+            hbGuided = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.GUIDED_ENABLED) != 0;
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.EXTENDED_SYS_STATE)
+        {
+            var ex = (MAVLink.mavlink_extended_sys_state_t)msg.data;
+            landedState = (MAVLink.MAV_LANDED_STATE)ex.landed_state;
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.STATUSTEXT)
+        {
+            var st = (MAVLink.mavlink_statustext_t)msg.data;
+            if (st.text != null && st.text.Length > 0)
+            {
+                int zero = System.Array.IndexOf(st.text, (byte)0);
+                int len = zero >= 0 ? zero : st.text.Length;
+                if (len > 0)
+                {
+                    lastStatusText = System.Text.Encoding.UTF8.GetString(st.text, 0, len);
+                }
+            }
+        }
+    }
+
+    bool IsTogglePressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        if (Keyboard.current != null && Keyboard.current.f8Key.wasPressedThisFrame)
+            return true;
+#endif
+
+#if ENABLE_LEGACY_INPUT_MANAGER
+        if (Input.GetKeyDown(toggleDebugKey))
+            return true;
+#endif
+
+        return false;
+    }
+
+void ApplySmoothedTransform()
+{
+    if (!hasTargetPosition || locationComponent == null)
+        return;
+
+    if (!hasSmoothedPosition)
+    {
+        smoothLat = targetLat;
+        smoothLon = targetLon;
+        smoothAlt = targetAlt;
+        hasSmoothedPosition = true;
+    }
+
+    float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+    float smoothT = 1f - Mathf.Exp(-positionSmoothSpeed * dt);
+
+    float dataAge = Mathf.Max(0f, Time.time - lastGpsPacketTime);
+    float forwardTime = extrapolationTime + Mathf.Min(dataAge, Mathf.Max(0f, maxExtrapolationGap));
+
+    float useNorthMps = velNorthMps;
+    float useEastMps = velEastMps;
+    float useDownMps = velDownMps;
+    usingGuidedAssist = false;
+
+    double metersPerDegLat = 111320.0;
+    double cosLat = System.Math.Cos(targetLat * System.Math.PI / 180.0);
+    double metersPerDegLon = 111320.0 * System.Math.Max(0.0001, cosLat);
+
+    float speed = Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps + velDownMps * velDownMps);
+    bool guidedStall =
+        enableGuidedAssist &&
+        hbGuided &&
+        hbArmed &&
+        hasNavTargetDist &&
+        navTargetDistM > 20f &&
+        speed < 0.5f;
+
+    bool guidedStallForNudge =
+        enableGuidedRepositionNudge &&
+        hbGuided &&
+        hbArmed &&
+        hasNavTargetDist &&
+        navTargetDistM > 20f &&
+        speed < 0.3f;
+
+    if (guidedStallForNudge)
+    {
+        guidedStallTimer += dt;
+        if (guidedStallTimer >= guidedStallSecondsBeforeNudge &&
+            (Time.time - lastGuidedNudgeTime) >= guidedNudgeIntervalSeconds)
+        {
+            SendGuidedRepositionNudge();
+            lastGuidedNudgeTime = Time.time;
+            guidedStallTimer = 0f;
+        }
+    }
+    else
+    {
+        guidedStallTimer = 0f;
+    }
+
+    if (guidedStall)
+    {
+     
+        float assistSpeed = Mathf.Clamp(navTargetDistM * 0.06f, 2.5f, 8.0f);
+        float brgRad = navTargetBearingDeg * Mathf.Deg2Rad;
+        useNorthMps = Mathf.Cos(brgRad) * assistSpeed;
+        useEastMps = Mathf.Sin(brgRad) * assistSpeed;
+        useDownMps = 0f;
+        usingGuidedAssist = true;
+    }
+
+    double predictedLat = targetLat + (useNorthMps * forwardTime) / metersPerDegLat;
+    double predictedLon = targetLon + (useEastMps * forwardTime) / metersPerDegLon;
+    double predictedAlt = targetAlt - (useDownMps * forwardTime);
+
+    if (usingGuidedAssist)
+    {
+
+        double cosSmoothLat = System.Math.Cos(smoothLat * System.Math.PI / 180.0);
+        double metersPerDegLonSmooth = 111320.0 * System.Math.Max(0.0001, cosSmoothLat);
+        smoothLat += (useNorthMps * dt) / metersPerDegLat;
+        smoothLon += (useEastMps * dt) / metersPerDegLonSmooth;
+        smoothAlt = Mathf.Lerp((float)smoothAlt, (float)predictedAlt, 0.1f);
+    }
+    else
+    {
+        smoothLat = Mathf.Lerp((float)smoothLat, (float)predictedLat, smoothT);
+        smoothLon = Mathf.Lerp((float)smoothLon, (float)predictedLon, smoothT);
+        smoothAlt = Mathf.Lerp((float)smoothAlt, (float)predictedAlt, smoothT);
+    }
+
+    double dLatM = (predictedLat - smoothLat) * metersPerDegLat;
+    double dLonM = (predictedLon - smoothLon) * metersPerDegLon;
+    double dAltM = predictedAlt - smoothAlt;
+    double distM = System.Math.Sqrt(dLatM * dLatM + dLonM * dLonM + dAltM * dAltM);
+
+    if (distM <= snapDistanceMeters)
+    {
+        smoothLat = predictedLat;
+        smoothLon = predictedLon;
+        smoothAlt = predictedAlt;
+    }
+
+    locationComponent.Position = new ArcGISPoint(
+        smoothLon,
+        smoothLat,
+        smoothAlt,
+        ArcGISSpatialReference.WGS84()
+    );
+}
+
+    void SendGuidedRepositionNudge()
+    {
+        if (commandClient == null || txParser == null || !hasNavTargetDist)
+            return;
+
+        IPEndPoint targetEpPrimary = commandEndPoint;
+        IPEndPoint targetEpSecondary = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14551);
+
+        float brgRad = navTargetBearingDeg * Mathf.Deg2Rad;
+        float nudgeSpeed = Mathf.Clamp(navTargetDistM * 0.02f, 1.5f, 4.0f);
+        float velN = Mathf.Cos(brgRad) * nudgeSpeed;
+        float velE = Mathf.Sin(brgRad) * nudgeSpeed;
+
+        const ushort velocityOnlyTypeMask =
+            (1 << 0) | (1 << 1) | (1 << 2) |
+            (1 << 6) | (1 << 7) | (1 << 8) |
+            (1 << 10) | (1 << 11);
+
+        var setVel = new MAVLink.mavlink_set_position_target_global_int_t(
+            (uint)(Time.time * 1000f),
+            (int)(targetLat * 1e7),
+            (int)(targetLon * 1e7),
+            targetRelativeAlt,
+            velN, velE, 0f,
+            0f, 0f, 0f,
+            0f, 0f,
+            velocityOnlyTypeMask,
+            vehicleSystemId,
+            vehicleComponentId,
+            (byte)MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT
+        );
+
+        byte[] setVelPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.SET_POSITION_TARGET_GLOBAL_INT,
+            setVel,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+        commandClient.Send(setVelPacket, setVelPacket.Length, targetEpPrimary);
+        commandClient.Send(setVelPacket, setVelPacket.Length, targetEpSecondary);
+
+        double metersPerDegLat = 111320.0;
+        double cosLat = System.Math.Cos(targetLat * System.Math.PI / 180.0);
+        double metersPerDegLon = 111320.0 * System.Math.Max(0.0001, cosLat);
+        double northM = System.Math.Cos(brgRad) * navTargetDistM;
+        double eastM = System.Math.Sin(brgRad) * navTargetDistM;
+        int cmdLatE7 = (int)((targetLat + northM / metersPerDegLat) * 1e7);
+        int cmdLonE7 = (int)((targetLon + eastM / metersPerDegLon) * 1e7);
+
+        var cmdInt = new MAVLink.mavlink_command_int_t(
+            nudgeSpeed,
+            0f,
+            0f,
+            navTargetBearingDeg,
+            cmdLatE7,
+            cmdLonE7,
+            targetRelativeAlt,
+            (ushort)MAVLink.MAV_CMD.DO_REPOSITION,
+            vehicleSystemId,
+            vehicleComponentId,
+            (byte)MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT,
+            0,
+            0
+        );
+
+        byte[] cmdIntPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_INT,
+            cmdInt,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        commandClient.Send(cmdIntPacket, cmdIntPacket.Length, targetEpPrimary);
+        commandClient.Send(cmdIntPacket, cmdIntPacket.Length, targetEpSecondary);
+
+        var cmdLong = new MAVLink.mavlink_command_long_t(
+            nudgeSpeed,
+            0f,
+            0f,
+            navTargetBearingDeg,
+            (float)(cmdLatE7 / 1e7),
+            (float)(cmdLonE7 / 1e7),
+            targetRelativeAlt,
+            (ushort)MAVLink.MAV_CMD.DO_REPOSITION,
+            vehicleSystemId,
+            vehicleComponentId,
+            0
+        );
+
+        byte[] cmdLongPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_LONG,
+            cmdLong,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        commandClient.Send(cmdLongPacket, cmdLongPacket.Length, targetEpPrimary);
+        commandClient.Send(cmdLongPacket, cmdLongPacket.Length, targetEpSecondary);
+        lastStatusText = $"Guided nudge: sys={vehicleSystemId} comp={vehicleComponentId} SET_VEL+CMD_INT+CMD_LONG";
+    }
+
+    void OnGUI()
+    {
+        if (!showDebugOverlay || !enabled)
+            return;
+
+        if (debugSb == null)
+            debugSb = new StringBuilder(512);
+
+        float now = Time.time;
+        float gpsAge = hasTargetPosition ? now - lastPositionTime : -1f;
+        float attAge = lastAttitudeTime > 0f ? now - lastAttitudeTime : -1f;
+        float linkAge = lastAnyPacketTime > 0f ? now - lastAnyPacketTime : -1f;
+        float speed = Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps + velDownMps * velDownMps);
+
+        debugSb.Length = 0;
+        debugSb.Append("MAVLink Debug (F8)\n");
+        debugSb.Append("active receiver: ").Append(Active == this ? "yes" : "no").Append('\n');
+        debugSb.Append("packet age: ").Append(linkAge.ToString("F2")).Append(" s\n");
+        debugSb.Append("gps age: ").Append(gpsAge.ToString("F2")).Append(" s\n");
+        debugSb.Append("att age: ").Append(attAge.ToString("F2")).Append(" s\n");
+        debugSb.Append("speed source: ").Append(debugVelocitySource).Append('\n');
+        if (usingGuidedAssist)
+        {
+            debugSb.Append("guided assist: ON\n");
+        }
+        debugSb.Append("speed N/E/D: ")
+            .Append(velNorthMps.ToString("F2")).Append(" / ")
+            .Append(velEastMps.ToString("F2")).Append(" / ")
+            .Append(velDownMps.ToString("F2")).Append(" m/s\n");
+        debugSb.Append("speed mag: ").Append(speed.ToString("F2")).Append(" m/s\n");
+        debugSb.Append("yaw src: ").Append(debugAttitudeSource).Append('\n');
+        debugSb.Append("yaw(att): ").Append((yaw * Mathf.Rad2Deg).ToString("F1")).Append(" deg\n");
+        debugSb.Append("heading(gps): ").Append(hasHeadingDeg ? headingDeg.ToString("F1") : "N/A").Append(" deg\n");
+        debugSb.Append("target dist(nav): ").Append(hasNavTargetDist ? navTargetDistM.ToString("F1") : "N/A").Append(" m\n");
+        debugSb.Append("target brg(nav): ").Append(hasNavTargetDist ? navTargetBearingDeg.ToString("F1") : "N/A").Append(" deg\n");
+        debugSb.Append("armed/guided: ").Append(hbArmed ? "Y" : "N").Append(" / ").Append(hbGuided ? "Y" : "N").Append('\n');
+        debugSb.Append("custom mode: ").Append(hbCustomMode).Append(" (").Append(GetCopterModeName(hbCustomMode)).Append(")\n");
+        debugSb.Append("landed: ").Append(landedState.ToString()).Append('\n');
+        debugSb.Append("sys status: ").Append(hbSystemStatus).Append('\n');
+        if (hasCommandAck)
+        {
+            debugSb.Append("cmd ack: cmd=").Append(lastCommandAckCommand).Append(" res=").Append(lastCommandAckResult).Append('\n');
+        }
+        debugSb.Append("msg count gps/att/quat: ")
+            .Append(gpsMsgCount).Append(" / ")
+            .Append(attMsgCount).Append(" / ")
+            .Append(quatMsgCount).Append('\n');
+        debugSb.Append("last status: ").Append(string.IsNullOrEmpty(lastStatusText) ? "-" : lastStatusText);
+
+        GUI.color = new Color(0f, 0f, 0f, 0.72f);
+        GUI.Box(new Rect(12, 12, 390, 345), GUIContent.none);
+        GUI.color = Color.white;
+        GUI.Label(new Rect(22, 20, 370, 330), debugSb.ToString());
+    }
+    void OnDisable()
+    {
+        if (client != null)
+        {
+            client.Close();
+            client = null;
+        }
+
+        if (commandClient != null)
+        {
+            commandClient.Close();
+            commandClient = null;
+        }
+
+        if (Active == this)
+        {
+            Active = null;
+        }
+    }
+
+    bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) &&
+               !float.IsInfinity(value);
+    }
+
+    bool IsFinite(double value)
+    {
+        return !double.IsNaN(value) &&
+               !double.IsInfinity(value);
+    }
+
+    bool IsValidGeo(double lat, double lon, double alt)
+    {
+        if (!IsFinite(lat) ||
+            !IsFinite(lon) ||
+            !IsFinite(alt))
+            return false;
+
+        if (lat < -90 || lat > 90)
+            return false;
+
+        if (lon < -180 || lon > 180)
+            return false;
+
+        if (Mathf.Abs((float)lat) < 0.000001f &&
+            Mathf.Abs((float)lon) < 0.000001f)
+            return false;
+
+        return true;
+    }
+}

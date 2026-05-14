@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: d2bdc85859bf7488b8e216a0a59d8fcc
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/Legal/EULA.pdf
+  uploadId: 904236

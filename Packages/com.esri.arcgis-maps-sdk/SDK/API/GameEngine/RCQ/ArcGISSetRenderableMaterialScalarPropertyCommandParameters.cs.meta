@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: c51c1f340198841b9b6e77c7b8da5f90
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/GameEngine/RCQ/ArcGISSetRenderableMaterialScalarPropertyCommandParameters.cs
+  uploadId: 904236

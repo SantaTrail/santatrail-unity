@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: e6268cb9c552a4b50ace6aa74ca9dce5
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/GameEngine/RCQ/ArcGISSetRenderablePivotCommandParameters.cs
+  uploadId: 904236

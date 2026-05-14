@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: dbc59548107e64c199018adf9e978dc8
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/GameEngine/RCQ/ArcGISSetRenderableMaterialRenderTargetPropertyCommandParameters.cs
+  uploadId: 904236

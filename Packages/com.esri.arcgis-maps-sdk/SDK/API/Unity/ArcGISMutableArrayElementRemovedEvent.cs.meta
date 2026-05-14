@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: efc2e7a18027943b9b212a64de31ce8b
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/Unity/ArcGISMutableArrayElementRemovedEvent.cs
+  uploadId: 904236

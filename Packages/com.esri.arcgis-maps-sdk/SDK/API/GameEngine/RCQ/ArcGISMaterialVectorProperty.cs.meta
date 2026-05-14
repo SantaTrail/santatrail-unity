@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: b8ef268709ad84e6a89a43b9149bdeb3
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/GameEngine/RCQ/ArcGISMaterialVectorProperty.cs
+  uploadId: 904236

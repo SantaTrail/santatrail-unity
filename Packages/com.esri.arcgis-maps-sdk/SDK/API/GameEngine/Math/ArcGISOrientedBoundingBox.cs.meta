@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 101c03f501d9d4336849bc960f9b2449
+AssetOrigin:
+  serializedVersion: 1
+  productId: 258537
+  packageName: ArcGIS Maps SDK for Unity
+  packageVersion: 2.3.0
+  assetPath: Packages/com.esri.arcgis-maps-sdk/SDK/API/GameEngine/Math/ArcGISOrientedBoundingBox.cs
+  uploadId: 904236

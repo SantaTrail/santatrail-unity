@@ -1,0 +1,33 @@
+# Unity generated folders
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+UserSettings/
+MemoryCaptures/
+
+# Unity generated files
+*.csproj
+*.unityproj
+*.sln
+*.user
+*.pidb
+*.booproj
+
+# Package caches/binaries
+Packages/*/Binaries/
+Packages/*/bin/
+Packages/*/obj/
+
+# Telemetry / simulation logs
+Assets/FlightLogs/
+*.tlog
+*.raw
+
+# OS files
+.DS_Store
+Thumbs.db
+
+Assets/Recovery/
