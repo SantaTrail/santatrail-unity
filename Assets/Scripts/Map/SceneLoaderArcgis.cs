@@ -39,6 +39,9 @@ public class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] bool showSpawnRadius = true;
     [SerializeField] bool hideOsmBuildingLayer = true;
     [SerializeField] bool logLayerVisibilityChanges = true;
+    [SerializeField] float buildingYawCorrectionDegrees = 0f;
+    [SerializeField] bool fitBuildingModelToFootprint = true;
+    [SerializeField] bool preservePrefabMaterialColors = true;
     float waterHeight = -1f;
 
     [Header("Python Script")]
@@ -883,38 +886,32 @@ if (arcGISMap != null)
                 0,
                 ArcGISSpatialReference.WGS84()
             );
-            locationComponent.Rotation = new ArcGISRotation(angle, 0, 0);
+            locationComponent.Rotation = new ArcGISRotation(angle + buildingYawCorrectionDegrees, 0, 0);
 
             GameObject buildingModel = Instantiate(prefabToUse, buildingRoot.transform);
             EnsureRenderable(buildingModel);
             Debug.Log(
-                $"🏠 Spawned ArcGIS building {buildingRoot.name} | Geo=({avgLat}, {avgLon}) | World={center} | Heading={angle:F1}"
+                $"🏠 Spawned ArcGIS building {buildingRoot.name} | Geo=({avgLat}, {avgLon}) | World={center} | Heading={(angle + buildingYawCorrectionDegrees):F1}"
             );
-            Debug.Log(
-                $"🏠 Model local transform | Pos={buildingModel.transform.localPosition} | Rot={buildingModel.transform.localRotation.eulerAngles} | Scale={buildingModel.transform.localScale}"
-            );
+            buildingModel.transform.localPosition = Vector3.zero;
+            buildingModel.transform.localRotation = Quaternion.identity;
+            buildingModel.transform.localScale = ComputeVillageScale(width, depth, area);
+
+            ApplyBuildingReplacementOverrides(buildingModel, prefabToUse);
+
+            if (fitBuildingModelToFootprint)
+            {
+                FitBuildingModelToFootprint(buildingModel, width, depth, area);
+            }
 
             {
                 buildingRoot.AddComponent<House>();
             }
             Debug.Log("Drone = " + droneTransform.position);
             Debug.Log("Building = " + center);
-            buildingModel.transform.localScale = Vector3.Scale(
-                buildingModel.transform.localScale,
-                ComputeVillageScale(width, depth, area) * UnityEngine.Random.Range(0.9f, 1.15f)
+            Debug.Log(
+                $"🏠 Model local transform | Pos={buildingModel.transform.localPosition} | Rot={buildingModel.transform.localRotation.eulerAngles} | Scale={buildingModel.transform.localScale}"
             );
-            if (buildingReplacements != null)
-            {
-                foreach (var rule in buildingReplacements)
-                {
-                    if (rule != null && rule.prefab == prefabToUse)
-                    {
-                        buildingModel.transform.localScale *= Mathf.Max(0.01f, rule.scaleMultiplier);
-                        buildingModel.transform.rotation = rotation * Quaternion.Euler(rule.rotationEulerOffset);
-                        break;
-                    }
-                }
-            }
             if (buildingRoot.GetComponent<Collider>() == null)
             {
                 buildingRoot.AddComponent<BoxCollider>();
@@ -1006,7 +1003,10 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         Renderer rootRenderer = root.GetComponent<Renderer>();
         if (rootRenderer != null && rootRenderer.material != null && rootRenderer.material.HasProperty("_Color"))
         {
-            rootRenderer.material.color = new Color(0.92f, 0.78f, 0.35f, 1f);
+            if (!preservePrefabMaterialColors)
+            {
+                rootRenderer.material.color = new Color(0.92f, 0.78f, 0.35f, 1f);
+            }
         }
 
         if (prefab != null)
@@ -1095,7 +1095,7 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
                     continue;
                 }
 
-                if (material.HasProperty("_Color"))
+                if (material.HasProperty("_Color") && !preservePrefabMaterialColors)
                 {
                     material.color = new Color(0.95f, 0.75f, 0.2f, 1f);
                 }
@@ -1170,6 +1170,72 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
                 : Mathf.Clamp(footprintScale / 18f, 1.0f, 2.2f);
 
         return new Vector3(xScale, yScale, zScale);
+    }
+
+    void FitBuildingModelToFootprint(GameObject buildingModel, float width, float depth, float area)
+    {
+        if (buildingModel == null)
+        {
+            return;
+        }
+
+        Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>(true);
+        if (renderers == null || renderers.Length == 0)
+        {
+            return;
+        }
+
+        bool hasBounds = false;
+        Bounds bounds = new Bounds(Vector3.zero, Vector3.zero);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            if (!hasBounds)
+            {
+                bounds = renderer.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        if (!hasBounds || bounds.size.x <= 0.001f || bounds.size.z <= 0.001f)
+        {
+            return;
+        }
+
+        Vector3 currentScale = buildingModel.transform.localScale;
+        float targetX = Mathf.Clamp(width / Mathf.Max(0.001f, bounds.size.x), 0.35f, 4f);
+        float targetZ = Mathf.Clamp(depth / Mathf.Max(0.001f, bounds.size.z), 0.35f, 4f);
+
+        buildingModel.transform.localScale = Vector3.Scale(currentScale, new Vector3(targetX, 1f, targetZ));
+    }
+
+    void ApplyBuildingReplacementOverrides(GameObject buildingModel, GameObject prefabToUse)
+    {
+        if (buildingModel == null || buildingReplacements == null || prefabToUse == null)
+        {
+            return;
+        }
+
+        foreach (var rule in buildingReplacements)
+        {
+            if (rule == null || rule.prefab != prefabToUse)
+            {
+                continue;
+            }
+
+            buildingModel.transform.localScale *= Mathf.Max(0.01f, rule.scaleMultiplier);
+            buildingModel.transform.localRotation = Quaternion.Euler(0f, rule.rotationEulerOffset.y, 0f);
+            return;
+        }
     }
 
     // =========================
