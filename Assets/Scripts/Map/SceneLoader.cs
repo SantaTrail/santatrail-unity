@@ -1,8 +1,11 @@
 using UnityEngine;
 using System.IO;
 using System.Diagnostics;
+using System.Globalization;
 using Debug = UnityEngine.Debug;
 using System.Collections;
+using UnityEngine.SceneManagement;
+using Esri.ArcGISMapsSDK.Components;
 
 
 public class SceneLoader : MonoBehaviour
@@ -10,6 +13,13 @@ public class SceneLoader : MonoBehaviour
     [Header("Camera")]
 public Camera droneCamera;
     public float scale = 5000f;
+    [Header("Level Origin")]
+    [Tooltip("When enabled, this scene sets the shared home location before terrain generation.")]
+    [SerializeField] bool overrideHomeLocation = false;
+    [SerializeField] double homeLatitude;
+    [SerializeField] double homeLongitude;
+    [SerializeField] double homeAltitude;
+    [SerializeField] double homeYaw;
     GPSConverter gps;
     
     float waterHeight = -1f;
@@ -22,6 +32,18 @@ public Camera droneCamera;
     [Header("Prefabs")]
     public GameObject treePrefab;
     public GameObject buildingPrefab;
+    public GameObject[] randomHousePrefabs;
+    [System.Serializable]
+    public class BuildingReplacementRule
+    {
+        public int buildingIndex;
+        public GameObject prefab;
+        public float scaleMultiplier = 1f;
+        public Vector3 rotationEulerOffset;
+    }
+
+    [Header("Building Replacements")]
+    [SerializeField] BuildingReplacementRule[] buildingReplacements;
 
     Terrain terrain;
 Process pythonProcess;
@@ -30,15 +52,33 @@ int pythonExitCode = -1;
 void Awake()
 {
     gps = Object.FindFirstObjectByType<GPSConverter>();
+    ApplyConfiguredHomeLocation();
 
     if (gps == null)
         Debug.LogError("❌ GPSConverter not found in scene");
 }
 
+void ApplyConfiguredHomeLocation()
+{
+    if (!overrideHomeLocation)
+    {
+        return;
+    }
+
+    GameManager.SetHomeLocation(homeLatitude, homeLongitude, homeAltitude, homeYaw);
+    Debug.Log($"🧭 SceneLoader applied home location: {homeLatitude}, {homeLongitude}, {homeAltitude}, {homeYaw}");
+}
+
+public void LoadLevel1()
+{
+    GameManager.SetHomeLocation(52.15603852403063, 4.963989431212162, 0, 0);
+    SceneManager.LoadScene("LV1");
+}
+
 void Start()
 {
     string projectRoot = Application.dataPath + "/../";
-    string backendPath = Path.Combine(projectRoot, "uav-terrain-ai/backend");
+    string backendPath = ResolveBackendPath(projectRoot);
 
     scriptPath = Path.Combine(backendPath, "main.py");
     outputPath = Path.Combine(backendPath, "output.json");
@@ -71,6 +111,25 @@ void Start()
 
     RunPython();
     StartCoroutine(InitializeEverything());
+}
+
+string ResolveBackendPath(string projectRoot)
+{
+    string[] candidates =
+    {
+        Path.GetFullPath(Path.Combine(projectRoot, "../santatrail-backend/backend")),
+        Path.Combine(projectRoot, "uav-terrain-ai/backend")
+    };
+
+    foreach (string candidate in candidates)
+    {
+        if (File.Exists(Path.Combine(candidate, "main.py")))
+        {
+            return candidate;
+        }
+    }
+
+    return candidates[0];
 }
 
 IEnumerator InitializeEverything()
@@ -395,8 +454,9 @@ void SpawnRealBuildings(Result result)
 {
     if (result.buildings == null || terrain == null) return;
 
-    foreach (var building in result.buildings)
+    for (int i = 0; i < result.buildings.Length; i++)
     {
+        var building = result.buildings[i];
         if (building.points == null || building.points.Length < 3)
             continue;
 
@@ -415,12 +475,6 @@ void SpawnRealBuildings(Result result)
         Vector3 center = gps.ConvertGPSToUnity(avgLat, avgLon, 0);
         center.y = terrain.SampleHeight(center);
 
-        GameObject b = Instantiate(buildingPrefab, center, Quaternion.identity);
-        if (b.GetComponent<House>() == null)
-        {
-            b.AddComponent<House>();
-        }
-
         float minX = float.MaxValue, maxX = float.MinValue;
         float minZ = float.MaxValue, maxZ = float.MinValue;
 
@@ -438,7 +492,26 @@ void SpawnRealBuildings(Result result)
         float depth = Mathf.Clamp(maxZ - minZ, 5f, 80f);
         float height = Random.Range(10f, 40f);
 
-        b.transform.localScale = new Vector3(width, height, depth);
+        GameObject prefabToUse = GetBuildingPrefabForIndex(i, width, depth);
+        GameObject b = Instantiate(prefabToUse, center, Quaternion.identity);
+        if (b.GetComponent<House>() == null)
+        {
+            b.AddComponent<House>();
+        }
+
+        b.transform.localScale = ComputePrefabScale(prefabToUse, width, depth, height);
+        if (buildingReplacements != null)
+        {
+            foreach (var rule in buildingReplacements)
+            {
+                if (rule != null && rule.prefab == prefabToUse)
+                {
+                    b.transform.localScale *= Mathf.Max(0.01f, rule.scaleMultiplier);
+                    b.transform.rotation = Quaternion.Euler(rule.rotationEulerOffset);
+                    break;
+                }
+            }
+        }
         if (b.GetComponent<Collider>() == null)
         {
             b.AddComponent<BoxCollider>();
@@ -446,6 +519,69 @@ void SpawnRealBuildings(Result result)
     }
 
     Debug.Log("🏙 Real buildings spawned: " + result.buildings.Length);
+}
+
+GameObject GetBuildingPrefabForIndex(int buildingIndex, float width, float depth)
+{
+    if (buildingReplacements != null)
+    {
+        foreach (var rule in buildingReplacements)
+        {
+            if (rule == null || rule.prefab == null)
+            {
+                continue;
+            }
+
+            if (rule.buildingIndex != buildingIndex)
+            {
+                continue;
+            }
+
+            return rule.prefab;
+        }
+    }
+
+    if (randomHousePrefabs != null && randomHousePrefabs.Length > 0)
+    {
+        GameObject randomPrefab = PickHousePrefabByFootprint(width, depth);
+        if (randomPrefab != null)
+        {
+            return randomPrefab;
+        }
+    }
+
+    return buildingPrefab;
+}
+
+GameObject PickHousePrefabByFootprint(float width, float depth)
+{
+    if (randomHousePrefabs == null || randomHousePrefabs.Length == 0)
+        return null;
+
+    float footprint = Mathf.Max(width, depth);
+    if (footprint < 12f)
+    {
+        return randomHousePrefabs[Random.Range(0, randomHousePrefabs.Length)];
+    }
+
+    if (footprint < 25f)
+    {
+        return randomHousePrefabs[Random.Range(0, randomHousePrefabs.Length)];
+    }
+
+    return randomHousePrefabs[Random.Range(0, randomHousePrefabs.Length)];
+}
+
+Vector3 ComputePrefabScale(GameObject prefab, float width, float depth, float height)
+{
+    if (prefab == buildingPrefab)
+    {
+        return new Vector3(width, height, depth);
+    }
+
+    float footprint = Mathf.Max(width, depth);
+    float houseScale = Mathf.Clamp(footprint / 10f, 0.5f, 6f);
+    return new Vector3(houseScale, Mathf.Clamp(height / 12f, 0.5f, 4f), houseScale);
 }
 
     // =========================
@@ -522,7 +658,13 @@ void SpawnRealBuildings(Result result)
 
    void RunPython()
 {
-    string customLocation = "13.8455,100.5688,10,0";
+    string customLocation = string.Format(
+        CultureInfo.InvariantCulture,
+        "{0},{1},{2},0",
+        GameManager.homeLat,
+        GameManager.homeLon,
+        GameManager.homeAlt
+    );
 
     ProcessStartInfo psi = new ProcessStartInfo
     {
@@ -621,7 +763,8 @@ void SetupDroneReference()
 
     if (droneObj != null)
     {
-        droneTransform = droneObj.transform;
+        ArcGISLocationComponent locationComponent = droneObj.GetComponentInChildren<ArcGISLocationComponent>(true);
+        droneTransform = locationComponent != null ? locationComponent.transform : droneObj.transform;
         Debug.Log("✅ Drone found");
     }
     else

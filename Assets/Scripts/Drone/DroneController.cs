@@ -7,6 +7,9 @@ public class DroneController : MonoBehaviour
     public MAVLinkReceiver receiver;
     public Transform visualModel;
 
+    [Tooltip("Uniform scale applied to the visible drone model.")]
+    public float visualModelScale = 0.08f;
+
     [Header("Rotation")]
     public float rotationSmoothSpeed = 12f;
 
@@ -18,7 +21,7 @@ public class DroneController : MonoBehaviour
 
     [Tooltip("Use GPS heading when available; disable to follow ATTITUDE yaw like QGroundControl")]
     public bool useGpsHeadingForYaw = false;
-    
+
     [Tooltip("If ATTITUDE yaw is stale for this many seconds, fall back to GPS heading")]
     public float attitudeTimeoutSeconds = 0.3f;
 
@@ -33,8 +36,33 @@ public class DroneController : MonoBehaviour
 
         if (visualModel == null)
         {
-            Transform fans = transform.Find("Fans");
-            visualModel = fans != null ? fans : transform;
+            if (transform.GetComponent<MeshRenderer>() != null || transform.GetComponent<MeshFilter>() != null)
+            {
+                visualModel = transform;
+            }
+            else
+            {
+                Transform droneVisual = transform.Find("DroneVisual");
+                if (droneVisual != null)
+                {
+                    visualModel = droneVisual;
+                }
+                else
+                {
+                    Transform fans = transform.Find("Fans");
+                    visualModel = fans != null ? fans : transform;
+                }
+            }
+        }
+
+if (visualModel != null)
+{
+    Debug.Log($"initial visual scale = {visualModel.localScale}");
+}
+        if (visualModel != null)
+        {
+            visualModel.localScale = Vector3.one * Mathf.Max(0.0001f, visualModelScale);
+            Debug.Log($"AFTER SET SCALE = {visualModel.localScale}");
         }
     }
 
@@ -43,12 +71,6 @@ public class DroneController : MonoBehaviour
         if (receiver == null)
             return;
 
-        // ==========================================
-        // GET YAW
-        // ==========================================
-
-        // QGroundControl attitude view follows ATTITUDE yaw.
-        // GPS heading can be stale when the vehicle rotates in place.
         float yawDeg = receiver.yaw * Mathf.Rad2Deg;
         bool attitudeFresh = (Time.time - receiver.lastAttitudeTime) <= attitudeTimeoutSeconds;
 
@@ -62,33 +84,16 @@ public class DroneController : MonoBehaviour
             yawDeg = -yawDeg;
         }
 
-        // ==========================================
-        // BUILD ROTATION
-        // ==========================================
-float pitchDeg = receiver.pitch * Mathf.Rad2Deg;
-float rollDeg = receiver.roll * Mathf.Rad2Deg;
+        float pitchDeg = receiver.pitch * Mathf.Rad2Deg;
+        float rollDeg = receiver.roll * Mathf.Rad2Deg;
 
-targetRotation =
-    Quaternion.Euler(
-        -pitchDeg,
-        -yawDeg,
-        rollDeg
-    )
-    * Quaternion.Euler(0f, modelYawOffset, 0f);
-        // ==========================================
-        // APPLY SMOOTH ROTATION
-        // ==========================================
+        targetRotation =
+            Quaternion.Euler(-pitchDeg, -yawDeg, rollDeg) *
+            Quaternion.Euler(0f, modelYawOffset, 0f);
 
-        float t =
-            1f - Mathf.Exp(
-                -rotationSmoothSpeed * Time.deltaTime
-            );
-
+        float t = 1f - Mathf.Exp(-rotationSmoothSpeed * Time.deltaTime);
         Transform target = visualModel != null ? visualModel : transform;
-        target.rotation = Quaternion.Slerp(
-            target.rotation,
-            targetRotation,
-            t
-        );
+        target.rotation = Quaternion.Slerp(target.rotation, targetRotation, t);
+
     }
 }

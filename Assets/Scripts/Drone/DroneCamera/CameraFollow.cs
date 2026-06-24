@@ -1,4 +1,5 @@
 using UnityEngine;
+using Esri.ArcGISMapsSDK.Components;
 
 public class CameraFollow : MonoBehaviour
 {
@@ -33,7 +34,13 @@ public class CameraFollow : MonoBehaviour
             GameObject droneObj = GameObject.FindGameObjectWithTag("Drone");
             if (droneObj != null)
             {
-                drone = droneObj.transform;
+                if (receiver == null)
+                {
+                    receiver = droneObj.GetComponent<MAVLinkReceiver>();
+                }
+
+                ArcGISLocationComponent locationComponent = droneObj.GetComponentInChildren<ArcGISLocationComponent>(true);
+                drone = locationComponent != null ? locationComponent.transform : droneObj.transform;
             }
         }
 
@@ -41,9 +48,9 @@ public class CameraFollow : MonoBehaviour
         {
             lastDronePos = drone.position;
             droneRb = drone.GetComponent<Rigidbody>();
-            if (receiver == null)
+            if (droneRb == null)
             {
-                receiver = drone.GetComponent<MAVLinkReceiver>();
+                droneRb = drone.GetComponentInParent<Rigidbody>();
             }
             Vector3 initialForward = new Vector3(drone.forward.x, 0f, drone.forward.z);
             if (initialForward.sqrMagnitude > 0.0001f)

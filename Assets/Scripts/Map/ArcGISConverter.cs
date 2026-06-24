@@ -73,7 +73,13 @@ public class ArcGISConverter : MonoBehaviour
 
             yield return new WaitForSeconds(0.5f);
         }
+Debug.Log($"MapComponent = {arcGISMap != null}");
+Debug.Log($"View = {arcGISMap?.View != null}");
 
+if (arcGISMap?.View != null)
+{
+    Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
+}
         Debug.LogError("❌ ArcGIS readiness timeout (90s). Check API key/authentication and ArcGIS Map settings.");
     }
 
@@ -84,6 +90,13 @@ public class ArcGISConverter : MonoBehaviour
 
     bool CanConvertProbePoint()
     {
+        Debug.Log(
+    $"Probe GPS: lat={GameManager.homeLat}, " +
+    $"lon={GameManager.homeLon}, " +
+    $"alt={GameManager.homeAlt}"
+);
+Debug.Log($"ArcGIS View = {arcGISMap.View}");
+Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
         if (arcGISMap == null || arcGISMap.View == null)
         {
             lastProbeError = "View is null";
@@ -92,7 +105,12 @@ public class ArcGISConverter : MonoBehaviour
 
         try
         {
-            var probe = new ArcGISPoint(100.5688, 13.8455, 0, ArcGISSpatialReference.WGS84());
+            var probe = new ArcGISPoint(
+                GameManager.homeLon,
+                GameManager.homeLat,
+                GameManager.homeAlt,
+                ArcGISSpatialReference.WGS84()
+            );
             var world = arcGISMap.View.GeographicToWorld(probe);
 
             if (double.IsNaN(world.x) || double.IsInfinity(world.x) ||

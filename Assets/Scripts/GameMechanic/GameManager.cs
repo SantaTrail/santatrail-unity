@@ -2,13 +2,26 @@ using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
-    public static double homeLat = 13.8455;
-    public static double homeLon = 100.5688;
-    public static double homeAlt = 10;
+    public static double homeLat;
+    public static double homeLon;
+    public static double homeAlt;
+    public static double homeYaw;
+    public static bool hasHomeLocation;
+
+    public static void SetHomeLocation(double latitude, double longitude, double altitude, double yaw = 0)
+    {
+        homeLat = latitude;
+        homeLon = longitude;
+        homeAlt = altitude;
+        homeYaw = yaw;
+        hasHomeLocation = true;
+    }
 
     void Start()
     {
-        Debug.Log($"HOME LOCKED: {homeLat}, {homeLon}");
+        Debug.Log(hasHomeLocation
+            ? $"HOME LOCKED: {homeLat}, {homeLon}, {homeAlt}, {homeYaw}"
+            : "HOME LOCKED: not set yet");
     }
     
 }

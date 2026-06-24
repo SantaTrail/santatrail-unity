@@ -11,16 +11,20 @@ public class PrototypeMenuController : MonoBehaviour
     public class LevelEntry
     {
         public string label = "Level 1";
-        public string sceneName = "DroneSimulateArcGIS";
+        public string sceneName = "LV1";
+        public double homeLatitude = 13.8455;
+        public double homeLongitude = 100.5688;
+        public double homeAltitude = 10;
+        public double homeYaw = 0;
     }
 
     [Header("Level Select (Optional Dropdown)")]
     public TMP_Dropdown levelDropdown;
     public List<LevelEntry> levels = new List<LevelEntry>
     {
-        new LevelEntry { label = "Level 1 - Training", sceneName = "DroneSimulateArcGIS" },
-        new LevelEntry { label = "Level 2 - Demo", sceneName = "DroneSimulateDemo" },
-        new LevelEntry { label = "Level 3 - Sandbox", sceneName = "SampleScene" }
+        new LevelEntry { label = "Level 1 - Training", sceneName = "LV1", homeLatitude = 52.15603852403063, homeLongitude = 4.963989431212162, homeAltitude = 0, homeYaw = 0 },
+        new LevelEntry { label = "Level 2 - Demo", sceneName = "DroneSimulateDemo", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 },
+        new LevelEntry { label = "Level 3 - Sandbox", sceneName = "SampleScene", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 }
     };
 
     [Header("Buttons (Optional Auto-Wire)")]
@@ -51,6 +55,7 @@ public class PrototypeMenuController : MonoBehaviour
         {
             selectedLevelIndex = 0;
             selectedSceneName = levels[0].sceneName;
+            ApplySelectedLevelHome();
         }
 
         SetupLevelDropdown();
@@ -89,8 +94,20 @@ public class PrototypeMenuController : MonoBehaviour
         if (levels.Count > 0)
         {
             selectedSceneName = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)].sceneName;
+            ApplySelectedLevelHome();
         }
         RefreshUI();
+    }
+
+    void ApplySelectedLevelHome()
+    {
+        if (levels.Count == 0)
+        {
+            return;
+        }
+
+        LevelEntry level = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)];
+        GameManager.SetHomeLocation(level.homeLatitude, level.homeLongitude, level.homeAltitude, level.homeYaw);
     }
 
     void RefreshUI()
@@ -118,6 +135,7 @@ public class PrototypeMenuController : MonoBehaviour
 
         selectedLevelIndex = Mathf.Clamp(index, 0, levels.Count - 1);
         selectedSceneName = levels[selectedLevelIndex].sceneName;
+        ApplySelectedLevelHome();
         if (levelDropdown != null) levelDropdown.value = selectedLevelIndex;
         RefreshUI();
     }
@@ -135,6 +153,7 @@ public class PrototypeMenuController : MonoBehaviour
         if (foundIndex >= 0)
         {
             selectedLevelIndex = foundIndex;
+            ApplySelectedLevelHome();
             if (levelDropdown != null) levelDropdown.value = selectedLevelIndex;
         }
         RefreshUI();
@@ -142,7 +161,7 @@ public class PrototypeMenuController : MonoBehaviour
 
     public void SelectLevel1()
     {
-        SelectLevelByScene("DroneSimulateArcGIS");
+        SelectLevelByScene("LV1");
     }
 
     public void OnPlayPressed()
@@ -152,6 +171,8 @@ public class PrototypeMenuController : MonoBehaviour
         {
             targetScene = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)].sceneName;
         }
+
+        ApplySelectedLevelHome();
 
         if (string.IsNullOrWhiteSpace(targetScene))
         {

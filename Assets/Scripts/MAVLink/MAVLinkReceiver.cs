@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections;
 using System.Net;
 using System.Net.Sockets;
 using System.IO;
@@ -24,6 +25,9 @@ public class MAVLinkReceiver : MonoBehaviour
 
     [Header("ArcGIS")]
     public ArcGISLocationComponent locationComponent;
+    [Tooltip("If enabled, the drone starts at the ArcGIS map's origin position.")]
+    public bool alignToMapOriginOnStart = true;
+    private bool hasAlignedToMapOrigin;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -36,12 +40,16 @@ public class MAVLinkReceiver : MonoBehaviour
 
     public float headingDeg;
     public bool hasHeadingDeg;
+    public float lastHeadingTime { get; private set; }
     public float lastAttitudeTime { get; private set; }
     public float lastPositionTime { get; private set; }
 
     [Header("Smoothing")]
     [Tooltip("Higher = faster response")]
     public float positionSmoothSpeed = 60f;
+
+    [Tooltip("How quickly the visible position eases toward incoming telemetry")]
+    public float positionSmoothTime = 0.18f;
 
     [Tooltip("Predicts motion between MAVLink packets")]
     public float extrapolationTime = 0.03f;
@@ -80,6 +88,9 @@ public class MAVLinkReceiver : MonoBehaviour
     private double smoothLat;
     private double smoothLon;
     private double smoothAlt;
+    private float smoothLatVelocity;
+    private float smoothLonVelocity;
+    private float smoothAltVelocity;
 
     private bool hasTargetPosition;
     private bool hasSmoothedPosition;
@@ -99,6 +110,7 @@ public class MAVLinkReceiver : MonoBehaviour
 
     private bool hasLoggedInvalidGps;
     private bool hasLoggedInvalidAttitude;
+    private bool hasAppliedLocation;
     private string debugVelocitySource = "raw";
     private bool usingGuidedAssist;
     private string debugAttitudeSource = "none";
@@ -127,6 +139,9 @@ public class MAVLinkReceiver : MonoBehaviour
     public bool IsGuidedArmed => hbGuided && hbArmed;
     public bool HasNavTargetDistance => hasNavTargetDist;
     public float NavTargetDistanceMeters => navTargetDistM;
+    public Vector3 VelocityNed => new Vector3(velNorthMps, velEastMps, velDownMps);
+    public float HorizontalSpeedMps => Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps);
+    public float SpeedMps => Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps + velDownMps * velDownMps);
 
     string GetCopterModeName(uint customMode)
     {
@@ -199,14 +214,52 @@ public class MAVLinkReceiver : MonoBehaviour
 
         if (locationComponent == null)
         {
-            locationComponent = GetComponent<ArcGISLocationComponent>();
+            locationComponent = GetComponentInChildren<ArcGISLocationComponent>(true);
         }
 
         if (locationComponent == null)
         {
             Debug.LogError("❌ ArcGISLocationComponent NOT FOUND");
+            return;
         }
 
+        if (alignToMapOriginOnStart)
+        {
+            StartCoroutine(AlignToMapOriginWhenReady());
+        }
+
+    }
+
+    IEnumerator AlignToMapOriginWhenReady()
+    {
+        while (!hasAlignedToMapOrigin && enabled)
+        {
+            if (AlignToMapOrigin())
+            {
+                hasAlignedToMapOrigin = true;
+                yield break;
+            }
+
+            yield return null;
+        }
+    }
+
+    bool AlignToMapOrigin()
+    {
+        if (locationComponent == null)
+        {
+            return false;
+        }
+
+        ArcGISMapComponent mapComponent = locationComponent.GetComponentInParent<ArcGISMapComponent>();
+        if (mapComponent == null || mapComponent.OriginPosition == null)
+        {
+            return false;
+        }
+
+        locationComponent.Position = mapComponent.OriginPosition;
+        Debug.Log($"🧭 Drone aligned to ArcGIS map origin: {mapComponent.OriginPosition}");
+        return true;
     }
 
     void Update()
@@ -397,6 +450,7 @@ public class MAVLinkReceiver : MonoBehaviour
             {
                 headingDeg = gps.hdg / 100.0f;
                 hasHeadingDeg = true;
+                lastHeadingTime = Time.time;
             }
 
         }
@@ -533,97 +587,120 @@ public class MAVLinkReceiver : MonoBehaviour
         return false;
     }
 
-void ApplySmoothedTransform()
-{
-    if (!hasTargetPosition || locationComponent == null)
-        return;
-
-    if (!hasSmoothedPosition)
+    void ApplySmoothedTransform()
     {
-        smoothLat = targetLat;
-        smoothLon = targetLon;
-        smoothAlt = targetAlt;
-        hasSmoothedPosition = true;
-    }
+        if (!hasTargetPosition || locationComponent == null)
+            return;
 
-    float dt = Mathf.Max(Time.deltaTime, 0.0001f);
-    float smoothT = 1f - Mathf.Exp(-positionSmoothSpeed * dt);
-
-    float dataAge = Mathf.Max(0f, Time.time - lastGpsPacketTime);
-    float forwardTime = extrapolationTime + Mathf.Min(dataAge, Mathf.Max(0f, maxExtrapolationGap));
-
-    float useNorthMps = velNorthMps;
-    float useEastMps = velEastMps;
-    float useDownMps = velDownMps;
-    usingGuidedAssist = false;
-
-    double metersPerDegLat = 111320.0;
-    double cosLat = System.Math.Cos(targetLat * System.Math.PI / 180.0);
-    double metersPerDegLon = 111320.0 * System.Math.Max(0.0001, cosLat);
-
-    float speed = Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps + velDownMps * velDownMps);
-    bool guidedStall =
-        enableGuidedAssist &&
-        hbGuided &&
-        hbArmed &&
-        hasNavTargetDist &&
-        navTargetDistM > 20f &&
-        speed < 0.5f;
-
-    bool guidedStallForNudge =
-        enableGuidedRepositionNudge &&
-        hbGuided &&
-        hbArmed &&
-        hasNavTargetDist &&
-        navTargetDistM > 20f &&
-        speed < 0.3f;
-
-    if (guidedStallForNudge)
-    {
-        guidedStallTimer += dt;
-        if (guidedStallTimer >= guidedStallSecondsBeforeNudge &&
-            (Time.time - lastGuidedNudgeTime) >= guidedNudgeIntervalSeconds)
+        if (!hasSmoothedPosition)
         {
-            SendGuidedRepositionNudge();
-            lastGuidedNudgeTime = Time.time;
+            smoothLat = targetLat;
+            smoothLon = targetLon;
+            smoothAlt = targetAlt;
+            smoothLatVelocity = 0f;
+            smoothLonVelocity = 0f;
+            smoothAltVelocity = 0f;
+            hasSmoothedPosition = true;
+        }
+
+        float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+        float smoothTime = Mathf.Max(0.01f, positionSmoothTime);
+
+        float dataAge = Mathf.Max(0f, Time.time - lastGpsPacketTime);
+        float forwardTime = extrapolationTime + Mathf.Min(dataAge, Mathf.Max(0f, maxExtrapolationGap));
+
+        float useNorthMps = velNorthMps;
+        float useEastMps = velEastMps;
+        float useDownMps = velDownMps;
+        usingGuidedAssist = false;
+
+        double metersPerDegLat = 111320.0;
+        double cosLat = System.Math.Cos(targetLat * System.Math.PI / 180.0);
+        double metersPerDegLon = 111320.0 * System.Math.Max(0.0001, cosLat);
+
+        float speed = Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps + velDownMps * velDownMps);
+        bool guidedStall =
+            enableGuidedAssist &&
+            hbGuided &&
+            hbArmed &&
+            hasNavTargetDist &&
+            navTargetDistM > 20f &&
+            speed < 0.5f;
+
+        bool guidedStallForNudge =
+            enableGuidedRepositionNudge &&
+            hbGuided &&
+            hbArmed &&
+            hasNavTargetDist &&
+            navTargetDistM > 20f &&
+            speed < 0.3f;
+
+        if (guidedStallForNudge)
+        {
+            guidedStallTimer += dt;
+            if (guidedStallTimer >= guidedStallSecondsBeforeNudge &&
+                (Time.time - lastGuidedNudgeTime) >= guidedNudgeIntervalSeconds)
+            {
+                SendGuidedRepositionNudge();
+                lastGuidedNudgeTime = Time.time;
+                guidedStallTimer = 0f;
+            }
+        }
+        else
+        {
             guidedStallTimer = 0f;
         }
-    }
-    else
-    {
-        guidedStallTimer = 0f;
-    }
 
-    if (guidedStall)
-    {
-     
-        float assistSpeed = Mathf.Clamp(navTargetDistM * 0.06f, 2.5f, 8.0f);
-        float brgRad = navTargetBearingDeg * Mathf.Deg2Rad;
-        useNorthMps = Mathf.Cos(brgRad) * assistSpeed;
-        useEastMps = Mathf.Sin(brgRad) * assistSpeed;
-        useDownMps = 0f;
-        usingGuidedAssist = true;
-    }
+        if (guidedStall)
+        {
+            float assistSpeed = Mathf.Clamp(navTargetDistM * 0.06f, 2.5f, 8.0f);
+            float brgRad = navTargetBearingDeg * Mathf.Deg2Rad;
+            useNorthMps = Mathf.Cos(brgRad) * assistSpeed;
+            useEastMps = Mathf.Sin(brgRad) * assistSpeed;
+            useDownMps = 0f;
+            usingGuidedAssist = true;
+        }
 
-    double predictedLat = targetLat + (useNorthMps * forwardTime) / metersPerDegLat;
-    double predictedLon = targetLon + (useEastMps * forwardTime) / metersPerDegLon;
-    double predictedAlt = targetAlt - (useDownMps * forwardTime);
+        double predictedLat = targetLat + (useNorthMps * forwardTime) / metersPerDegLat;
+        double predictedLon = targetLon + (useEastMps * forwardTime) / metersPerDegLon;
+        double predictedAlt = targetAlt - (useDownMps * forwardTime);
 
-    if (usingGuidedAssist)
-    {
-
-        double cosSmoothLat = System.Math.Cos(smoothLat * System.Math.PI / 180.0);
-        double metersPerDegLonSmooth = 111320.0 * System.Math.Max(0.0001, cosSmoothLat);
-        smoothLat += (useNorthMps * dt) / metersPerDegLat;
-        smoothLon += (useEastMps * dt) / metersPerDegLonSmooth;
-        smoothAlt = Mathf.Lerp((float)smoothAlt, (float)predictedAlt, 0.1f);
-    }
-    else
-    {
-        smoothLat = Mathf.Lerp((float)smoothLat, (float)predictedLat, smoothT);
-        smoothLon = Mathf.Lerp((float)smoothLon, (float)predictedLon, smoothT);
-        smoothAlt = Mathf.Lerp((float)smoothAlt, (float)predictedAlt, smoothT);
-    }
+        if (usingGuidedAssist)
+        {
+            double cosSmoothLat = System.Math.Cos(smoothLat * System.Math.PI / 180.0);
+            double metersPerDegLonSmooth = 111320.0 * System.Math.Max(0.0001, cosSmoothLat);
+            smoothLat += (useNorthMps * dt) / metersPerDegLat;
+            smoothLon += (useEastMps * dt) / metersPerDegLonSmooth;
+            float guidedSmoothT = 1f - Mathf.Exp(-positionSmoothSpeed * dt);
+            smoothAlt = Mathf.Lerp((float)smoothAlt, (float)predictedAlt, guidedSmoothT);
+        }
+        else
+        {
+            smoothLat = Mathf.SmoothDamp(
+                (float)smoothLat,
+                (float)predictedLat,
+                ref smoothLatVelocity,
+                smoothTime,
+                Mathf.Infinity,
+                dt
+            );
+            smoothLon = Mathf.SmoothDamp(
+                (float)smoothLon,
+                (float)predictedLon,
+                ref smoothLonVelocity,
+                smoothTime,
+                Mathf.Infinity,
+                dt
+            );
+            smoothAlt = Mathf.SmoothDamp(
+                (float)smoothAlt,
+                (float)predictedAlt,
+                ref smoothAltVelocity,
+                smoothTime,
+                Mathf.Infinity,
+                dt
+            );
+        }
 
     double dLatM = (predictedLat - smoothLat) * metersPerDegLat;
     double dLonM = (predictedLon - smoothLon) * metersPerDegLon;
@@ -635,6 +712,22 @@ void ApplySmoothedTransform()
         smoothLat = predictedLat;
         smoothLon = predictedLon;
         smoothAlt = predictedAlt;
+        smoothLatVelocity = 0f;
+        smoothLonVelocity = 0f;
+        smoothAltVelocity = 0f;
+    }
+
+    if (!IsValidGeo((double)smoothLat, (double)smoothLon, (double)smoothAlt))
+    {
+        return;
+    }
+
+    if (!hasAppliedLocation &&
+        System.Math.Abs(smoothLat) < 0.000001 &&
+        System.Math.Abs(smoothLon) < 0.000001 &&
+        System.Math.Abs(smoothAlt) < 0.0001)
+    {
+        return;
     }
 
     locationComponent.Position = new ArcGISPoint(
@@ -643,6 +736,7 @@ void ApplySmoothedTransform()
         smoothAlt,
         ArcGISSpatialReference.WGS84()
     );
+    hasAppliedLocation = true;
 }
 
     void SendGuidedRepositionNudge()
