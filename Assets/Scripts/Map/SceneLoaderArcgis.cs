@@ -40,8 +40,30 @@ public class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] bool hideOsmBuildingLayer = true;
     [SerializeField] bool logLayerVisibilityChanges = true;
     [SerializeField] float buildingYawCorrectionDegrees = 0f;
+    [System.Serializable]
+    public class BuildingOrientationRule
+    {
+        public GameObject prefab;
+        public string buildingNameContains;
+        public float rootYawCorrectionDegrees;
+        public float modelYawCorrectionDegrees;
+        public Vector3 modelLocalRotationEuler;
+        public Vector3 modelLocalScaleMultiplier = Vector3.one;
+    }
+    [SerializeField] BuildingOrientationRule[] buildingOrientationRules;
+    [SerializeField] Vector3 defaultBuildingModelLocalRotationEuler = Vector3.zero;
+    [SerializeField] bool useExactOsmFootprintPlacement = true;
     [SerializeField] bool fitBuildingModelToFootprint = true;
     [SerializeField] bool preservePrefabMaterialColors = true;
+    [SerializeField] bool useRandomBuildingPalette = true;
+    [SerializeField] Color[] buildingPalette =
+    {
+        new Color(0.90f, 0.35f, 0.35f, 1f),
+        new Color(0.38f, 0.62f, 0.92f, 1f),
+        new Color(0.84f, 0.76f, 0.40f, 1f),
+        new Color(0.46f, 0.52f, 0.60f, 1f),
+        new Color(0.76f, 0.44f, 0.30f, 1f)
+    };
     float waterHeight = -1f;
 
     [Header("Python Script")]
@@ -617,14 +639,7 @@ if (arcGISMap != null)
     {
         if (useArcGISTerrainOnly)
         {
-            if (result.buildings != null && result.buildings.Length > 0)
-            {
-                SpawnVillageBuildings(result);
-            }
-            else
-            {
-                Debug.LogWarning("⚠️ No buildings from JSON");
-            }
+            SpawnVillageBuildings(result);
 
             Debug.Log("🌍 ArcGIS-only mode: skipped Unity terrain trees/water");
             return;
@@ -651,14 +666,7 @@ if (arcGISMap != null)
         int treeCount = Mathf.Clamp((int)(veg * 10), 20, 300);
         SpawnTrees(treeCount);
 
-        if (result.buildings != null && result.buildings.Length > 0)
-        {
-            SpawnVillageBuildings(result);
-        }
-        else
-        {
-            Debug.LogWarning("⚠️ No buildings from JSON");
-        }
+        SpawnVillageBuildings(result);
 
         Debug.Log($"🌳 Trees: {treeCount} | 🏙 Buildings: {(build > 10 ? "YES" : "NO")}");
     }
@@ -741,10 +749,9 @@ if (arcGISMap != null)
         {
 
             var building = result.buildings[i];
-            Debug.Log(
-    $"Building {i} has {building.points.Length} points"
-);
-            if (building.points == null || building.points.Length < 3)
+            int pointCount = building != null && building.points != null ? building.points.Length : 0;
+            Debug.Log($"Building {i} has {pointCount} points");
+            if (building == null || building.points == null || building.points.Length < 3)
                 continue;
 
             float avgLat = 0;
@@ -760,6 +767,7 @@ if (arcGISMap != null)
             Vector3 previousValidPoint = Vector3.zero;
             Vector3 longestEdge = Vector3.forward;
             float longestEdgeSqr = 0f;
+            List<Vector3> footprintPoints = new List<Vector3>();
 
             foreach (var p in building.points)
             {
@@ -810,6 +818,7 @@ if (arcGISMap != null)
 
                 previousValidPoint = pt;
                 hasPreviousPoint = true;
+                footprintPoints.Add(pt);
 
                 if (pt.x < minX) minX = pt.x;
                 if (pt.x > maxX) maxX = pt.x;
@@ -835,6 +844,19 @@ if (arcGISMap != null)
                 continue;
             }
 
+            float angle = Mathf.Atan2(longestEdge.x, longestEdge.z) * Mathf.Rad2Deg;
+            if (useExactOsmFootprintPlacement && TryComputeFootprintFit(footprintPoints, out Vector3 footprintCenter, out float footprintWidth, out float footprintDepth, out float footprintAngle))
+            {
+                center = footprintCenter;
+                minX = footprintCenter.x - footprintWidth * 0.5f;
+                maxX = footprintCenter.x + footprintWidth * 0.5f;
+                minZ = footprintCenter.z - footprintDepth * 0.5f;
+                maxZ = footprintCenter.z + footprintDepth * 0.5f;
+                Debug.Log(
+                    $"🧭 Footprint fit | EdgeYaw={angle:F1} | PCAYaw={footprintAngle:F1} | W={footprintWidth:F1} | D={footprintDepth:F1}"
+                );
+            }
+
             if (terrain != null)
                 center.y = terrain.SampleHeight(center);
             else
@@ -858,13 +880,15 @@ if (arcGISMap != null)
                     continue;
                 }
             }
-            float width = Mathf.Clamp(maxX - minX, 5f, 80f);
-            float depth = Mathf.Clamp(maxZ - minZ, 5f, 80f);
+            float width = Mathf.Clamp(maxX - minX, 1f, 80f);
+            float depth = Mathf.Clamp(maxZ - minZ, 1f, 80f);
             float area = width * depth;
-            float angle = Mathf.Atan2(longestEdge.x, longestEdge.z) * Mathf.Rad2Deg;
+            if (!useExactOsmFootprintPlacement)
+            {
+                angle = Mathf.Atan2(longestEdge.x, longestEdge.z) * Mathf.Rad2Deg;
+            }
 
             GameObject prefabToUse = GetBuildingPrefabForIndex(i, width, depth);
-            Quaternion rotation = Quaternion.Euler(0f, angle, 0f);
             Transform arcgisRootTransform = GetArcGISRoot();
             GameObject buildingRoot = new GameObject($"{prefabToUse.name}_ArcGISBuilding");
 
@@ -880,28 +904,39 @@ if (arcGISMap != null)
             ArcGISLocationComponent locationComponent = buildingRoot.AddComponent<ArcGISLocationComponent>();
             locationComponent.SurfacePlacementMode = ArcGISSurfacePlacementMode.OnTheGround;
             locationComponent.SurfacePlacementOffset = 0;
+            string buildingTypeName = prefabToUse != null ? prefabToUse.name : buildingRoot.name;
+            BuildingOrientationRule orientationRule = GetBuildingOrientationRule(prefabToUse, buildingTypeName);
+            float yawCorrectionDegrees = orientationRule != null
+                ? orientationRule.rootYawCorrectionDegrees
+                : buildingYawCorrectionDegrees;
+            Quaternion modelLocalRotation = GetBuildingModelLocalRotation(orientationRule);
+            Vector3 modelLocalScale = GetBuildingModelLocalScale(orientationRule, width, depth, area);
             locationComponent.Position = new ArcGISPoint(
                 avgLon,
                 avgLat,
                 0,
                 ArcGISSpatialReference.WGS84()
             );
-            locationComponent.Rotation = new ArcGISRotation(angle + buildingYawCorrectionDegrees, 0, 0);
+            locationComponent.Rotation = new ArcGISRotation(angle + yawCorrectionDegrees, 0, 0);
 
             GameObject buildingModel = Instantiate(prefabToUse, buildingRoot.transform);
             EnsureRenderable(buildingModel);
+            ApplyBuildingPalette(buildingModel, prefabToUse, buildingRoot.name);
             Debug.Log(
-                $"🏠 Spawned ArcGIS building {buildingRoot.name} | Geo=({avgLat}, {avgLon}) | World={center} | Heading={(angle + buildingYawCorrectionDegrees):F1}"
+                $"🏠 Spawned ArcGIS building {buildingRoot.name} | Type={buildingTypeName} | Geo=({avgLat}, {avgLon}) | World={center} | RootHeading={(angle + yawCorrectionDegrees):F1} | FootprintYaw={angle:F1} | YawCorrection={yawCorrectionDegrees:F1}"
+            );
+            Debug.Log(
+                $"🧭 Model rule | Type={buildingTypeName} | LocalRot={modelLocalRotation.eulerAngles} | LocalScale={modelLocalScale} | FootprintFit={fitBuildingModelToFootprint}"
             );
             buildingModel.transform.localPosition = Vector3.zero;
-            buildingModel.transform.localRotation = Quaternion.identity;
-            buildingModel.transform.localScale = ComputeVillageScale(width, depth, area);
+            buildingModel.transform.localRotation = modelLocalRotation;
+            buildingModel.transform.localScale = modelLocalScale;
 
             ApplyBuildingReplacementOverrides(buildingModel, prefabToUse);
 
             if (fitBuildingModelToFootprint)
             {
-                FitBuildingModelToFootprint(buildingModel, width, depth, area);
+                FitBuildingModelToFootprint(buildingModel, buildingRoot.transform, width, depth, area, buildingTypeName);
             }
 
             {
@@ -1013,9 +1048,11 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         {
             GameObject child = Instantiate(prefab, root.transform);
             child.transform.localPosition = Vector3.zero;
-            child.transform.localRotation = Quaternion.identity;
+            BuildingOrientationRule orientationRule = GetBuildingOrientationRule(prefab, prefab.name);
+            child.transform.localRotation = GetBuildingModelLocalRotation(orientationRule);
             child.transform.localScale = Vector3.one;
             EnsureRenderable(child);
+            ApplyBuildingPalette(child, prefab, root.name);
             if (child.GetComponent<Collider>() != null)
             {
                 Destroy(child.GetComponent<Collider>());
@@ -1095,12 +1132,116 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
                     continue;
                 }
 
-                if (material.HasProperty("_Color") && !preservePrefabMaterialColors)
-                {
-                    material.color = new Color(0.95f, 0.75f, 0.2f, 1f);
-                }
             }
         }
+    }
+
+    void ApplyBuildingPalette(GameObject building, GameObject prefabToUse, string buildingName)
+    {
+        if (building == null)
+        {
+            return;
+        }
+
+        if (preservePrefabMaterialColors && !useRandomBuildingPalette)
+        {
+            return;
+        }
+
+        Color? forcedColor = GetForcedBuildingColor(prefabToUse, buildingName);
+        Color paletteColor = forcedColor ?? GetRandomBuildingPaletteColor(buildingName);
+
+        Renderer[] renderers = building.GetComponentsInChildren<Renderer>(true);
+        if (renderers == null || renderers.Length == 0)
+        {
+            return;
+        }
+
+        foreach (Renderer renderer in renderers)
+        {
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Material[] materials = renderer.materials;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                Material material = materials[i];
+                if (material == null || !material.HasProperty("_Color"))
+                {
+                    continue;
+                }
+
+                if (preservePrefabMaterialColors && forcedColor == null)
+                {
+                    continue;
+                }
+
+                material.color = paletteColor;
+            }
+        }
+    }
+
+    Color? GetForcedBuildingColor(GameObject prefabToUse, string buildingName)
+    {
+        if (!string.IsNullOrWhiteSpace(buildingName))
+        {
+            string lowerName = buildingName.ToLowerInvariant();
+            if (lowerName.Contains("school"))
+            {
+                return new Color(0.90f, 0.82f, 0.40f, 1f);
+            }
+
+            if (lowerName.Contains("fire station"))
+            {
+                return new Color(0.86f, 0.24f, 0.22f, 1f);
+            }
+
+            if (lowerName.Contains("corner building"))
+            {
+                return new Color(0.72f, 0.72f, 0.78f, 1f);
+            }
+        }
+
+        if (prefabToUse == null)
+        {
+            return null;
+        }
+
+        string prefabName = prefabToUse.name.ToLowerInvariant();
+        if (prefabName.Contains("school"))
+        {
+            return new Color(0.90f, 0.82f, 0.40f, 1f);
+        }
+
+        if (prefabName.Contains("fire station"))
+        {
+            return new Color(0.86f, 0.24f, 0.22f, 1f);
+        }
+
+        if (prefabName.Contains("corner building"))
+        {
+            return new Color(0.72f, 0.72f, 0.78f, 1f);
+        }
+
+        return null;
+    }
+
+    Color GetRandomBuildingPaletteColor(string buildingName)
+    {
+        if (buildingPalette == null || buildingPalette.Length == 0)
+        {
+            return Color.white;
+        }
+
+        int hash = buildingName != null ? buildingName.GetHashCode() : 0;
+        if (hash < 0)
+        {
+            hash = -hash;
+        }
+
+        return buildingPalette[hash % buildingPalette.Length];
     }
 
     GameObject GetBuildingPrefabForIndex(int buildingIndex, float width, float depth)
@@ -1158,6 +1299,194 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         return buildingPrefab;
     }
 
+    BuildingOrientationRule GetBuildingOrientationRule(GameObject prefabToUse, string buildingTypeName)
+    {
+        if (buildingOrientationRules != null && buildingOrientationRules.Length > 0 && !string.IsNullOrWhiteSpace(buildingTypeName))
+        {
+            for (int i = 0; i < buildingOrientationRules.Length; i++)
+            {
+                BuildingOrientationRule rule = buildingOrientationRules[i];
+                if (rule == null)
+                {
+                    continue;
+                }
+
+                if (rule.prefab != null && rule.prefab == prefabToUse)
+                {
+                    return rule;
+                }
+
+                if (!string.IsNullOrWhiteSpace(rule.buildingNameContains) &&
+                    buildingTypeName.IndexOf(rule.buildingNameContains.Trim(), System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return rule;
+                }
+            }
+        }
+
+        if (IsLockedAxisBuilding(prefabToUse, buildingTypeName))
+        {
+            return new BuildingOrientationRule
+            {
+                prefab = prefabToUse,
+                buildingNameContains = GetLockedAxisBuildingNameTag(buildingTypeName, prefabToUse),
+                modelLocalRotationEuler = new Vector3(0f, 90f, -90f),
+                modelLocalScaleMultiplier = Vector3.one
+            };
+        }
+
+        return null;
+    }
+
+    bool IsLockedAxisBuilding(GameObject prefabToUse, string buildingTypeName)
+    {
+        if (!string.IsNullOrWhiteSpace(buildingTypeName) &&
+            (
+                buildingTypeName.IndexOf("fire station", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                buildingTypeName.IndexOf("corner building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                buildingTypeName.IndexOf("blue building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                buildingTypeName.IndexOf("red building", System.StringComparison.OrdinalIgnoreCase) >= 0
+            ))
+        {
+            return true;
+        }
+
+        return prefabToUse != null &&
+            (
+                prefabToUse.name.IndexOf("fire station", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                prefabToUse.name.IndexOf("corner building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                prefabToUse.name.IndexOf("blue building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                prefabToUse.name.IndexOf("red building", System.StringComparison.OrdinalIgnoreCase) >= 0
+            );
+    }
+
+    string GetLockedAxisBuildingNameTag(string buildingTypeName, GameObject prefabToUse)
+    {
+        if (!string.IsNullOrWhiteSpace(buildingTypeName))
+        {
+            string lowerName = buildingTypeName.ToLowerInvariant();
+            if (lowerName.Contains("fire station"))
+            {
+                return "fire station";
+            }
+            if (lowerName.Contains("corner building"))
+            {
+                return "corner building";
+            }
+            if (lowerName.Contains("blue building"))
+            {
+                return "blue building";
+            }
+            if (lowerName.Contains("red building"))
+            {
+                return "red building";
+            }
+        }
+
+        if (prefabToUse != null)
+        {
+            string prefabName = prefabToUse.name.ToLowerInvariant();
+            if (prefabName.Contains("fire station"))
+            {
+                return "fire station";
+            }
+            if (prefabName.Contains("corner building"))
+            {
+                return "corner building";
+            }
+            if (prefabName.Contains("blue building"))
+            {
+                return "blue building";
+            }
+            if (prefabName.Contains("red building"))
+            {
+                return "red building";
+            }
+        }
+
+        return "locked building";
+    }
+
+    bool TryComputeFootprintFit(List<Vector3> points, out Vector3 center, out float width, out float depth, out float angleDegrees)
+    {
+        center = Vector3.zero;
+        width = 0f;
+        depth = 0f;
+        angleDegrees = 0f;
+
+        if (points == null || points.Count < 3)
+        {
+            return false;
+        }
+
+        Vector3 centroid = Vector3.zero;
+        for (int i = 0; i < points.Count; i++)
+        {
+            centroid += points[i];
+        }
+        centroid /= points.Count;
+
+        float covXX = 0f;
+        float covZZ = 0f;
+        float covXZ = 0f;
+
+        for (int i = 0; i < points.Count; i++)
+        {
+            float dx = points[i].x - centroid.x;
+            float dz = points[i].z - centroid.z;
+            covXX += dx * dx;
+            covZZ += dz * dz;
+            covXZ += dx * dz;
+        }
+
+        covXX /= points.Count;
+        covZZ /= points.Count;
+        covXZ /= points.Count;
+
+        float theta = 0.5f * Mathf.Atan2(2f * covXZ, covXX - covZZ);
+        Vector3 axisX = new Vector3(Mathf.Cos(theta), 0f, Mathf.Sin(theta));
+        Vector3 axisZ = new Vector3(-Mathf.Sin(theta), 0f, Mathf.Cos(theta));
+
+        float minX = float.MaxValue;
+        float maxX = float.MinValue;
+        float minZ = float.MaxValue;
+        float maxZ = float.MinValue;
+
+        for (int i = 0; i < points.Count; i++)
+        {
+            float projectedX = Vector3.Dot(points[i], axisX);
+            float projectedZ = Vector3.Dot(points[i], axisZ);
+
+            if (projectedX < minX) minX = projectedX;
+            if (projectedX > maxX) maxX = projectedX;
+            if (projectedZ < minZ) minZ = projectedZ;
+            if (projectedZ > maxZ) maxZ = projectedZ;
+        }
+
+        width = Mathf.Max(0.01f, maxX - minX);
+        depth = Mathf.Max(0.01f, maxZ - minZ);
+        angleDegrees = theta * Mathf.Rad2Deg;
+
+        float centerX = (minX + maxX) * 0.5f;
+        float centerZ = (minZ + maxZ) * 0.5f;
+        center = axisX * centerX + axisZ * centerZ;
+
+        return true;
+    }
+
+    Quaternion GetBuildingModelLocalRotation(BuildingOrientationRule orientationRule)
+    {
+        Vector3 rotationEuler = orientationRule != null
+            ? orientationRule.modelLocalRotationEuler
+            : defaultBuildingModelLocalRotationEuler;
+        if (orientationRule != null)
+        {
+            rotationEuler.y += orientationRule.modelYawCorrectionDegrees;
+        }
+
+        return Quaternion.Euler(rotationEuler);
+    }
+
     Vector3 ComputeVillageScale(float width, float depth, float area)
     {
         float footprintScale = Mathf.Max(width, depth);
@@ -1172,11 +1501,110 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         return new Vector3(xScale, yScale, zScale);
     }
 
-    void FitBuildingModelToFootprint(GameObject buildingModel, float width, float depth, float area)
+    Vector3 GetBuildingModelLocalScale(BuildingOrientationRule orientationRule, float width, float depth, float area)
     {
-        if (buildingModel == null)
+        Vector3 baseScale = useExactOsmFootprintPlacement
+            ? Vector3.one
+            : ComputeVillageScale(width, depth, area);
+
+        if (orientationRule != null)
+        {
+            baseScale = Vector3.Scale(baseScale, orientationRule.modelLocalScaleMultiplier);
+        }
+
+        return baseScale;
+    }
+
+    void FitBuildingModelToFootprint(GameObject buildingModel, Transform footprintSpace, float width, float depth, float area, string buildingTypeName)
+    {
+        if (buildingModel == null || footprintSpace == null)
         {
             return;
+        }
+
+        Quaternion preferredRotation = buildingModel.transform.localRotation;
+        bool lockRotationToPreferred = IsLockedAxisBuilding(buildingModel, buildingTypeName);
+
+        if (lockRotationToPreferred)
+        {
+            Debug.Log(
+                $"🧭 Footprint orientation locked for {buildingTypeName} | LocalRot={preferredRotation.eulerAngles}"
+            );
+        }
+        else
+        {
+            Quaternion bestBaseRotation = preferredRotation;
+            float bestBaseScore = float.MaxValue;
+
+            Quaternion[] candidateBaseRotations =
+            {
+                preferredRotation,
+                Quaternion.identity,
+                Quaternion.Euler(-90f, 0f, 0f),
+                Quaternion.Euler(90f, 0f, 0f),
+                Quaternion.Euler(0f, 0f, 90f),
+                Quaternion.Euler(0f, 0f, -90f),
+                Quaternion.Euler(180f, 0f, 0f),
+                Quaternion.Euler(0f, 0f, 180f)
+            };
+
+            for (int i = 0; i < candidateBaseRotations.Length; i++)
+            {
+                buildingModel.transform.localRotation = candidateBaseRotations[i];
+
+                if (!TryMeasureFootprintBounds(buildingModel, footprintSpace, out Bounds candidateBounds))
+                {
+                    continue;
+                }
+
+                float uprightness = (candidateBounds.size.x + candidateBounds.size.z) / Mathf.Max(0.001f, candidateBounds.size.y);
+
+                if (uprightness < bestBaseScore)
+                {
+                    bestBaseScore = uprightness;
+                    bestBaseRotation = candidateBaseRotations[i];
+                }
+            }
+
+            buildingModel.transform.localRotation = bestBaseRotation;
+
+            Quaternion bestRotation = bestBaseRotation;
+            float bestRotationScore = float.MaxValue;
+            float bestYawOffset = 0f;
+
+            float[] candidateYawOffsets = { 0f, 90f, 180f, 270f };
+            for (int i = 0; i < candidateYawOffsets.Length; i++)
+            {
+                float yawOffset = candidateYawOffsets[i];
+                buildingModel.transform.localRotation = Quaternion.Euler(0f, yawOffset, 0f) * bestBaseRotation;
+
+                if (!TryMeasureFootprintBounds(buildingModel, footprintSpace, out Bounds candidateBounds))
+                {
+                    continue;
+                }
+
+                float footprintAspect = Mathf.Max(0.001f, width) / Mathf.Max(0.001f, depth);
+                float modelAspect = Mathf.Max(0.001f, candidateBounds.size.x) / Mathf.Max(0.001f, candidateBounds.size.z);
+                float sizeError = Mathf.Abs(candidateBounds.size.x - width) + Mathf.Abs(candidateBounds.size.z - depth);
+                float aspectError = Mathf.Abs(modelAspect - footprintAspect);
+                float score = sizeError + aspectError * 10f;
+
+                if (score < bestRotationScore)
+                {
+                    bestRotationScore = score;
+                    bestRotation = buildingModel.transform.localRotation;
+                    bestYawOffset = yawOffset;
+                }
+            }
+
+            buildingModel.transform.localRotation = bestRotation;
+
+            if (bestBaseRotation != preferredRotation || bestYawOffset != 0f)
+            {
+                Debug.Log(
+                    $"🧭 Footprint orientation applied | Base={bestBaseRotation.eulerAngles} | Yaw={bestYawOffset:F0}°"
+                );
+            }
         }
 
         Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>(true);
@@ -1185,28 +1613,12 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
             return;
         }
 
-        bool hasBounds = false;
-        Bounds bounds = new Bounds(Vector3.zero, Vector3.zero);
-        for (int i = 0; i < renderers.Length; i++)
+        if (!TryMeasureFootprintBounds(buildingModel, footprintSpace, out Bounds bounds))
         {
-            Renderer renderer = renderers[i];
-            if (renderer == null)
-            {
-                continue;
-            }
-
-            if (!hasBounds)
-            {
-                bounds = renderer.bounds;
-                hasBounds = true;
-            }
-            else
-            {
-                bounds.Encapsulate(renderer.bounds);
-            }
+            return;
         }
 
-        if (!hasBounds || bounds.size.x <= 0.001f || bounds.size.z <= 0.001f)
+        if (bounds.size.x <= 0.001f || bounds.size.z <= 0.001f)
         {
             return;
         }
@@ -1216,6 +1628,108 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         float targetZ = Mathf.Clamp(depth / Mathf.Max(0.001f, bounds.size.z), 0.35f, 4f);
 
         buildingModel.transform.localScale = Vector3.Scale(currentScale, new Vector3(targetX, 1f, targetZ));
+    }
+
+    bool TryMeasureFootprintBounds(GameObject buildingModel, Transform footprintSpace, out Bounds bounds)
+    {
+        bounds = new Bounds(Vector3.zero, Vector3.zero);
+
+        if (buildingModel == null || footprintSpace == null)
+        {
+            return false;
+        }
+
+        Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>(true);
+        if (renderers == null || renderers.Length == 0)
+        {
+            return false;
+        }
+
+        bool hasBounds = false;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Vector3[] worldCorners = GetRendererWorldCorners(renderer);
+            for (int c = 0; c < worldCorners.Length; c++)
+            {
+                Vector3 localCorner = footprintSpace.InverseTransformPoint(worldCorners[c]);
+                if (!hasBounds)
+                {
+                    bounds = new Bounds(localCorner, Vector3.zero);
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(localCorner);
+                }
+            }
+        }
+
+        return hasBounds;
+    }
+
+    Vector3[] GetRendererWorldCorners(Renderer renderer)
+    {
+        if (renderer == null)
+        {
+            return System.Array.Empty<Vector3>();
+        }
+
+        Bounds localBounds;
+        MeshFilter meshFilter = renderer.GetComponent<MeshFilter>();
+        SkinnedMeshRenderer skinnedMeshRenderer = renderer as SkinnedMeshRenderer;
+        if (skinnedMeshRenderer != null)
+        {
+            localBounds = skinnedMeshRenderer.localBounds;
+        }
+        else if (meshFilter != null && meshFilter.sharedMesh != null)
+        {
+            localBounds = meshFilter.sharedMesh.bounds;
+        }
+        else
+        {
+            Bounds worldBounds = renderer.bounds;
+            Vector3 worldCenter = worldBounds.center;
+            Vector3 worldExtents = worldBounds.extents;
+            return new[]
+            {
+                worldCenter + new Vector3(-worldExtents.x, -worldExtents.y, -worldExtents.z),
+                worldCenter + new Vector3(-worldExtents.x, -worldExtents.y,  worldExtents.z),
+                worldCenter + new Vector3(-worldExtents.x,  worldExtents.y, -worldExtents.z),
+                worldCenter + new Vector3(-worldExtents.x,  worldExtents.y,  worldExtents.z),
+                worldCenter + new Vector3( worldExtents.x, -worldExtents.y, -worldExtents.z),
+                worldCenter + new Vector3( worldExtents.x, -worldExtents.y,  worldExtents.z),
+                worldCenter + new Vector3( worldExtents.x,  worldExtents.y, -worldExtents.z),
+                worldCenter + new Vector3( worldExtents.x,  worldExtents.y,  worldExtents.z)
+            };
+        }
+
+        Vector3 center = localBounds.center;
+        Vector3 extents = localBounds.extents;
+        Vector3[] localCorners =
+        {
+            center + new Vector3(-extents.x, -extents.y, -extents.z),
+            center + new Vector3(-extents.x, -extents.y,  extents.z),
+            center + new Vector3(-extents.x,  extents.y, -extents.z),
+            center + new Vector3(-extents.x,  extents.y,  extents.z),
+            center + new Vector3( extents.x, -extents.y, -extents.z),
+            center + new Vector3( extents.x, -extents.y,  extents.z),
+            center + new Vector3( extents.x,  extents.y, -extents.z),
+            center + new Vector3( extents.x,  extents.y,  extents.z)
+        };
+
+        Vector3[] worldCorners = new Vector3[localCorners.Length];
+        for (int i = 0; i < localCorners.Length; i++)
+        {
+            worldCorners[i] = renderer.transform.TransformPoint(localCorners[i]);
+        }
+
+        return worldCorners;
     }
 
     void ApplyBuildingReplacementOverrides(GameObject buildingModel, GameObject prefabToUse)
@@ -1233,7 +1747,6 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
             }
 
             buildingModel.transform.localScale *= Mathf.Max(0.01f, rule.scaleMultiplier);
-            buildingModel.transform.localRotation = Quaternion.Euler(0f, rule.rotationEulerOffset.y, 0f);
             return;
         }
     }
