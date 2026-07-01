@@ -318,8 +318,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CameraFollow
   drone: {fileID: 1078695944}
+  receiver: {fileID: 0}
+  attachToDrone: 1
   offset: {x: 0, y: 2, z: -5}
   smoothSpeed: 5
+  followYawOnly: 1
+  alwaysLookAtDrone: 1
+  faceFlightDirection: 1
+  rotationSmoothSpeed: 6
+  minFlightSpeedForFacing: 0.2
+  velocityHeadingHoldSeconds: 0.4
 --- !u!4 &300828383
 Transform:
   m_ObjectHideFlags: 0
@@ -679,7 +687,12 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DroneController
   receiver: {fileID: 1214233500}
-  smoothSpeed: 5
+  visualModel: {fileID: 0}
+  rotationSmoothSpeed: 12
+  modelYawOffset: 180
+  invertYaw: 0
+  useGpsHeadingForYaw: 0
+  attitudeTimeoutSeconds: 0.3
 --- !u!4 &1078695944 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 77ec979c4a1053f4fb90fee3d17b240c, type: 3}
@@ -786,12 +799,24 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 47d006beeb121427796959267fb09a3a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MAVLinkReceiver
+  locationComponent: {fileID: 0}
+  showDebugOverlay: 1
+  toggleDebugKey: 289
   roll: 0
   pitch: 0
   yaw: 0
-  posX: 0
-  posY: 0
-  posZ: 0
+  headingDeg: 0
+  hasHeadingDeg: 0
+  positionSmoothSpeed: 60
+  extrapolationTime: 0.03
+  maxExtrapolationGap: 10
+  snapDistanceMeters: 0.8
+  staleSpeedThreshold: 0.15
+  coastSeconds: 2
+  enableGuidedAssist: 0
+  enableGuidedRepositionNudge: 1
+  guidedStallSecondsBeforeNudge: 2
+  guidedNudgeIntervalSeconds: 0.5
 --- !u!4 &1214233501
 Transform:
   m_ObjectHideFlags: 0

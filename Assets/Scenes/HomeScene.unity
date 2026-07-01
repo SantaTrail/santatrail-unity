@@ -571,7 +571,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5455271186829707781, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_IsActive
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 7420034510537438799, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_Pivot.x
@@ -635,11 +635,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7420034510537438799, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_AnchoredPosition.x
-      value: 50
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7420034510537438799, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_AnchoredPosition.y
-      value: -230
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7420034510537438799, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -715,6 +715,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8738d4a7f2fd74785b5ec00ca3f95655, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MissionGenerator
+  runOnStart: 0
+  missionGenerateTimeoutSeconds: 10
 --- !u!4 &980673430
 Transform:
   m_ObjectHideFlags: 0
@@ -963,11 +965,23 @@ MonoBehaviour:
   levelDropdown: {fileID: 0}
   levels:
   - label: Level 1 - Training
-    sceneName: DroneSimulateArcGIS
+    sceneName: LV1
+    homeLatitude: 52.15603852403063
+    homeLongitude: 4.963989431212162
+    homeAltitude: 0
+    homeYaw: 0
   - label: Level 2 - Demo
     sceneName: DroneSimulateDemo
+    homeLatitude: 13.8455
+    homeLongitude: 100.5688
+    homeAltitude: 10
+    homeYaw: 0
   - label: Level 3 - Sandbox
     sceneName: SampleScene
+    homeLatitude: 13.8455
+    homeLongitude: 100.5688
+    homeAltitude: 10
+    homeYaw: 0
   playButton: {fileID: 568253864}
   gameStory: 'Christmas is at risk. The reindeer are grounded and you are the last
     hope. Your only option is a delivery drone.
