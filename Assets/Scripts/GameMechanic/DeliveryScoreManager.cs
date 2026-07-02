@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -13,6 +14,14 @@ public class DeliveryScoreManager : MonoBehaviour
     public TextMeshProUGUI scoreText;
     public TextMeshProUGUI statusText;
 
+    [Header("Level Target Setup")]
+    [Tooltip("How many random spawned buildings become delivery targets in this level.")]
+    [Min(1)] public int targetBuildingCount = 5;
+    [Tooltip("How often the manager retries while waiting for ArcGIS buildings to spawn.")]
+    [Min(0.1f)] public float buildingScanRetrySeconds = 1f;
+    [Tooltip("Maximum time spent waiting for spawned buildings. Use 0 to keep retrying forever.")]
+    [Min(0f)] public float buildingScanTimeoutSeconds = 60f;
+
     [Header("OSM Delivery")]
     public float deliveryRange = 2f;
     public float hoverSecondsRequired = 1.5f;
@@ -23,12 +32,17 @@ public class DeliveryScoreManager : MonoBehaviour
     public bool includeInactiveRenderers = false;
 
     [Header("Delivery Precision")]
-    public float maxHorizontalOffset = 5f;
+    [Tooltip("Horizontal radius around the selected roof center where a present can be delivered.")]
+    [Min(0.1f)] public float deliveryRadius = 5f;
     public float maxHoverSpeed = 100f;
     public float maxHeightAboveRoof = 3f;
     public bool showSpawnRadius = true;
-    public bool logCandidateBuildings = true;
-    public bool logAcceptedBuildingRoots = true;
+    [Tooltip("Editor-only debug gizmos. Keep this off to avoid extra colored circles in Scene view.")]
+    public bool showDebugGizmos = false;
+    public bool logCandidateBuildings = false;
+    public bool logAcceptedBuildingRoots = false;
+    [Tooltip("Enable only while debugging. Per-frame logs can freeze or crash the Unity Editor.")]
+    public bool verboseDebugLogs = false;
 
     [Header("Delivery Ring")]
     public float deliveryRingVerticalOffset = 0.2f;
@@ -44,10 +58,11 @@ public class DeliveryScoreManager : MonoBehaviour
     public float completeMessageDuration = 2f;
 
     [Header("Level Progress")]
+    [Tooltip("Legacy value kept for existing scenes. Completion now uses the number of randomly selected targets.")]
     public int level1RequiredDeliveries = 5;
 
     public int score = 0;
-
+    private bool buildingsInitialized = false;
     private sealed class SpawnedBuildingTarget
     {
         public Transform root;
@@ -60,6 +75,12 @@ public class DeliveryScoreManager : MonoBehaviour
     private readonly HashSet<string> deliveredBuildingKeys = new HashSet<string>();
     private readonly Dictionary<string, float> hoverTimers = new Dictionary<string, float>();
     private readonly List<SpawnedBuildingTarget> cachedBuildings = new List<SpawnedBuildingTarget>();
+    private readonly List<SpawnedBuildingTarget> activeTargets = new List<SpawnedBuildingTarget>();
+
+    private int totalTargets = 0;
+    public int RemainingTargets => activeTargets.Count;
+    public int CompletedTargets => completedDeliveries;
+    public int TotalTargets => totalTargets;
     private float nextScanTime = 0f;
     private string latestStatus = "";
     private float statusUntilTime = -1f;
@@ -68,15 +89,15 @@ public class DeliveryScoreManager : MonoBehaviour
     private MAVLinkReceiver mavReceiver;
     private SpawnedBuildingTarget currentNearestBuilding;
     private SpawnedBuildingTarget currentDeliverableTarget;
-    private LineRenderer deliveryRing;
-    private GameObject deliveryRingObject;
+    private readonly Dictionary<string, LineRenderer> deliveryRings = new Dictionary<string, LineRenderer>();
+    private readonly Dictionary<string, GameObject> deliveryRingObjects = new Dictionary<string, GameObject>();
     private Vector3 lastDronePos;
     private float currentSpeed;
 
     void Start()
     {
         AutoBindDrone();
-        ScanBuildings();
+        CleanupLegacyDeliveryRings();
         UpdateScoreUI();
         ScoreChanged?.Invoke(score);
 
@@ -84,11 +105,54 @@ public class DeliveryScoreManager : MonoBehaviour
         {
             lastDronePos = drone.position;
         }
+
+        StartCoroutine(InitializeBuildingTargets());
+    }
+
+    IEnumerator InitializeBuildingTargets()
+    {
+        float elapsed = 0f;
+
+        while (!buildingsInitialized)
+        {
+            AutoBindDrone();
+            ScanBuildings();
+
+            if (cachedBuildings.Count > 0)
+            {
+                int requestedCount = Mathf.Max(1, targetBuildingCount);
+                SelectRandomTargets(requestedCount);
+                buildingsInitialized = activeTargets.Count > 0;
+
+                if (buildingsInitialized)
+                {
+                    Debug.Log(
+                        $"Delivery system initialized with {activeTargets.Count} random targets " +
+                        $"from {cachedBuildings.Count} detected buildings."
+                    );
+                    yield break;
+                }
+            }
+
+            if (buildingScanTimeoutSeconds > 0f && elapsed >= buildingScanTimeoutSeconds)
+            {
+                Debug.LogWarning(
+                    $"DeliveryScoreManager found no spawned building targets after " +
+                    $"{buildingScanTimeoutSeconds:0.0} seconds."
+                );
+                yield break;
+            }
+
+            float delay = Mathf.Max(0.1f, buildingScanRetrySeconds);
+            yield return new WaitForSeconds(delay);
+            elapsed += delay;
+        }
     }
 
     void Update()
     {
         AutoBindDrone();
+        // Debug.Log($"Drone transform = {drone.position}");
         if (mavReceiver == null)
         {
             mavReceiver = MAVLinkReceiver.Active;
@@ -96,7 +160,7 @@ public class DeliveryScoreManager : MonoBehaviour
 
         if (drone == null)
         {
-            UpdateDeliveryRing(null, false);
+            SetAllDeliveryRingsActive(false);
             return;
         }
 
@@ -124,21 +188,22 @@ public class DeliveryScoreManager : MonoBehaviour
                 latestStatus = "";
             }
 
-            UpdateDeliveryRing(null, false);
+            UpdateAllDeliveryRings(null);
             return;
         }
 
-        if (Time.time >= nextScanTime)
+
+        if (!buildingsInitialized || activeTargets.Count == 0)
         {
-            ScanBuildings();
-            nextScanTime = Time.time + scanInterval;
+            SetAllDeliveryRingsActive(false);
+            return;
         }
 
         EvaluateTargets(out SpawnedBuildingTarget nearestTarget, out SpawnedBuildingTarget deliverableTarget);
         currentNearestBuilding = nearestTarget;
         currentDeliverableTarget = deliverableTarget;
 
-        UpdateDeliveryRing(currentDeliverableTarget ?? currentNearestBuilding, currentDeliverableTarget != null);
+        UpdateAllDeliveryRings(currentDeliverableTarget);
 
         if (currentDeliverableTarget != null)
         {
@@ -185,7 +250,9 @@ public class DeliveryScoreManager : MonoBehaviour
     {
         cachedBuildings.Clear();
 
-        Renderer[] all = Resources.FindObjectsOfTypeAll<Renderer>();
+        Renderer[] all = FindObjectsByType<Renderer>(
+            includeInactiveRenderers ? FindObjectsInactive.Include : FindObjectsInactive.Exclude,
+            FindObjectsSortMode.None);
         Dictionary<Transform, List<Renderer>> grouped = new Dictionary<Transform, List<Renderer>>();
 
         for (int i = 0; i < all.Length; i++)
@@ -241,41 +308,73 @@ public class DeliveryScoreManager : MonoBehaviour
             }
 
             cachedBuildings.Add(target);
-
-            if (logAcceptedBuildingRoots)
+            if (verboseDebugLogs)
+            {
+                Debug.Log($"Detected building: {target.root.name}");
+            }
+            if (verboseDebugLogs && logAcceptedBuildingRoots)
             {
                 Debug.Log(
                     $"Accepted building root: {root.name} | Center: {target.bounds.center} | Size: {target.bounds.size}"
                 );
             }
         }
-    }
+        if (verboseDebugLogs)
+        {
+            Debug.Log($"Cached buildings = {cachedBuildings.Count}");
+        }
 
+    }
+    void SelectRandomTargets(int amount)
+    {
+        activeTargets.Clear();
+
+        List<SpawnedBuildingTarget> candidates =
+            new List<SpawnedBuildingTarget>(cachedBuildings);
+
+        while (candidates.Count > 0 &&
+               activeTargets.Count < amount)
+        {
+            int index = UnityEngine.Random.Range(0, candidates.Count);
+
+            activeTargets.Add(candidates[index]);
+
+            candidates.RemoveAt(index);
+        }
+
+        totalTargets = activeTargets.Count;
+        RefreshDeliveryRings();
+
+        Debug.Log($"Selected {totalTargets} delivery buildings.");
+
+        if (verboseDebugLogs)
+        {
+            foreach (var target in activeTargets)
+            {
+                Debug.Log($"Delivery Target: {target.root.name}");
+            }
+        }
+    }
     Transform GetSpawnedBuildingRoot(Renderer renderer)
     {
         if (renderer == null)
-        {
             return null;
+
+        Transform t = renderer.transform;
+
+        while (t != null)
+        {
+            if (t.name.EndsWith("_ArcGISBuilding",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                if (t.GetComponent<ArcGISLocationComponent>() != null)
+                    return t;
+            }
+
+            t = t.parent;
         }
 
-        Transform root = renderer.transform.root;
-        if (root == null)
-        {
-            return null;
-        }
-
-        string rootName = root.name.ToLowerInvariant();
-        if (!rootName.EndsWith("_arcgisbuilding"))
-        {
-            return null;
-        }
-
-        if (root.GetComponent<ArcGISLocationComponent>() == null)
-        {
-            return null;
-        }
-
-        return root;
+        return null;
     }
 
     bool TryBuildTarget(Transform root, List<Renderer> renderers, out SpawnedBuildingTarget target)
@@ -337,6 +436,19 @@ public class DeliveryScoreManager : MonoBehaviour
         return true;
     }
 
+    bool IsDroneWithinDeliveryRadius(SpawnedBuildingTarget target)
+    {
+        if (target == null || drone == null)
+            return false;
+
+        float horizontalDistance = Vector2.Distance(
+            new Vector2(drone.position.x, drone.position.z),
+            new Vector2(target.roofTarget.x, target.roofTarget.z)
+        );
+
+        return horizontalDistance <= deliveryRadius;
+    }
+
     void EvaluateTargets(out SpawnedBuildingTarget nearestTarget, out SpawnedBuildingTarget deliverableTarget)
     {
         nearestTarget = null;
@@ -351,9 +463,9 @@ public class DeliveryScoreManager : MonoBehaviour
         float nearestHorizontalDistance = float.MaxValue;
         float nearestDeliverableHeight = float.MaxValue;
 
-        for (int i = 0; i < cachedBuildings.Count; i++)
+        for (int i = 0; i < activeTargets.Count; i++)
         {
-            SpawnedBuildingTarget target = cachedBuildings[i];
+            SpawnedBuildingTarget target = activeTargets[i];
             if (target == null || target.root == null)
             {
                 continue;
@@ -363,10 +475,14 @@ public class DeliveryScoreManager : MonoBehaviour
                 new Vector2(dronePos.x, dronePos.z),
                 new Vector2(target.roofTarget.x, target.roofTarget.z)
             );
-
+            if (verboseDebugLogs)
+            {
+                Debug.Log($"Drone = {drone.position}");
+                Debug.Log($"Roof  = {target.roofTarget}");
+            }
             float heightAboveRoof = dronePos.y - target.roofTarget.y;
 
-            if (logCandidateBuildings)
+            if (verboseDebugLogs && logCandidateBuildings)
             {
                 Debug.Log(
                     $"Candidate root: {target.root.name} | Center: {target.bounds.center} | Roof: {target.roofTarget} | " +
@@ -379,8 +495,7 @@ public class DeliveryScoreManager : MonoBehaviour
                 nearestHorizontalDistance = horizontalDistance;
                 nearestTarget = target;
             }
-
-            if (horizontalDistance > maxHorizontalOffset)
+            if (!IsDroneWithinDeliveryRadius(target))
             {
                 continue;
             }
@@ -402,71 +517,103 @@ public class DeliveryScoreManager : MonoBehaviour
             }
         }
 
-        if (deliverableTarget != null)
+        if (verboseDebugLogs)
         {
-            Debug.Log(
-                $"✅ Delivery candidate selected: {deliverableTarget.root.name} | Roof: {deliverableTarget.roofTarget}"
-            );
+            if (deliverableTarget != null)
+            {
+                Debug.Log(
+                    $"Delivery candidate selected: {deliverableTarget.root.name} | Roof: {deliverableTarget.roofTarget}"
+                );
+            }
+
+            Debug.Log(nearestTarget == null
+                ? "No nearest building found."
+                : $"Nearest = {nearestTarget.root.name}");
         }
     }
 
-    void UpdateDeliveryRing(SpawnedBuildingTarget target, bool deliverable)
+    void RefreshDeliveryRings()
+    {
+        RemoveUnusedDeliveryRings();
+        UpdateAllDeliveryRings(null);
+    }
+
+    void UpdateAllDeliveryRings(SpawnedBuildingTarget deliverableTarget)
     {
         if (!showSpawnRadius)
         {
-            SetDeliveryRingActive(false);
+            SetAllDeliveryRingsActive(false);
             return;
         }
 
-        if (target == null)
+        RemoveUnusedDeliveryRings();
+
+        for (int i = 0; i < activeTargets.Count; i++)
         {
-            SetDeliveryRingActive(false);
-            return;
-        }
+            SpawnedBuildingTarget target = activeTargets[i];
+            if (target == null || target.root == null)
+            {
+                continue;
+            }
 
-        EnsureDeliveryRing();
-        if (deliveryRing == null)
-        {
-            return;
-        }
+            LineRenderer ring = EnsureDeliveryRing(target);
+            if (ring == null)
+            {
+                continue;
+            }
 
-        deliveryRingObject.SetActive(true);
-        deliveryRing.loop = true;
-        deliveryRing.useWorldSpace = true;
-        deliveryRing.widthMultiplier = deliveryRingWidth;
-        deliveryRing.positionCount = Mathf.Max(12, deliveryRingSegments);
-        deliveryRing.startColor = deliverable ? deliveryRingReadyColor : deliveryRingSearchColor;
-        deliveryRing.endColor = deliverable ? deliveryRingReadyColor : deliveryRingSearchColor;
+            GameObject ringObject = deliveryRingObjects[target.key];
+            ringObject.SetActive(true);
 
-        Vector3 center = target.roofTarget + Vector3.up * deliveryRingVerticalOffset;
-        int segmentCount = deliveryRing.positionCount;
+            bool isDeliverable = target == deliverableTarget;
+            Color ringColor = isDeliverable ? deliveryRingReadyColor : deliveryRingSearchColor;
 
-        for (int i = 0; i < segmentCount; i++)
-        {
-            float angle = (Mathf.PI * 2f * i) / segmentCount;
-            Vector3 point = center + new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * maxHorizontalOffset;
-            deliveryRing.SetPosition(i, point);
+            ring.loop = true;
+            ring.useWorldSpace = true;
+            ring.widthMultiplier = deliveryRingWidth;
+            ring.positionCount = Mathf.Max(12, deliveryRingSegments);
+            ring.startColor = ringColor;
+            ring.endColor = ringColor;
+
+            Vector3 center = target.roofTarget + Vector3.up * deliveryRingVerticalOffset;
+            int segmentCount = ring.positionCount;
+
+            for (int segment = 0; segment < segmentCount; segment++)
+            {
+                float angle = (Mathf.PI * 2f * segment) / segmentCount;
+                Vector3 point = center +
+                    new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * deliveryRadius;
+                ring.SetPosition(segment, point);
+            }
         }
     }
 
-    void EnsureDeliveryRing()
+    LineRenderer EnsureDeliveryRing(SpawnedBuildingTarget target)
     {
-        if (deliveryRing != null)
+        if (target == null || string.IsNullOrEmpty(target.key))
         {
-            return;
+            return null;
         }
 
-        deliveryRingObject = new GameObject("DeliveryRing");
-        deliveryRingObject.hideFlags = HideFlags.DontSave;
+        if (deliveryRings.TryGetValue(target.key, out LineRenderer existingRing) &&
+            existingRing != null)
+        {
+            return existingRing;
+        }
 
-        deliveryRing = deliveryRingObject.AddComponent<LineRenderer>();
-        deliveryRing.loop = true;
-        deliveryRing.useWorldSpace = true;
-        deliveryRing.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        deliveryRing.receiveShadows = false;
-        deliveryRing.alignment = LineAlignment.View;
-        deliveryRing.numCornerVertices = 4;
-        deliveryRing.numCapVertices = 4;
+        GameObject ringObject = new GameObject($"DeliveryRing_{target.key}");
+        ringObject.transform.SetParent(transform, false);
+        // Keep normal scene flags. Some Unity/ArcGIS editor combinations are unstable
+        // when runtime LineRenderer objects use DontSave flags.
+
+        LineRenderer ring = ringObject.AddComponent<LineRenderer>();
+        ring.loop = true;
+        ring.useWorldSpace = true;
+        ring.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        ring.receiveShadows = false;
+        ring.alignment = LineAlignment.View;
+        ring.numCornerVertices = 4;
+        ring.numCapVertices = 4;
 
         Shader shader = Shader.Find("Sprites/Default");
         if (shader == null)
@@ -476,36 +623,111 @@ public class DeliveryScoreManager : MonoBehaviour
 
         if (shader != null)
         {
-            deliveryRing.material = new Material(shader);
+            ring.material = new Material(shader);
+        }
+
+        deliveryRings[target.key] = ring;
+        deliveryRingObjects[target.key] = ringObject;
+        return ring;
+    }
+
+    void RemoveUnusedDeliveryRings()
+    {
+        HashSet<string> activeKeys = new HashSet<string>();
+        for (int i = 0; i < activeTargets.Count; i++)
+        {
+            if (activeTargets[i] != null)
+            {
+                activeKeys.Add(activeTargets[i].key);
+            }
+        }
+
+        List<string> keysToRemove = new List<string>();
+        foreach (KeyValuePair<string, GameObject> pair in deliveryRingObjects)
+        {
+            if (!activeKeys.Contains(pair.Key))
+            {
+                if (pair.Value != null)
+                {
+                    Destroy(pair.Value);
+                }
+                keysToRemove.Add(pair.Key);
+            }
+        }
+
+        for (int i = 0; i < keysToRemove.Count; i++)
+        {
+            deliveryRingObjects.Remove(keysToRemove[i]);
+            deliveryRings.Remove(keysToRemove[i]);
         }
     }
 
-    void SetDeliveryRingActive(bool isActive)
+    void RemoveDeliveryRing(string key)
     {
-        if (deliveryRingObject != null)
+        if (string.IsNullOrEmpty(key))
         {
-            deliveryRingObject.SetActive(isActive);
+            return;
+        }
+
+        if (deliveryRingObjects.TryGetValue(key, out GameObject ringObject) &&
+            ringObject != null)
+        {
+            Destroy(ringObject);
+        }
+
+        deliveryRingObjects.Remove(key);
+        deliveryRings.Remove(key);
+    }
+
+    void SetAllDeliveryRingsActive(bool isActive)
+    {
+        foreach (GameObject ringObject in deliveryRingObjects.Values)
+        {
+            if (ringObject != null)
+            {
+                ringObject.SetActive(isActive);
+            }
+        }
+    }
+
+    void CleanupLegacyDeliveryRings()
+    {
+        GameObject[] sceneObjects = FindObjectsByType<GameObject>(
+            FindObjectsInactive.Include,
+            FindObjectsSortMode.None);
+
+        for (int i = 0; i < sceneObjects.Length; i++)
+        {
+            GameObject sceneObject = sceneObjects[i];
+            if (sceneObject == null || sceneObject == gameObject)
+            {
+                continue;
+            }
+
+            if (sceneObject.name == "DeliveryRing")
+            {
+                Destroy(sceneObject);
+            }
         }
     }
 
     void OnDrawGizmos()
     {
-        if (!showSpawnRadius)
+        if (!showDebugGizmos || !showSpawnRadius)
         {
             return;
         }
 
-        if (currentDeliverableTarget != null)
+        for (int i = 0; i < activeTargets.Count; i++)
         {
-            Gizmos.color = Color.green;
-            Gizmos.DrawWireSphere(currentDeliverableTarget.roofTarget, maxHorizontalOffset);
-            Gizmos.DrawLine(currentDeliverableTarget.roofTarget, currentDeliverableTarget.roofTarget + Vector3.up * 8f);
-        }
-        else if (currentNearestBuilding != null)
-        {
-            Gizmos.color = Color.yellow;
-            Gizmos.DrawWireSphere(currentNearestBuilding.roofTarget, maxHorizontalOffset);
-            Gizmos.DrawLine(currentNearestBuilding.roofTarget, currentNearestBuilding.roofTarget + Vector3.up * 8f);
+            SpawnedBuildingTarget target = activeTargets[i];
+            if (target == null)
+            {
+                continue;
+            }
+
+            Gizmos.color = target == currentDeliverableTarget ? Color.green : Color.yellow;
+            Gizmos.DrawWireSphere(target.roofTarget, deliveryRadius);
         }
     }
 
@@ -559,7 +781,9 @@ public class DeliveryScoreManager : MonoBehaviour
         score += rewardPerDelivery;
         deliveredBuildingKeys.Add(key);
         completedDeliveries++;
-        hoverTimers[key] = 0f;
+        hoverTimers.Remove(key);
+        activeTargets.Remove(building);
+        RemoveDeliveryRing(key);
         UpdateScoreUI();
         ScoreChanged?.Invoke(score);
 
@@ -576,7 +800,7 @@ public class DeliveryScoreManager : MonoBehaviour
             $"Key: {key}"
         );
 
-        if (!level1Completed && completedDeliveries >= Mathf.Max(1, level1RequiredDeliveries))
+        if (!level1Completed && completedDeliveries >= Mathf.Max(1, totalTargets))
         {
             level1Completed = true;
             latestStatus = level1CompleteMessage;

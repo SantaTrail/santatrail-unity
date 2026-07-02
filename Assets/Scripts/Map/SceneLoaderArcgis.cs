@@ -49,6 +49,7 @@ public class SceneLoaderArcgis : MonoBehaviour
         public float modelYawCorrectionDegrees;
         public Vector3 modelLocalRotationEuler;
         public Vector3 modelLocalScaleMultiplier = Vector3.one;
+        public bool lockFootprintOrientation = false;
     }
     [SerializeField] BuildingOrientationRule[] buildingOrientationRules;
     [SerializeField] Vector3 defaultBuildingModelLocalRotationEuler = Vector3.zero;
@@ -56,7 +57,8 @@ public class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] bool fitBuildingModelToFootprint = true;
     [SerializeField] bool preservePrefabMaterialColors = true;
     [SerializeField] bool useRandomBuildingPalette = true;
-    [SerializeField] Color[] buildingPalette =
+    [SerializeField]
+    Color[] buildingPalette =
     {
         new Color(0.90f, 0.35f, 0.35f, 1f),
         new Color(0.38f, 0.62f, 0.92f, 1f),
@@ -99,6 +101,7 @@ public class SceneLoaderArcgis : MonoBehaviour
     double fallbackOriginLat;
     double fallbackOriginLon;
     Transform generatedObjectsRoot;
+    Transform droneTransform;
 
     void Awake()
     {
@@ -123,14 +126,14 @@ public class SceneLoaderArcgis : MonoBehaviour
                 "❌ ArcGISMapComponent not found"
             );
         }
-if (arcGISMap != null)
-{
-    Debug.Log(
-        $"MAP ORIGIN = " +
-        $"{arcGISMap.OriginPosition.Y}, " +
-        $"{arcGISMap.OriginPosition.X}"
-    );
-}
+        if (arcGISMap != null)
+        {
+            Debug.Log(
+                $"MAP ORIGIN = " +
+                $"{arcGISMap.OriginPosition.Y}, " +
+                $"{arcGISMap.OriginPosition.X}"
+            );
+        }
         if (arcGISConverter == null)
             Debug.LogWarning("⚠️ ArcGISConverter not found in Awake (will keep retrying)");
     }
@@ -845,7 +848,11 @@ if (arcGISMap != null)
             }
 
             float angle = Mathf.Atan2(longestEdge.x, longestEdge.z) * Mathf.Rad2Deg;
-            if (useExactOsmFootprintPlacement && TryComputeFootprintFit(footprintPoints, out Vector3 footprintCenter, out float footprintWidth, out float footprintDepth, out float footprintAngle))
+            Vector3 footprintCenter = Vector3.zero;
+            float footprintWidth = 0f;
+            float footprintDepth = 0f;
+            float footprintAngle = 0f;
+            if (useExactOsmFootprintPlacement && TryComputeFootprintFit(footprintPoints, out footprintCenter, out footprintWidth, out footprintDepth, out footprintAngle))
             {
                 center = footprintCenter;
                 minX = footprintCenter.x - footprintWidth * 0.5f;
@@ -920,6 +927,14 @@ if (arcGISMap != null)
             locationComponent.Rotation = new ArcGISRotation(angle + yawCorrectionDegrees, 0, 0);
 
             GameObject buildingModel = Instantiate(prefabToUse, buildingRoot.transform);
+
+
+            // House house = buildingRoot.GetComponent<House>();
+            // if (house == null)
+            //     house = buildingRoot.AddComponent<House>();
+
+            // house.model = buildingModel.transform;
+
             EnsureRenderable(buildingModel);
             ApplyBuildingPalette(buildingModel, prefabToUse, buildingRoot.name);
             Debug.Log(
@@ -936,7 +951,7 @@ if (arcGISMap != null)
 
             if (fitBuildingModelToFootprint)
             {
-                FitBuildingModelToFootprint(buildingModel, buildingRoot.transform, width, depth, area, buildingTypeName);
+                FitBuildingModelToFootprint(buildingModel, buildingRoot.transform, width, depth, area, orientationRule);
             }
 
             {
@@ -947,10 +962,21 @@ if (arcGISMap != null)
             Debug.Log(
                 $"🏠 Model local transform | Pos={buildingModel.transform.localPosition} | Rot={buildingModel.transform.localRotation.eulerAngles} | Scale={buildingModel.transform.localScale}"
             );
-            if (buildingRoot.GetComponent<Collider>() == null)
-            {
-                buildingRoot.AddComponent<BoxCollider>();
-            }
+            BoxCollider box = buildingRoot.GetComponent<BoxCollider>();
+
+            if (box == null)
+                box = buildingRoot.AddComponent<BoxCollider>();
+
+            Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>();
+
+            Bounds bounds = renderers[0].bounds;
+
+            foreach (Renderer r in renderers)
+                bounds.Encapsulate(r.bounds);
+
+            // Convert world bounds into local space
+            box.center = buildingRoot.transform.InverseTransformPoint(bounds.center);
+            box.size = bounds.size;
 
             spawned++;
         }
@@ -999,9 +1025,9 @@ if (arcGISMap != null)
         Vector3 heroLocalPos = new Vector3(0f, -0.5f, 4f);
         GameObject heroBuilding = CreateVisibleBuildingSpawn(anchorTransform, heroPrefab, heroLocalPos, Quaternion.identity, 1.5f);
         Debug.Log($"🏠 Hero village building spawned at {heroBuilding.transform.position}");
-Debug.Log($"CENTER = {center}");
-Debug.Log($"DRONE = {droneTransform.position}");
-Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
+        Debug.Log($"CENTER = {center}");
+        Debug.Log($"DRONE = {droneTransform.position}");
+        Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         for (int i = 0; i < count; i++)
         {
             float angle = i * angleStep + UnityEngine.Random.Range(-10f, 10f);
@@ -1057,20 +1083,20 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
             {
                 Destroy(child.GetComponent<Collider>());
             }
-            if (child.GetComponent<House>() == null)
-            {
-                child.AddComponent<House>();
-            }
+            //     if (child.GetComponent<House>() == null)
+            //     {
+            //         child.AddComponent<House>();
+            //     }
         }
 
         if (root.GetComponent<Collider>() == null)
         {
             root.AddComponent<BoxCollider>();
         }
-        if (root.GetComponent<House>() == null)
-        {
-            root.AddComponent<House>();
-        }
+        // if (root.GetComponent<House>() == null)
+        // {
+        //     root.AddComponent<House>();
+        // }
 
         return root;
     }
@@ -1301,7 +1327,7 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
 
     BuildingOrientationRule GetBuildingOrientationRule(GameObject prefabToUse, string buildingTypeName)
     {
-        if (buildingOrientationRules != null && buildingOrientationRules.Length > 0 && !string.IsNullOrWhiteSpace(buildingTypeName))
+        if (buildingOrientationRules != null && buildingOrientationRules.Length > 0)
         {
             for (int i = 0; i < buildingOrientationRules.Length; i++)
             {
@@ -1316,7 +1342,8 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
                     return rule;
                 }
 
-                if (!string.IsNullOrWhiteSpace(rule.buildingNameContains) &&
+                if (!string.IsNullOrWhiteSpace(buildingTypeName) &&
+                    !string.IsNullOrWhiteSpace(rule.buildingNameContains) &&
                     buildingTypeName.IndexOf(rule.buildingNameContains.Trim(), System.StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return rule;
@@ -1324,87 +1351,7 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
             }
         }
 
-        if (IsLockedAxisBuilding(prefabToUse, buildingTypeName))
-        {
-            return new BuildingOrientationRule
-            {
-                prefab = prefabToUse,
-                buildingNameContains = GetLockedAxisBuildingNameTag(buildingTypeName, prefabToUse),
-                modelLocalRotationEuler = new Vector3(0f, 90f, -90f),
-                modelLocalScaleMultiplier = Vector3.one
-            };
-        }
-
         return null;
-    }
-
-    bool IsLockedAxisBuilding(GameObject prefabToUse, string buildingTypeName)
-    {
-        if (!string.IsNullOrWhiteSpace(buildingTypeName) &&
-            (
-                buildingTypeName.IndexOf("fire station", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                buildingTypeName.IndexOf("corner building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                buildingTypeName.IndexOf("blue building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                buildingTypeName.IndexOf("red building", System.StringComparison.OrdinalIgnoreCase) >= 0
-            ))
-        {
-            return true;
-        }
-
-        return prefabToUse != null &&
-            (
-                prefabToUse.name.IndexOf("fire station", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                prefabToUse.name.IndexOf("corner building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                prefabToUse.name.IndexOf("blue building", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                prefabToUse.name.IndexOf("red building", System.StringComparison.OrdinalIgnoreCase) >= 0
-            );
-    }
-
-    string GetLockedAxisBuildingNameTag(string buildingTypeName, GameObject prefabToUse)
-    {
-        if (!string.IsNullOrWhiteSpace(buildingTypeName))
-        {
-            string lowerName = buildingTypeName.ToLowerInvariant();
-            if (lowerName.Contains("fire station"))
-            {
-                return "fire station";
-            }
-            if (lowerName.Contains("corner building"))
-            {
-                return "corner building";
-            }
-            if (lowerName.Contains("blue building"))
-            {
-                return "blue building";
-            }
-            if (lowerName.Contains("red building"))
-            {
-                return "red building";
-            }
-        }
-
-        if (prefabToUse != null)
-        {
-            string prefabName = prefabToUse.name.ToLowerInvariant();
-            if (prefabName.Contains("fire station"))
-            {
-                return "fire station";
-            }
-            if (prefabName.Contains("corner building"))
-            {
-                return "corner building";
-            }
-            if (prefabName.Contains("blue building"))
-            {
-                return "blue building";
-            }
-            if (prefabName.Contains("red building"))
-            {
-                return "red building";
-            }
-        }
-
-        return "locked building";
     }
 
     bool TryComputeFootprintFit(List<Vector3> points, out Vector3 center, out float width, out float depth, out float angleDegrees)
@@ -1515,7 +1462,7 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         return baseScale;
     }
 
-    void FitBuildingModelToFootprint(GameObject buildingModel, Transform footprintSpace, float width, float depth, float area, string buildingTypeName)
+    void FitBuildingModelToFootprint(GameObject buildingModel, Transform footprintSpace, float width, float depth, float area, BuildingOrientationRule orientationRule)
     {
         if (buildingModel == null || footprintSpace == null)
         {
@@ -1523,12 +1470,15 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
         }
 
         Quaternion preferredRotation = buildingModel.transform.localRotation;
-        bool lockRotationToPreferred = IsLockedAxisBuilding(buildingModel, buildingTypeName);
+        bool lockRotationToPreferred = orientationRule != null && orientationRule.lockFootprintOrientation;
 
         if (lockRotationToPreferred)
         {
+            string ruleName = !string.IsNullOrWhiteSpace(orientationRule.buildingNameContains)
+                ? orientationRule.buildingNameContains
+                : (orientationRule.prefab != null ? orientationRule.prefab.name : "unnamed");
             Debug.Log(
-                $"🧭 Footprint orientation locked for {buildingTypeName} | LocalRot={preferredRotation.eulerAngles}"
+                $"🧭 Footprint orientation locked for {ruleName} | LocalRot={preferredRotation.eulerAngles}"
             );
         }
         else
@@ -2063,8 +2013,6 @@ Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
             Debug.LogError("❌ River carving failed: " + e.Message);
         }
     }
-
-    Transform droneTransform;
 
     void SetupDroneReference()
     {
