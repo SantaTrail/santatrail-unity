@@ -23,6 +23,16 @@ public class SceneLoaderArcgis : MonoBehaviour
     [Header("Level Origin")]
     [Tooltip("When enabled, this scene sets the ArcGIS map origin from the values below.")]
     [SerializeField] bool overrideMapOrigin = false;
+    [Tooltip("Keep the ArcGIS origin saved in this scene. Enable this for levels with manually placed buildings.")]
+    [SerializeField] bool lockSceneMapOriginForManualBuildings = false;
+
+    [Header("Manual Building Level Runtime")]
+    [Tooltip("When the scene-origin lock is enabled, keep the drone at the position saved in the Unity scene instead of moving it to the generated JSON waypoint.")]
+    [SerializeField] bool keepManuallyPlacedDronePosition = true;
+
+    [Tooltip("When the scene-origin lock is enabled, do not create generated waypoint paths or river line renderers from GPS data.")]
+    [SerializeField] bool skipGeneratedGpsObjectsInManualLevel = true;
+
     [SerializeField] double mapOriginLongitude;
     [SerializeField] double mapOriginLatitude;
     [SerializeField] double mapOriginAltitude;
@@ -30,31 +40,110 @@ public class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] double mapExtentSizeMeters = 1000f;
     [Header("ArcGIS")]
     [SerializeField] ArcGISConverter arcGISConverter;
+
+    [Header("Loading Screen")]
+    [Tooltip("Full-screen loading UI shown while Python, JSON and ArcGIS initialize.")]
+    [SerializeField] LoadingScreenUI loadingScreen;
+    [Min(0f)]
+    [SerializeField] float minimumLoadingScreenSeconds = 1.25f;
+
+    float loadingScreenShownAt;
     [Header("Fallback")]
     [SerializeField] bool allowLocalGpsFallback = true;
     [Header("Generation Mode")]
     [SerializeField] bool useArcGISTerrainOnly = true;
     [Header("Building Spawn")]
+    [Tooltip("Enable this to generate building prefabs from OSM footprints. Disable it in levels that use manually placed building assets.")]
+    [SerializeField] bool spawnOsmBuildings = true;
     [SerializeField] float buildingSpawnRadius = 500f;
     [SerializeField] bool showSpawnRadius = true;
     [SerializeField] bool hideOsmBuildingLayer = true;
     [SerializeField] bool logLayerVisibilityChanges = true;
     [SerializeField] float buildingYawCorrectionDegrees = 0f;
+
+    public enum BuildingGenerationMode
+    {
+        CompletePrefab,
+        ModularFootprint,
+        Hybrid
+    }
+
+    [Header("OSM Building Generation")]
+    [Tooltip("Complete Prefab keeps the old stretched-house system. Modular Footprint builds every house from wall components. Hybrid uses components for irregular footprints and complete prefabs for simple rectangles.")]
+    [SerializeField] BuildingGenerationMode buildingGenerationMode =
+        BuildingGenerationMode.ModularFootprint;
+
+    [Tooltip("Generator that owns the wall, window, door and roof component settings. Add ModularHouseGenerator to this same GameObject and assign it here. If empty at runtime, a cube-based fallback generator is added automatically.")]
+    [SerializeField] ModularHouseGenerator modularHouseGenerator;
+
+    [Tooltip("In Hybrid mode, footprints using less than this fraction of their fitted rectangle are treated as irregular.")]
+    [Range(0.50f, 1f)]
+    [SerializeField] float modularFootprintFillThreshold = 0.92f;
+
+    [Tooltip("Keep Building Replacement Rules as complete special prefabs even when Modular Footprint mode is selected.")]
+    [SerializeField] bool replacementRulesForceCompletePrefabs = true;
+
+    [Tooltip("Optional ArcGIS root-heading correction for modular buildings. Polygon points are counter-rotated so the footprint still remains aligned.")]
+    [SerializeField] float modularBuildingYawCorrectionDegrees = 0f;
+
     [System.Serializable]
     public class BuildingOrientationRule
     {
+        [Header("Rule Match")]
+        [Tooltip("Assign the exact prefab this rule controls. This is the recommended matching method.")]
         public GameObject prefab;
+        [Tooltip("Optional fallback match when Prefab is empty. The prefab name must contain this text.")]
         public string buildingNameContains;
-        public float rootYawCorrectionDegrees;
-        public float modelYawCorrectionDegrees;
-        public Vector3 modelLocalRotationEuler;
+
+        [Header("1. Asset Yaw Rotation")]
+        [Tooltip("Only the Y value is used. X and Z are always forced to 0 so the building stays upright.")]
+        public Vector3 modelLocalRotationEuler = new Vector3(0f, 0f, 0f);
+
+        [Header("2. OSM Map Rotation")]
+        [Tooltip("Fine adjustment added to the OSM geographic heading. Use this only when the whole asset is consistently rotated on the map.")]
+        public float rootYawCorrectionDegrees = 0f;
+        [Tooltip("Manual top-view rotation applied after the OSM heading. Normally use 0, 90, -90, or 180.")]
+        public float footprintYawDegrees = 0f;
+        [Tooltip("When enabled, the fitter may also test Footprint Yaw + 90 degrees and choose the less distorted result.")]
+        public bool autoTryAdditionalQuarterTurn = false;
+
+        [Header("3. OSM Footprint Size")]
+        [Tooltip("Fit this prefab to the OSM width and length. Disable this to keep the prefab's own size.")]
+        public bool fitToOsmFootprint = true;
+        [Min(0.01f)]
+        [Tooltip("Multiplies the OSM width before fitting. Use values such as 0.9 or 1.1 for asset-specific correction.")]
+        public float osmWidthMultiplier = 1f;
+        [Min(0.01f)]
+        [Tooltip("Multiplies the OSM length before fitting. Use values such as 0.9 or 1.1 for asset-specific correction.")]
+        public float osmLengthMultiplier = 1f;
+        [Tooltip("Optional extra width/length in metres added after the multipliers. X = width, Y = length.")]
+        public Vector2 osmSizeOffsetMeters = Vector2.zero;
+        [Tooltip("Additional local scale applied to the model before OSM fitting. Y controls the asset height only.")]
         public Vector3 modelLocalScaleMultiplier = Vector3.one;
-        public bool lockFootprintOrientation = false;
+
+        [Header("4. Footprint Centre")]
+        [Tooltip("Move the measured prefab footprint centre onto the OSM rectangle centre.")]
+        public bool centerModelOnFootprint = true;
+        [Tooltip("Optional final local offset after automatic centring. X/Z move the asset across the footprint; Y changes its height offset.")]
+        public Vector3 modelLocalPositionOffset = Vector3.zero;
+
+        [Header("5. Bounds Measurement")]
+        [Tooltip("Optional child object used only for footprint measurement. Leave empty to use the global FootprintBounds name.")]
+        public string footprintBoundsChildName = "";
     }
     [SerializeField] BuildingOrientationRule[] buildingOrientationRules;
+
+    [Header("Building Model Yaw Correction")]
+    [Tooltip("Only the Y value is used. X and Z are always forced to 0.")]
+    [SerializeField] Vector3 globalBuildingModelAxisCorrectionEuler = Vector3.zero;
+    [Tooltip("Optional extra Y-axis correction used only when no per-prefab rule matches. X and Z are ignored.")]
     [SerializeField] Vector3 defaultBuildingModelLocalRotationEuler = Vector3.zero;
+
     [SerializeField] bool useExactOsmFootprintPlacement = true;
     [SerializeField] bool fitBuildingModelToFootprint = true;
+    [SerializeField] float minimumFootprintDimension = 0.05f;
+    [SerializeField] bool preferDedicatedFootprintBounds = true;
+    [SerializeField] string defaultFootprintBoundsChildName = "FootprintBounds";
     [SerializeField] bool preservePrefabMaterialColors = true;
     [SerializeField] bool useRandomBuildingPalette = true;
     [SerializeField]
@@ -96,6 +185,18 @@ public class SceneLoaderArcgis : MonoBehaviour
     [Header("Building Replacements")]
     [SerializeField] BuildingReplacementRule[] buildingReplacements;
 
+    struct GeoCoordinate
+    {
+        public double latitude;
+        public double longitude;
+
+        public GeoCoordinate(double latitude, double longitude)
+        {
+            this.latitude = latitude;
+            this.longitude = longitude;
+        }
+    }
+
     Terrain terrain;
     bool fallbackOriginSet;
     double fallbackOriginLat;
@@ -106,6 +207,7 @@ public class SceneLoaderArcgis : MonoBehaviour
     void Awake()
     {
         TryResolveArcGISConverter();
+        ResolveModularHouseGenerator();
         ApplyConfiguredMapOrigin();
 
         arcGISMap = FindFirstObjectByType<ArcGISMapComponent>();
@@ -150,10 +252,49 @@ public class SceneLoaderArcgis : MonoBehaviour
     }
     void ApplyConfiguredMapOrigin()
     {
-        ArcGISMapComponent mapComponent = FindFirstObjectByType<ArcGISMapComponent>(FindObjectsInactive.Include);
+        ArcGISMapComponent mapComponent =
+            FindFirstObjectByType<ArcGISMapComponent>(
+                FindObjectsInactive.Include
+            );
+
         if (mapComponent == null)
         {
-            Debug.LogWarning("⚠️ SceneLoaderArcgis could not find ArcGISMapComponent to override origin.");
+            Debug.LogWarning(
+                "⚠️ SceneLoaderArcgis could not find ArcGISMapComponent."
+            );
+            return;
+        }
+
+        if (lockSceneMapOriginForManualBuildings)
+        {
+            if (mapComponent.OriginPosition != null)
+            {
+                GameManager.SetHomeLocation(
+                    mapComponent.OriginPosition.Y,
+                    mapComponent.OriginPosition.X,
+                    mapComponent.OriginPosition.Z
+                );
+
+                ApplyConfiguredMapExtent(
+                    mapComponent,
+                    mapComponent.OriginPosition
+                );
+
+                Debug.Log(
+                    $"🔒 Manual-building map locked to scene origin: " +
+                    $"{mapComponent.OriginPosition.Y}, " +
+                    $"{mapComponent.OriginPosition.X}, " +
+                    $"{mapComponent.OriginPosition.Z}"
+                );
+            }
+            else
+            {
+                Debug.LogWarning(
+                    "⚠️ Manual-building origin lock is enabled, " +
+                    "but the ArcGIS map has no saved Origin Position."
+                );
+            }
+
             return;
         }
 
@@ -167,8 +308,18 @@ public class SceneLoaderArcgis : MonoBehaviour
                     GameManager.homeAlt,
                     ArcGISSpatialReference.WGS84()
                 );
-                ApplyConfiguredMapExtent(mapComponent, mapComponent.OriginPosition);
-                Debug.Log($"🧭 SceneLoaderArcgis kept selected home location: {GameManager.homeLat}, {GameManager.homeLon}, {GameManager.homeAlt}");
+
+                ApplyConfiguredMapExtent(
+                    mapComponent,
+                    mapComponent.OriginPosition
+                );
+
+                Debug.Log(
+                    $"🧭 SceneLoaderArcgis kept selected home location: " +
+                    $"{GameManager.homeLat}, " +
+                    $"{GameManager.homeLon}, " +
+                    $"{GameManager.homeAlt}"
+                );
             }
             else if (mapComponent.OriginPosition != null)
             {
@@ -177,8 +328,15 @@ public class SceneLoaderArcgis : MonoBehaviour
                     mapComponent.OriginPosition.X,
                     mapComponent.OriginPosition.Z
                 );
-                ApplyConfiguredMapExtent(mapComponent, mapComponent.OriginPosition);
-                Debug.Log("🧭 SceneLoaderArcgis initialized home from scene map origin.");
+
+                ApplyConfiguredMapExtent(
+                    mapComponent,
+                    mapComponent.OriginPosition
+                );
+
+                Debug.Log(
+                    "🧭 SceneLoaderArcgis initialized home from scene map origin."
+                );
             }
 
             return;
@@ -190,10 +348,24 @@ public class SceneLoaderArcgis : MonoBehaviour
             mapOriginAltitude,
             ArcGISSpatialReference.WGS84()
         );
-        ApplyConfiguredMapExtent(mapComponent, mapComponent.OriginPosition);
-        GameManager.SetHomeLocation(mapOriginLatitude, mapOriginLongitude, mapOriginAltitude);
 
-        Debug.Log($"🧭 SceneLoaderArcgis applied map origin: {mapOriginLatitude}, {mapOriginLongitude}, {mapOriginAltitude}");
+        ApplyConfiguredMapExtent(
+            mapComponent,
+            mapComponent.OriginPosition
+        );
+
+        GameManager.SetHomeLocation(
+            mapOriginLatitude,
+            mapOriginLongitude,
+            mapOriginAltitude
+        );
+
+        Debug.Log(
+            $"🧭 SceneLoaderArcgis applied map origin: " +
+            $"{mapOriginLatitude}, " +
+            $"{mapOriginLongitude}, " +
+            $"{mapOriginAltitude}"
+        );
     }
 
     void ApplyConfiguredMapExtent(ArcGISMapComponent mapComponent, ArcGISPoint extentCenter)
@@ -264,6 +436,21 @@ public class SceneLoaderArcgis : MonoBehaviour
     {
         Debug.Log("🏘 Visible-only village test mode enabled");
 
+        if (loadingScreen == null)
+        {
+            loadingScreen = FindFirstObjectByType<LoadingScreenUI>(
+                FindObjectsInactive.Include
+            );
+        }
+
+        loadingScreenShownAt = Time.unscaledTime;
+
+        if (loadingScreen != null)
+        {
+            loadingScreen.Show("Preparing Christmas delivery mission...");
+            loadingScreen.SetProgress(0.02f);
+        }
+
         string projectRoot = Application.dataPath + "/../";
         string backendPath = ResolveBackendPath(projectRoot);
 
@@ -272,7 +459,18 @@ public class SceneLoaderArcgis : MonoBehaviour
 
         if (!File.Exists(scriptPath))
         {
-            Debug.LogError("❌ Python script NOT FOUND at: " + scriptPath);
+            string errorMessage =
+                "Python level generator was not found. Check the backend path.";
+
+            Debug.LogError(
+                "❌ Python script NOT FOUND at: " + scriptPath
+            );
+
+            if (loadingScreen != null)
+            {
+                loadingScreen.ShowError(errorMessage);
+            }
+
             return;
         }
 
@@ -283,7 +481,6 @@ public class SceneLoaderArcgis : MonoBehaviour
         }
 
         SetupDroneReference();
-
         StartCoroutine(InitializeEverything());
     }
 
@@ -307,6 +504,14 @@ public class SceneLoaderArcgis : MonoBehaviour
     }
     IEnumerator InitializeEverything()
     {
+        if (loadingScreen != null)
+        {
+            loadingScreen.SetProgress(
+                0.08f,
+                "Starting terrain and map generator..."
+            );
+        }
+
         RunPython();
 
         Debug.Log("⏳ Waiting for JSON + ArcGIS (production-safe)...");
@@ -322,7 +527,9 @@ public class SceneLoaderArcgis : MonoBehaviour
             timer += 0.5f;
 
             if (arcGISConverter == null)
+            {
                 TryResolveArcGISConverter();
+            }
 
             if (!jsonReady && File.Exists(outputPath))
             {
@@ -339,29 +546,144 @@ public class SceneLoaderArcgis : MonoBehaviour
                 }
                 catch (System.Exception e)
                 {
-                    Debug.LogWarning("⚠️ JSON read error: " + e.Message);
+                    Debug.LogWarning(
+                        "⚠️ JSON read error: " + e.Message
+                    );
                 }
             }
 
-            if (!arcgisReady && arcGISConverter != null && arcGISConverter.IsReady())
+            if (!arcgisReady &&
+                arcGISConverter != null &&
+                arcGISConverter.IsReady())
             {
                 arcgisReady = true;
                 Debug.Log("✅ ArcGIS READY");
             }
 
-            if (jsonReady && (arcgisReady || CanUseFallbackProjection()))
+            bool projectionReady =
+                arcgisReady ||
+                CanUseFallbackProjection();
+
+            if (loadingScreen != null)
+            {
+                float waitingProgress =
+                    0.10f +
+                    (jsonReady ? 0.28f : 0f) +
+                    (projectionReady ? 0.28f : 0f) +
+                    Mathf.Clamp01(timer / timeout) * 0.10f;
+
+                string loadingMessage;
+
+                if (!jsonReady && !projectionReady)
+                {
+                    loadingMessage =
+                        "Loading map data and ArcGIS terrain...";
+                }
+                else if (!jsonReady)
+                {
+                    loadingMessage =
+                        "ArcGIS ready. Waiting for mission data...";
+                }
+                else if (!projectionReady)
+                {
+                    loadingMessage =
+                        "Mission data ready. Loading ArcGIS terrain...";
+                }
+                else
+                {
+                    loadingMessage =
+                        "Map data ready. Preparing the level...";
+                }
+
+                loadingScreen.SetProgress(
+                    Mathf.Min(waitingProgress, 0.74f),
+                    loadingMessage
+                );
+            }
+
+            if (jsonReady && projectionReady)
             {
                 Debug.Log("🚀 ALL READY → Stabilizing...");
-                yield return new WaitForSeconds(2f);
 
-                LoadAndGenerateSafe();
+                if (loadingScreen != null)
+                {
+                    loadingScreen.SetProgress(
+                        0.76f,
+                        "Stabilizing ArcGIS map..."
+                    );
+                }
+
+                yield return new WaitForSecondsRealtime(1f);
+
+                if (loadingScreen != null)
+                {
+                    loadingScreen.SetProgress(
+                        0.84f,
+                        "Placing drone and mission objects..."
+                    );
+                }
+
+                // Let Unity render the loading-screen update before
+                // running the synchronous generation work.
+                yield return null;
+
+                bool generationSucceeded = LoadAndGenerateSafe();
+
+                if (!generationSucceeded)
+                {
+                    if (loadingScreen != null)
+                    {
+                        loadingScreen.ShowError(
+                            "Level generation failed. Check the Console."
+                        );
+                    }
+
+                    yield break;
+                }
+
+                if (loadingScreen != null)
+                {
+                    loadingScreen.SetProgress(
+                        1f,
+                        "Mission ready!"
+                    );
+
+                    float visibleTime =
+                        Time.unscaledTime - loadingScreenShownAt;
+
+                    float remainingTime =
+                        Mathf.Max(
+                            0f,
+                            minimumLoadingScreenSeconds - visibleTime
+                        );
+
+                    if (remainingTime > 0f)
+                    {
+                        yield return new WaitForSecondsRealtime(
+                            remainingTime
+                        );
+                    }
+
+                    yield return new WaitForSecondsRealtime(0.25f);
+                    loadingScreen.Hide();
+                }
+
                 yield break;
             }
 
-            yield return new WaitForSeconds(0.5f);
+            yield return new WaitForSecondsRealtime(0.5f);
         }
 
-        Debug.LogError("❌ Initialization timeout → aborting generation");
+        Debug.LogError(
+            "❌ Initialization timeout → aborting generation"
+        );
+
+        if (loadingScreen != null)
+        {
+            loadingScreen.ShowError(
+                "Loading timed out. Check ArcGIS, Python and the Console."
+            );
+        }
     }
 
     void TryResolveArcGISConverter()
@@ -429,7 +751,7 @@ public class SceneLoaderArcgis : MonoBehaviour
         catch { }
     }
 
-    void LoadAndGenerateSafe()
+    bool LoadAndGenerateSafe()
     {
         string json = File.ReadAllText(outputPath);
         Result result = JsonUtility.FromJson<Result>(json);
@@ -437,11 +759,14 @@ public class SceneLoaderArcgis : MonoBehaviour
         if (result == null)
         {
             Debug.LogError("❌ Failed to parse JSON → abort");
-            return;
+            return false;
         }
 
         Debug.Log("🌍 Scene type: " + result.scene);
         SyncMapOriginToResult(result);
+
+        bool isManualBuildingLevel =
+            lockSceneMapOriginForManualBuildings;
 
         if (!useArcGISTerrainOnly)
         {
@@ -450,29 +775,69 @@ public class SceneLoaderArcgis : MonoBehaviour
             if (terrain == null)
             {
                 Debug.LogError("❌ Terrain failed → abort");
-                return;
+                return false;
             }
 
             CarveRiversIntoTerrainSafe(result);
 
-            if (result.features != null && result.features.water_present)
+            if (result.features != null &&
+                result.features.water_present)
+            {
                 GenerateWater();
+            }
         }
         else
         {
-            PlaceDroneOnArcGIS(result);
+            if (isManualBuildingLevel &&
+                keepManuallyPlacedDronePosition)
+            {
+                Debug.Log(
+                    "🔒 Manual level: keeping the drone at its " +
+                    "scene position. JSON GPS drone placement skipped."
+                );
+            }
+            else
+            {
+                PlaceDroneOnArcGIS(result);
+            }
         }
 
         GenerateSceneSafe(result);
-        DrawPathSafe(result);
-        DrawRiversSafe(result);
+
+        if (isManualBuildingLevel &&
+            skipGeneratedGpsObjectsInManualLevel)
+        {
+            Debug.Log(
+                "🔒 Manual level: generated GPS path and river " +
+                "line objects skipped."
+            );
+        }
+        else
+        {
+            DrawPathSafe(result);
+            DrawRiversSafe(result);
+        }
 
         Debug.Log("✅ Scene generation COMPLETE (safe)");
+        return true;
     }
 
     void SyncMapOriginToResult(Result result)
     {
-        if (overrideMapOrigin || arcGISMap == null || result == null || result.waypoints == null || result.waypoints.Length == 0)
+        if (lockSceneMapOriginForManualBuildings)
+        {
+            Debug.Log(
+                "🔒 JSON map-origin synchronization skipped " +
+                "for this manual-building level."
+            );
+            return;
+        }
+
+        if (overrideMapOrigin ||
+            arcGISMap == null ||
+            result == null ||
+            result.waypoints == null ||
+            result.waypoints.Length == 0)
         {
             return;
         }
@@ -482,9 +847,19 @@ public class SceneLoaderArcgis : MonoBehaviour
 
         if (!shouldReplaceHome)
         {
-            double latDelta = System.Math.Abs(GameManager.homeLat - originWaypoint.lat);
-            double lonDelta = System.Math.Abs(GameManager.homeLon - originWaypoint.lon);
-            shouldReplaceHome = latDelta > 0.25 || lonDelta > 0.25;
+            double latDelta =
+                System.Math.Abs(
+                    GameManager.homeLat - originWaypoint.lat
+                );
+
+            double lonDelta =
+                System.Math.Abs(
+                    GameManager.homeLon - originWaypoint.lon
+                );
+
+            shouldReplaceHome =
+                latDelta > 0.25 ||
+                lonDelta > 0.25;
         }
 
         if (!shouldReplaceHome)
@@ -492,17 +867,30 @@ public class SceneLoaderArcgis : MonoBehaviour
             return;
         }
 
-        GameManager.SetHomeLocation(originWaypoint.lat, originWaypoint.lon, originWaypoint.alt, 0);
+        GameManager.SetHomeLocation(
+            originWaypoint.lat,
+            originWaypoint.lon,
+            originWaypoint.alt,
+            0
+        );
+
         arcGISMap.OriginPosition = new ArcGISPoint(
             originWaypoint.lon,
             originWaypoint.lat,
             originWaypoint.alt,
             ArcGISSpatialReference.WGS84()
         );
-        ApplyConfiguredMapExtent(arcGISMap, arcGISMap.OriginPosition);
+
+        ApplyConfiguredMapExtent(
+            arcGISMap,
+            arcGISMap.OriginPosition
+        );
 
         Debug.Log(
-            $"🧭 SceneLoaderArcgis synced map origin to JSON waypoint: {originWaypoint.lat}, {originWaypoint.lon}, {originWaypoint.alt}"
+            $"🧭 SceneLoaderArcgis synced map origin to JSON waypoint: " +
+            $"{originWaypoint.lat}, " +
+            $"{originWaypoint.lon}, " +
+            $"{originWaypoint.alt}"
         );
     }
     // =========================
@@ -717,6 +1105,12 @@ public class SceneLoaderArcgis : MonoBehaviour
 
     void SpawnVillageBuildings(Result result)
     {
+        if (!spawnOsmBuildings)
+        {
+            Debug.Log("🏠 OSM building prefab spawning is disabled for this level. Manually placed buildings will remain unchanged.");
+            return;
+        }
+
         Debug.Log("=== SpawnVillageBuildings CALLED ===");
 
         if (result == null)
@@ -732,6 +1126,7 @@ public class SceneLoaderArcgis : MonoBehaviour
         }
 
         Debug.Log($"Building count = {result.buildings.Length}");
+
         if (spawnVisibleVillageClusterOnly)
         {
             Debug.Log("🏙 Visible-only village mode enabled. Spawning a small prefab cluster near the drone.");
@@ -739,78 +1134,69 @@ public class SceneLoaderArcgis : MonoBehaviour
             return;
         }
 
-        if (result.buildings == null || result.buildings.Length == 0 || arcGISConverter == null)
+        if (result.buildings.Length == 0)
         {
-            Debug.LogWarning("⚠️ Village spawn skipped or ArcGIS converter unavailable. Using visible fallback cluster.");
+            Debug.LogWarning("⚠️ Village spawn skipped because no OSM building footprints were returned. Using visible fallback cluster.");
             SpawnVisibleVillageCluster();
             return;
         }
 
         Debug.Log($"🏙 Spawning village buildings from {result.buildings.Length} OSM footprints");
         int spawned = 0;
+
         for (int i = 0; i < result.buildings.Length; i++)
         {
-
             var building = result.buildings[i];
             int pointCount = building != null && building.points != null ? building.points.Length : 0;
             Debug.Log($"Building {i} has {pointCount} points");
-            if (building == null || building.points == null || building.points.Length < 3)
-                continue;
 
-            float avgLat = 0;
-            float avgLon = 0;
+            if (building == null || building.points == null || building.points.Length < 3)
+            {
+                continue;
+            }
+
+            List<Vector3> footprintPoints = new List<Vector3>();
+            List<GeoCoordinate> geographicPoints = new List<GeoCoordinate>();
+
+            double latitudeSum = 0.0;
+            double longitudeSum = 0.0;
+            int geographicPointCount = 0;
+
             float minX = float.MaxValue;
             float maxX = float.MinValue;
             float minZ = float.MaxValue;
             float maxZ = float.MinValue;
-            int validPoints = 0;
+
             bool hasFirstPoint = false;
             bool hasPreviousPoint = false;
             Vector3 firstValidPoint = Vector3.zero;
             Vector3 previousValidPoint = Vector3.zero;
             Vector3 longestEdge = Vector3.forward;
             float longestEdgeSqr = 0f;
-            List<Vector3> footprintPoints = new List<Vector3>();
 
-            foreach (var p in building.points)
+            foreach (var point in building.points)
             {
-                avgLat += p.lat;
-                avgLon += p.lon;
-            }
-
-            avgLat /= building.points.Length;
-            avgLon /= building.points.Length;
-
-            if (!TryConvertGPS(avgLat, avgLon, 0, out Vector3 center))
-            {
-                Debug.LogWarning("⚠️ Skipping building (invalid GPS)");
-                continue;
-            }
-
-            Debug.Log(
-    $"Building {i} GPS = {avgLat}, {avgLon}"
-);
-
-            Debug.Log(
-                $"Building {i} Converted Position = {center}"
-            );
-            Debug.Log(
-                $"Building {i} Unity Pos = {center}"
-            );
-            foreach (var p in building.points)
-            {
-                if (!TryConvertGPS(p.lat, p.lon, 0, out Vector3 pt))
+                if (!TryConvertGPS(point.lat, point.lon, 0, out Vector3 unityPoint))
+                {
                     continue;
+                }
+
+                // Ignore the repeated closing OSM point. It otherwise biases average centers.
+                if (footprintPoints.Count > 0 &&
+                    HorizontalSqrDistance(footprintPoints[footprintPoints.Count - 1], unityPoint) < 0.000001f)
+                {
+                    continue;
+                }
 
                 if (!hasFirstPoint)
                 {
-                    firstValidPoint = pt;
+                    firstValidPoint = unityPoint;
                     hasFirstPoint = true;
                 }
 
                 if (hasPreviousPoint)
                 {
-                    Vector3 edge = pt - previousValidPoint;
+                    Vector3 edge = unityPoint - previousValidPoint;
                     float edgeSqr = edge.x * edge.x + edge.z * edge.z;
                     if (edgeSqr > longestEdgeSqr)
                     {
@@ -819,15 +1205,31 @@ public class SceneLoaderArcgis : MonoBehaviour
                     }
                 }
 
-                previousValidPoint = pt;
+                previousValidPoint = unityPoint;
                 hasPreviousPoint = true;
-                footprintPoints.Add(pt);
 
-                if (pt.x < minX) minX = pt.x;
-                if (pt.x > maxX) maxX = pt.x;
-                if (pt.z < minZ) minZ = pt.z;
-                if (pt.z > maxZ) maxZ = pt.z;
-                validPoints++;
+                footprintPoints.Add(unityPoint);
+                geographicPoints.Add(new GeoCoordinate(point.lat, point.lon));
+
+                latitudeSum += point.lat;
+                longitudeSum += point.lon;
+                geographicPointCount++;
+
+                minX = Mathf.Min(minX, unityPoint.x);
+                maxX = Mathf.Max(maxX, unityPoint.x);
+                minZ = Mathf.Min(minZ, unityPoint.z);
+                maxZ = Mathf.Max(maxZ, unityPoint.z);
+            }
+
+            if (footprintPoints.Count > 1 &&
+                HorizontalSqrDistance(footprintPoints[0], footprintPoints[footprintPoints.Count - 1]) < 0.000001f)
+            {
+                GeoCoordinate repeatedClosingPoint = geographicPoints[geographicPoints.Count - 1];
+                latitudeSum -= repeatedClosingPoint.latitude;
+                longitudeSum -= repeatedClosingPoint.longitude;
+                footprintPoints.RemoveAt(footprintPoints.Count - 1);
+                geographicPoints.RemoveAt(geographicPoints.Count - 1);
+                geographicPointCount--;
             }
 
             if (hasFirstPoint && hasPreviousPoint)
@@ -841,142 +1243,322 @@ public class SceneLoaderArcgis : MonoBehaviour
                 }
             }
 
-            if (validPoints < 3)
+            if (footprintPoints.Count < 3 || geographicPointCount < 3)
             {
-                Debug.LogWarning("⚠️ Skipping building (not enough valid corners)");
+                Debug.LogWarning($"⚠️ Skipping building {i}: not enough valid corners.");
                 continue;
             }
 
-            float angle = Mathf.Atan2(longestEdge.x, longestEdge.z) * Mathf.Rad2Deg;
-            Vector3 footprintCenter = Vector3.zero;
-            float footprintWidth = 0f;
-            float footprintDepth = 0f;
-            float footprintAngle = 0f;
-            if (useExactOsmFootprintPlacement && TryComputeFootprintFit(footprintPoints, out footprintCenter, out footprintWidth, out footprintDepth, out footprintAngle))
+            double averageLatitude = latitudeSum / geographicPointCount;
+            double averageLongitude = longitudeSum / geographicPointCount;
+            double placementLatitude = averageLatitude;
+            double placementLongitude = averageLongitude;
+
+            // Initialize every placement value before the optional exact-fit branch.
+            // This is required because C# short-circuit evaluation would otherwise leave
+            // the out variables unassigned when useExactOsmFootprintPlacement is false.
+            Vector3 center = Vector3.zero;
+            float width = 0f;
+            float depth = 0f;
+            float angle = 0f;
+
+            bool exactFitSucceeded = false;
+
+            if (useExactOsmFootprintPlacement)
             {
-                center = footprintCenter;
-                minX = footprintCenter.x - footprintWidth * 0.5f;
-                maxX = footprintCenter.x + footprintWidth * 0.5f;
-                minZ = footprintCenter.z - footprintDepth * 0.5f;
-                maxZ = footprintCenter.z + footprintDepth * 0.5f;
-                Debug.Log(
-                    $"🧭 Footprint fit | EdgeYaw={angle:F1} | PCAYaw={footprintAngle:F1} | W={footprintWidth:F1} | D={footprintDepth:F1}"
+                // IMPORTANT: Calculate the rectangle in geographic east/north metres.
+                // ArcGISRotation expects a geographic heading, so using GPSToUnity positions
+                // here can produce the wrong angle or size when the map root is transformed.
+                exactFitSucceeded = TryComputeGeographicFootprintFit(
+                    geographicPoints,
+                    out placementLatitude,
+                    out placementLongitude,
+                    out width,
+                    out depth,
+                    out angle
                 );
             }
 
-            if (terrain != null)
-                center.y = terrain.SampleHeight(center);
-            else
-                center.y += 1f;
-            if (droneTransform != null)
+            if (exactFitSucceeded)
             {
-                float dist = Vector3.Distance(
-                    new Vector3(droneTransform.position.x, 0, droneTransform.position.z),
-                    new Vector3(center.x, 0, center.z)
-                );
-
-                Debug.Log(
-                    $"Building {i} | Drone={droneTransform.position} | Building={center} | Distance={dist:F1}"
-                );
-
-                if (dist > buildingSpawnRadius)
+                // Unity position is used only for spawn-radius checks and debug output.
+                // The ArcGISLocationComponent below uses the geographic rectangle centre.
+                if (!TryConvertGPS(placementLatitude, placementLongitude, 0, out center))
                 {
-                    Debug.LogWarning(
-                        $"❌ Building {i} OUTSIDE RADIUS ({dist:F1}m)"
-                    );
+                    Debug.LogWarning($"⚠️ Skipping building {i}: exact geographic center could not be converted.");
                     continue;
                 }
+
+                Debug.Log(
+                    $"🧭 Exact OSM rectangle {i} | " +
+                    $"Center=({placementLatitude:F7}, {placementLongitude:F7}) | " +
+                    $"Heading={angle:F1}° | Width={width:F2}m | Length={depth:F2}m"
+                );
             }
-            float width = Mathf.Clamp(maxX - minX, 1f, 80f);
-            float depth = Mathf.Clamp(maxZ - minZ, 1f, 80f);
-            float area = width * depth;
-            if (!useExactOsmFootprintPlacement)
+            else
             {
+                if (!TryConvertGPS(averageLatitude, averageLongitude, 0, out center))
+                {
+                    Debug.LogWarning($"⚠️ Skipping building {i}: invalid average GPS center.");
+                    continue;
+                }
+
+                width = maxX - minX;
+                depth = maxZ - minZ;
                 angle = Mathf.Atan2(longestEdge.x, longestEdge.z) * Mathf.Rad2Deg;
             }
 
-            GameObject prefabToUse = GetBuildingPrefabForIndex(i, width, depth);
-            Transform arcgisRootTransform = GetArcGISRoot();
-            GameObject buildingRoot = new GameObject($"{prefabToUse.name}_ArcGISBuilding");
+            width = Mathf.Max(minimumFootprintDimension, width);
+            depth = Mathf.Max(minimumFootprintDimension, depth);
+            float area = width * depth;
 
-            if (arcgisRootTransform != null)
+            if (droneTransform != null)
             {
-                buildingRoot.transform.SetParent(arcgisRootTransform, false);
-            }
-            else
-            {
-                buildingRoot.transform.position = center;
+                float distance = Vector2.Distance(
+                    new Vector2(droneTransform.position.x, droneTransform.position.z),
+                    new Vector2(center.x, center.z)
+                );
+
+                Debug.Log(
+                    $"Building {i} | Drone={droneTransform.position} | " +
+                    $"BuildingCenter={center} | Distance={distance:F1}m"
+                );
+
+                if (distance > buildingSpawnRadius)
+                {
+                    Debug.LogWarning($"❌ Building {i} OUTSIDE RADIUS ({distance:F1}m)");
+                    continue;
+                }
             }
 
-            ArcGISLocationComponent locationComponent = buildingRoot.AddComponent<ArcGISLocationComponent>();
-            locationComponent.SurfacePlacementMode = ArcGISSurfacePlacementMode.OnTheGround;
+            bool hasReplacementPrefab =
+                HasBuildingReplacementPrefab(i);
+
+            bool useModularHouse = ShouldGenerateModularHouse(
+                geographicPoints,
+                width,
+                depth,
+                hasReplacementPrefab
+            );
+
+            GameObject prefabToUse = useModularHouse
+                ? null
+                : GetBuildingPrefabForIndex(i, width, depth);
+
+            if (!useModularHouse && prefabToUse == null)
+            {
+                Debug.LogWarning(
+                    $"⚠️ Skipping building {i}: no complete building prefab is assigned."
+                );
+                continue;
+            }
+
+            Transform mapRoot = GetArcGISRoot();
+            string generatedBuildingName = useModularHouse
+                ? $"ModularHouse_ArcGISBuilding_{i}"
+                : $"{prefabToUse.name}_ArcGISBuilding_{i}";
+
+            GameObject buildingRoot = new GameObject(
+                generatedBuildingName
+            );
+
+            if (mapRoot != null)
+            {
+                buildingRoot.transform.SetParent(mapRoot, false);
+            }
+
+            ArcGISLocationComponent locationComponent =
+                buildingRoot.AddComponent<ArcGISLocationComponent>();
+
+            locationComponent.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.OnTheGround;
             locationComponent.SurfacePlacementOffset = 0;
-            string buildingTypeName = prefabToUse != null ? prefabToUse.name : buildingRoot.name;
-            BuildingOrientationRule orientationRule = GetBuildingOrientationRule(prefabToUse, buildingTypeName);
-            float yawCorrectionDegrees = orientationRule != null
-                ? orientationRule.rootYawCorrectionDegrees
-                : buildingYawCorrectionDegrees;
-            Quaternion modelLocalRotation = GetBuildingModelLocalRotation(orientationRule);
-            Vector3 modelLocalScale = GetBuildingModelLocalScale(orientationRule, width, depth, area);
             locationComponent.Position = new ArcGISPoint(
-                avgLon,
-                avgLat,
+                placementLongitude,
+                placementLatitude,
                 0,
                 ArcGISSpatialReference.WGS84()
             );
-            locationComponent.Rotation = new ArcGISRotation(angle + yawCorrectionDegrees, 0, 0);
 
-            GameObject buildingModel = Instantiate(prefabToUse, buildingRoot.transform);
-
-
-            // House house = buildingRoot.GetComponent<House>();
-            // if (house == null)
-            //     house = buildingRoot.AddComponent<House>();
-
-            // house.model = buildingModel.transform;
-
-            EnsureRenderable(buildingModel);
-            ApplyBuildingPalette(buildingModel, prefabToUse, buildingRoot.name);
-            Debug.Log(
-                $"🏠 Spawned ArcGIS building {buildingRoot.name} | Type={buildingTypeName} | Geo=({avgLat}, {avgLon}) | World={center} | RootHeading={(angle + yawCorrectionDegrees):F1} | FootprintYaw={angle:F1} | YawCorrection={yawCorrectionDegrees:F1}"
-            );
-            Debug.Log(
-                $"🧭 Model rule | Type={buildingTypeName} | LocalRot={modelLocalRotation.eulerAngles} | LocalScale={modelLocalScale} | FootprintFit={fitBuildingModelToFootprint}"
-            );
-            buildingModel.transform.localPosition = Vector3.zero;
-            buildingModel.transform.localRotation = modelLocalRotation;
-            buildingModel.transform.localScale = modelLocalScale;
-
-            ApplyBuildingReplacementOverrides(buildingModel, prefabToUse);
-
-            if (fitBuildingModelToFootprint)
+            if (useModularHouse)
             {
-                FitBuildingModelToFootprint(buildingModel, buildingRoot.transform, width, depth, area, orientationRule);
+                ResolveModularHouseGenerator();
+
+                if (modularHouseGenerator == null)
+                {
+                    Debug.LogError(
+                        $"❌ Building {i} cannot be generated because " +
+                        "ModularHouseGenerator is missing."
+                    );
+                    Destroy(buildingRoot);
+                    continue;
+                }
+
+                float modularRootHeading = NormalizeHeadingDegrees(
+                    modularBuildingYawCorrectionDegrees
+                );
+
+                locationComponent.Rotation = new ArcGISRotation(
+                    modularRootHeading,
+                    0,
+                    0
+                );
+
+                List<Vector3> localFootprint =
+                    ConvertGeographicFootprintToLocalMeters(
+                        geographicPoints,
+                        placementLatitude,
+                        placementLongitude,
+                        modularRootHeading
+                    );
+
+                bool generated = modularHouseGenerator.GenerateHouse(
+                    buildingRoot.transform,
+                    localFootprint,
+                    i,
+                    out Transform deliveryTarget
+                );
+
+                if (!generated)
+                {
+                    Debug.LogWarning(
+                        $"⚠️ Modular generation failed for building {i}."
+                    );
+                    Destroy(buildingRoot);
+                    continue;
+                }
+
+                if (buildingRoot.GetComponent<House>() == null)
+                {
+                    buildingRoot.AddComponent<House>();
+                }
+
+                Debug.Log(
+                    $"🏗 Spawned modular OSM house {buildingRoot.name} | " +
+                    $"Geo=({placementLatitude:F7}, {placementLongitude:F7}) | " +
+                    $"Corners={localFootprint.Count} | " +
+                    $"Rectangle W×L={width:F2}×{depth:F2}m | " +
+                    $"DeliveryTarget={(deliveryTarget != null ? deliveryTarget.position.ToString() : "missing")}"
+                );
+
+                spawned++;
+                continue;
             }
 
+            string buildingTypeName = prefabToUse.name;
+            BuildingOrientationRule orientationRule =
+                GetBuildingOrientationRule(
+                    prefabToUse,
+                    buildingTypeName
+                );
+
+            float yawCorrectionDegrees = orientationRule != null
+                ? orientationRule.rootYawCorrectionDegrees
+                : buildingYawCorrectionDegrees;
+
+            float finalHeading = NormalizeHeadingDegrees(
+                angle + yawCorrectionDegrees
+            );
+
+            locationComponent.Rotation = new ArcGISRotation(
+                finalHeading,
+                0,
+                0
+            );
+
+            // Complete-prefab hierarchy retained as the fallback/special-building path:
+            // ArcGIS root             = geographic location + geographic heading
+            // FootprintScaler         = X/Z size only
+            // FootprintOrientation    = optional top-view quarter turn
+            // Building model          = per-prefab import-axis correction
+            GameObject footprintScalerObject =
+                new GameObject("FootprintScaler");
+            footprintScalerObject.transform.SetParent(
+                buildingRoot.transform,
+                false
+            );
+            footprintScalerObject.transform.localPosition = Vector3.zero;
+            footprintScalerObject.transform.localRotation = Quaternion.identity;
+            footprintScalerObject.transform.localScale = Vector3.one;
+
+            GameObject footprintOrientationObject =
+                new GameObject("FootprintOrientation");
+            footprintOrientationObject.transform.SetParent(
+                footprintScalerObject.transform,
+                false
+            );
+            footprintOrientationObject.transform.localPosition = Vector3.zero;
+            footprintOrientationObject.transform.localRotation = Quaternion.identity;
+            footprintOrientationObject.transform.localScale = Vector3.one;
+
+            GameObject buildingModel = Instantiate(
+                prefabToUse,
+                footprintOrientationObject.transform
+            );
+            buildingModel.name = prefabToUse.name;
+            buildingModel.transform.localPosition = Vector3.zero;
+            buildingModel.transform.localRotation =
+                GetBuildingModelLocalRotation(orientationRule);
+            buildingModel.transform.localScale =
+                GetBuildingModelLocalScale(
+                    orientationRule,
+                    width,
+                    depth,
+                    area
+                );
+
+            ApplyBuildingReplacementOverrides(
+                buildingModel,
+                prefabToUse,
+                i
+            );
+            EnsureRenderable(buildingModel);
+            ApplyBuildingPalette(
+                buildingModel,
+                prefabToUse,
+                buildingRoot.name
+            );
+
+            bool shouldFitThisPrefab =
+                fitBuildingModelToFootprint &&
+                (orientationRule == null ||
+                 orientationRule.fitToOsmFootprint);
+
+            if (shouldFitThisPrefab)
+            {
+                FitBuildingModelToFootprint(
+                    buildingModel,
+                    footprintOrientationObject.transform,
+                    footprintScalerObject.transform,
+                    buildingRoot.transform,
+                    width,
+                    depth,
+                    orientationRule
+                );
+            }
+
+            if (buildingRoot.GetComponent<House>() == null)
             {
                 buildingRoot.AddComponent<House>();
             }
-            Debug.Log("Drone = " + droneTransform.position);
-            Debug.Log("Building = " + center);
-            Debug.Log(
-                $"🏠 Model local transform | Pos={buildingModel.transform.localPosition} | Rot={buildingModel.transform.localRotation.eulerAngles} | Scale={buildingModel.transform.localScale}"
+
+            ConfigureBuildingCollider(
+                buildingRoot,
+                buildingModel
             );
-            BoxCollider box = buildingRoot.GetComponent<BoxCollider>();
+            EnsureDeliveryTargetMarker(
+                buildingRoot,
+                buildingModel
+            );
 
-            if (box == null)
-                box = buildingRoot.AddComponent<BoxCollider>();
-
-            Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>();
-
-            Bounds bounds = renderers[0].bounds;
-
-            foreach (Renderer r in renderers)
-                bounds.Encapsulate(r.bounds);
-
-            // Convert world bounds into local space
-            box.center = buildingRoot.transform.InverseTransformPoint(bounds.center);
-            box.size = bounds.size;
+            Debug.Log(
+                $"🏠 Spawned complete prefab {buildingRoot.name} | " +
+                $"Geo=({placementLatitude:F7}, {placementLongitude:F7}) | " +
+                $"OSM W×L={width:F2}×{depth:F2}m | " +
+                $"RootHeading={finalHeading:F1}° | " +
+                $"ModelRot={buildingModel.transform.localRotation.eulerAngles} | " +
+                $"Scaler={footprintScalerObject.transform.localScale}"
+            );
 
             spawned++;
         }
@@ -989,6 +1571,252 @@ public class SceneLoaderArcgis : MonoBehaviour
         }
 
         Debug.Log("🏙 Village buildings spawned: " + spawned);
+    }
+
+    void ResolveModularHouseGenerator()
+    {
+        if (modularHouseGenerator != null)
+        {
+            return;
+        }
+
+        modularHouseGenerator = GetComponent<ModularHouseGenerator>();
+
+        if (modularHouseGenerator == null &&
+            buildingGenerationMode != BuildingGenerationMode.CompletePrefab)
+        {
+            modularHouseGenerator =
+                gameObject.AddComponent<ModularHouseGenerator>();
+
+            Debug.Log(
+                "🏗 ModularHouseGenerator was added automatically with cube fallbacks. " +
+                "For custom components, add and configure ModularHouseGenerator in the Inspector before Play."
+            );
+        }
+    }
+
+    bool HasBuildingReplacementPrefab(int buildingIndex)
+    {
+        if (buildingReplacements == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < buildingReplacements.Length; i++)
+        {
+            BuildingReplacementRule rule = buildingReplacements[i];
+            if (rule != null &&
+                rule.buildingIndex == buildingIndex &&
+                rule.prefab != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool ShouldGenerateModularHouse(
+        List<GeoCoordinate> geographicPoints,
+        float fittedWidth,
+        float fittedDepth,
+        bool hasReplacementPrefab)
+    {
+        if (replacementRulesForceCompletePrefabs &&
+            hasReplacementPrefab)
+        {
+            return false;
+        }
+
+        if (buildingGenerationMode ==
+            BuildingGenerationMode.CompletePrefab)
+        {
+            return false;
+        }
+
+        if (buildingGenerationMode ==
+            BuildingGenerationMode.ModularFootprint)
+        {
+            return true;
+        }
+
+        if (geographicPoints == null ||
+            geographicPoints.Count != 4)
+        {
+            return true;
+        }
+
+        float rectangleArea = Mathf.Max(
+            0.001f,
+            fittedWidth * fittedDepth
+        );
+
+        float polygonArea = CalculateGeographicPolygonAreaMeters(
+            geographicPoints
+        );
+
+        float fillRatio = Mathf.Clamp01(
+            polygonArea / rectangleArea
+        );
+
+        return fillRatio < modularFootprintFillThreshold;
+    }
+
+    float CalculateGeographicPolygonAreaMeters(
+        List<GeoCoordinate> geographicPoints)
+    {
+        if (geographicPoints == null ||
+            geographicPoints.Count < 3)
+        {
+            return 0f;
+        }
+
+        double referenceLatitude = 0.0;
+        double referenceLongitude = 0.0;
+
+        for (int i = 0; i < geographicPoints.Count; i++)
+        {
+            referenceLatitude += geographicPoints[i].latitude;
+            referenceLongitude += geographicPoints[i].longitude;
+        }
+
+        referenceLatitude /= geographicPoints.Count;
+        referenceLongitude /= geographicPoints.Count;
+
+        const double metersPerDegreeLatitude = 111320.0;
+        double metersPerDegreeLongitude =
+            metersPerDegreeLatitude *
+            System.Math.Cos(
+                referenceLatitude *
+                System.Math.PI / 180.0
+            );
+
+        double twiceArea = 0.0;
+
+        for (int i = 0; i < geographicPoints.Count; i++)
+        {
+            GeoCoordinate current = geographicPoints[i];
+            GeoCoordinate next =
+                geographicPoints[(i + 1) % geographicPoints.Count];
+
+            double currentX =
+                (current.longitude - referenceLongitude) *
+                metersPerDegreeLongitude;
+            double currentZ =
+                (current.latitude - referenceLatitude) *
+                metersPerDegreeLatitude;
+            double nextX =
+                (next.longitude - referenceLongitude) *
+                metersPerDegreeLongitude;
+            double nextZ =
+                (next.latitude - referenceLatitude) *
+                metersPerDegreeLatitude;
+
+            twiceArea += currentX * nextZ - nextX * currentZ;
+        }
+
+        return (float)System.Math.Abs(twiceArea * 0.5);
+    }
+
+    List<Vector3> ConvertGeographicFootprintToLocalMeters(
+        List<GeoCoordinate> geographicPoints,
+        double centerLatitude,
+        double centerLongitude,
+        float rootHeadingDegrees)
+    {
+        List<Vector3> localPoints = new List<Vector3>();
+
+        if (geographicPoints == null)
+        {
+            return localPoints;
+        }
+
+        const double metersPerDegreeLatitude = 111320.0;
+        double metersPerDegreeLongitude =
+            metersPerDegreeLatitude *
+            System.Math.Cos(
+                centerLatitude *
+                System.Math.PI / 180.0
+            );
+
+        Quaternion removeRootHeading = Quaternion.Euler(
+            0f,
+            -rootHeadingDegrees,
+            0f
+        );
+
+        for (int i = 0; i < geographicPoints.Count; i++)
+        {
+            GeoCoordinate point = geographicPoints[i];
+
+            float eastMeters = (float)(
+                (point.longitude - centerLongitude) *
+                metersPerDegreeLongitude
+            );
+
+            float northMeters = (float)(
+                (point.latitude - centerLatitude) *
+                metersPerDegreeLatitude
+            );
+
+            Vector3 localPoint = removeRootHeading *
+                new Vector3(eastMeters, 0f, northMeters);
+
+            if (localPoints.Count == 0 ||
+                HorizontalSqrDistance(
+                    localPoints[localPoints.Count - 1],
+                    localPoint
+                ) > 0.000001f)
+            {
+                localPoints.Add(localPoint);
+            }
+        }
+
+        if (localPoints.Count > 1 &&
+            HorizontalSqrDistance(
+                localPoints[0],
+                localPoints[localPoints.Count - 1]
+            ) <= 0.000001f)
+        {
+            localPoints.RemoveAt(localPoints.Count - 1);
+        }
+
+        return localPoints;
+    }
+
+    void EnsureDeliveryTargetMarker(
+        GameObject buildingRoot,
+        GameObject buildingModel)
+    {
+        if (buildingRoot == null || buildingModel == null)
+        {
+            return;
+        }
+
+        if (FindChildRecursive(
+                buildingRoot.transform,
+                "DeliveryTarget") != null)
+        {
+            return;
+        }
+
+        if (!TryMeasureRendererBounds(
+                buildingModel,
+                buildingRoot.transform,
+                out Bounds visualBounds))
+        {
+            return;
+        }
+
+        GameObject marker = new GameObject("DeliveryTarget");
+        marker.transform.SetParent(buildingRoot.transform, false);
+        marker.transform.localPosition = new Vector3(
+            visualBounds.center.x,
+            visualBounds.max.y,
+            visualBounds.center.z
+        );
+        marker.transform.localRotation = Quaternion.identity;
+        marker.transform.localScale = Vector3.one;
     }
 
     void SpawnVisibleVillageCluster()
@@ -1354,84 +2182,283 @@ public class SceneLoaderArcgis : MonoBehaviour
         return null;
     }
 
-    bool TryComputeFootprintFit(List<Vector3> points, out Vector3 center, out float width, out float depth, out float angleDegrees)
+    float HorizontalSqrDistance(Vector3 a, Vector3 b)
+    {
+        float dx = a.x - b.x;
+        float dz = a.z - b.z;
+        return dx * dx + dz * dz;
+    }
+
+    List<Vector3> GetCleanFootprintPoints(List<Vector3> points)
+    {
+        List<Vector3> cleanPoints = new List<Vector3>();
+        if (points == null)
+        {
+            return cleanPoints;
+        }
+
+        for (int i = 0; i < points.Count; i++)
+        {
+            Vector3 point = points[i];
+            if (cleanPoints.Count == 0 ||
+                HorizontalSqrDistance(cleanPoints[cleanPoints.Count - 1], point) > 0.000001f)
+            {
+                cleanPoints.Add(point);
+            }
+        }
+
+        if (cleanPoints.Count > 1 &&
+            HorizontalSqrDistance(cleanPoints[0], cleanPoints[cleanPoints.Count - 1]) <= 0.000001f)
+        {
+            cleanPoints.RemoveAt(cleanPoints.Count - 1);
+        }
+
+        return cleanPoints;
+    }
+
+    // Finds the minimum-area oriented rectangle using the actual OSM polygon edges.
+    // Center, width, length and yaw always come from the same rectangle.
+    bool TryComputeFootprintFit(
+        List<Vector3> points,
+        out Vector3 center,
+        out float width,
+        out float depth,
+        out float angleDegrees)
     {
         center = Vector3.zero;
         width = 0f;
         depth = 0f;
         angleDegrees = 0f;
 
-        if (points == null || points.Count < 3)
+        List<Vector3> cleanPoints = GetCleanFootprintPoints(points);
+        if (cleanPoints.Count < 3)
         {
             return false;
         }
 
-        Vector3 centroid = Vector3.zero;
-        for (int i = 0; i < points.Count; i++)
+        float averageY = 0f;
+        for (int i = 0; i < cleanPoints.Count; i++)
         {
-            centroid += points[i];
+            averageY += cleanPoints[i].y;
         }
-        centroid /= points.Count;
+        averageY /= cleanPoints.Count;
 
-        float covXX = 0f;
-        float covZZ = 0f;
-        float covXZ = 0f;
+        bool foundRectangle = false;
+        float bestArea = float.MaxValue;
+        float bestDepth = 0f;
+        Vector3 bestAxisX = Vector3.right;
+        Vector3 bestAxisZ = Vector3.forward;
+        float bestMinX = 0f;
+        float bestMaxX = 0f;
+        float bestMinZ = 0f;
+        float bestMaxZ = 0f;
 
-        for (int i = 0; i < points.Count; i++)
+        for (int edgeIndex = 0; edgeIndex < cleanPoints.Count; edgeIndex++)
         {
-            float dx = points[i].x - centroid.x;
-            float dz = points[i].z - centroid.z;
-            covXX += dx * dx;
-            covZZ += dz * dz;
-            covXZ += dx * dz;
+            Vector3 current = cleanPoints[edgeIndex];
+            Vector3 next = cleanPoints[(edgeIndex + 1) % cleanPoints.Count];
+            Vector3 edge = next - current;
+            edge.y = 0f;
+
+            if (edge.sqrMagnitude <= 0.000001f)
+            {
+                continue;
+            }
+
+            // The tested polygon edge becomes the rectangle's local +Z direction.
+            Vector3 axisZ = edge.normalized;
+            Vector3 axisX = new Vector3(axisZ.z, 0f, -axisZ.x);
+
+            float candidateMinX = float.MaxValue;
+            float candidateMaxX = float.MinValue;
+            float candidateMinZ = float.MaxValue;
+            float candidateMaxZ = float.MinValue;
+
+            for (int pointIndex = 0; pointIndex < cleanPoints.Count; pointIndex++)
+            {
+                float projectedX = Vector3.Dot(cleanPoints[pointIndex], axisX);
+                float projectedZ = Vector3.Dot(cleanPoints[pointIndex], axisZ);
+
+                candidateMinX = Mathf.Min(candidateMinX, projectedX);
+                candidateMaxX = Mathf.Max(candidateMaxX, projectedX);
+                candidateMinZ = Mathf.Min(candidateMinZ, projectedZ);
+                candidateMaxZ = Mathf.Max(candidateMaxZ, projectedZ);
+            }
+
+            float candidateWidth = candidateMaxX - candidateMinX;
+            float candidateDepth = candidateMaxZ - candidateMinZ;
+            float candidateArea = candidateWidth * candidateDepth;
+
+            // When two orientations have the same area, prefer the one whose +Z
+            // direction is the longer rectangle side. This keeps width/length stable.
+            bool isBetter =
+                !foundRectangle ||
+                candidateArea < bestArea - 0.001f ||
+                (Mathf.Abs(candidateArea - bestArea) <= 0.001f && candidateDepth > bestDepth);
+
+            if (!isBetter)
+            {
+                continue;
+            }
+
+            foundRectangle = true;
+            bestArea = candidateArea;
+            bestDepth = candidateDepth;
+            bestAxisX = axisX;
+            bestAxisZ = axisZ;
+            bestMinX = candidateMinX;
+            bestMaxX = candidateMaxX;
+            bestMinZ = candidateMinZ;
+            bestMaxZ = candidateMaxZ;
         }
 
-        covXX /= points.Count;
-        covZZ /= points.Count;
-        covXZ /= points.Count;
-
-        float theta = 0.5f * Mathf.Atan2(2f * covXZ, covXX - covZZ);
-        Vector3 axisX = new Vector3(Mathf.Cos(theta), 0f, Mathf.Sin(theta));
-        Vector3 axisZ = new Vector3(-Mathf.Sin(theta), 0f, Mathf.Cos(theta));
-
-        float minX = float.MaxValue;
-        float maxX = float.MinValue;
-        float minZ = float.MaxValue;
-        float maxZ = float.MinValue;
-
-        for (int i = 0; i < points.Count; i++)
+        if (!foundRectangle)
         {
-            float projectedX = Vector3.Dot(points[i], axisX);
-            float projectedZ = Vector3.Dot(points[i], axisZ);
-
-            if (projectedX < minX) minX = projectedX;
-            if (projectedX > maxX) maxX = projectedX;
-            if (projectedZ < minZ) minZ = projectedZ;
-            if (projectedZ > maxZ) maxZ = projectedZ;
+            return false;
         }
 
-        width = Mathf.Max(0.01f, maxX - minX);
-        depth = Mathf.Max(0.01f, maxZ - minZ);
-        angleDegrees = theta * Mathf.Rad2Deg;
+        width = Mathf.Max(minimumFootprintDimension, bestMaxX - bestMinX);
+        depth = Mathf.Max(minimumFootprintDimension, bestMaxZ - bestMinZ);
 
-        float centerX = (minX + maxX) * 0.5f;
-        float centerZ = (minZ + maxZ) * 0.5f;
-        center = axisX * centerX + axisZ * centerZ;
+        float rectangleCenterX = (bestMinX + bestMaxX) * 0.5f;
+        float rectangleCenterZ = (bestMinZ + bestMaxZ) * 0.5f;
+        center = bestAxisX * rectangleCenterX + bestAxisZ * rectangleCenterZ;
+        center.y = averageY;
 
+        // Same heading convention used by Quaternion.Euler(0, yaw, 0):
+        // yaw 0 = +Z, yaw 90 = +X.
+        angleDegrees = Mathf.Atan2(bestAxisZ.x, bestAxisZ.z) * Mathf.Rad2Deg;
         return true;
+    }
+
+    bool TryComputeGeographicFootprintFit(
+        List<GeoCoordinate> geographicPoints,
+        out double centerLatitude,
+        out double centerLongitude,
+        out float widthMeters,
+        out float depthMeters,
+        out float headingDegrees)
+    {
+        centerLatitude = 0.0;
+        centerLongitude = 0.0;
+        widthMeters = 0f;
+        depthMeters = 0f;
+        headingDegrees = 0f;
+
+        if (geographicPoints == null || geographicPoints.Count < 3)
+        {
+            return false;
+        }
+
+        List<GeoCoordinate> cleanPoints = new List<GeoCoordinate>();
+        for (int i = 0; i < geographicPoints.Count; i++)
+        {
+            GeoCoordinate point = geographicPoints[i];
+            if (cleanPoints.Count == 0 ||
+                !AreGeographicPointsEqual(cleanPoints[cleanPoints.Count - 1], point))
+            {
+                cleanPoints.Add(point);
+            }
+        }
+
+        if (cleanPoints.Count > 1 &&
+            AreGeographicPointsEqual(cleanPoints[0], cleanPoints[cleanPoints.Count - 1]))
+        {
+            cleanPoints.RemoveAt(cleanPoints.Count - 1);
+        }
+
+        if (cleanPoints.Count < 3)
+        {
+            return false;
+        }
+
+        double referenceLatitude = 0.0;
+        double referenceLongitude = 0.0;
+        for (int i = 0; i < cleanPoints.Count; i++)
+        {
+            referenceLatitude += cleanPoints[i].latitude;
+            referenceLongitude += cleanPoints[i].longitude;
+        }
+        referenceLatitude /= cleanPoints.Count;
+        referenceLongitude /= cleanPoints.Count;
+
+        const double metersPerDegreeLatitude = 111320.0;
+        double metersPerDegreeLongitude =
+            metersPerDegreeLatitude *
+            System.Math.Cos(referenceLatitude * System.Math.PI / 180.0);
+
+        if (System.Math.Abs(metersPerDegreeLongitude) < 0.000001)
+        {
+            return false;
+        }
+
+        List<Vector3> localMeterPoints = new List<Vector3>();
+        for (int i = 0; i < cleanPoints.Count; i++)
+        {
+            float eastMeters = (float)(
+                (cleanPoints[i].longitude - referenceLongitude) *
+                metersPerDegreeLongitude
+            );
+            float northMeters = (float)(
+                (cleanPoints[i].latitude - referenceLatitude) *
+                metersPerDegreeLatitude
+            );
+
+            localMeterPoints.Add(new Vector3(eastMeters, 0f, northMeters));
+        }
+
+        if (!TryComputeFootprintFit(
+                localMeterPoints,
+                out Vector3 localCenter,
+                out widthMeters,
+                out depthMeters,
+                out headingDegrees))
+        {
+            return false;
+        }
+
+        centerLatitude = referenceLatitude + localCenter.z / metersPerDegreeLatitude;
+        centerLongitude = referenceLongitude + localCenter.x / metersPerDegreeLongitude;
+        headingDegrees = NormalizeHeadingDegrees(headingDegrees);
+        return true;
+    }
+
+    float NormalizeHeadingDegrees(float headingDegrees)
+    {
+        headingDegrees %= 360f;
+        if (headingDegrees < 0f)
+        {
+            headingDegrees += 360f;
+        }
+
+        return headingDegrees;
+    }
+
+    bool AreGeographicPointsEqual(GeoCoordinate a, GeoCoordinate b)
+    {
+        return
+            System.Math.Abs(a.latitude - b.latitude) <= 0.000000001 &&
+            System.Math.Abs(a.longitude - b.longitude) <= 0.000000001;
     }
 
     Quaternion GetBuildingModelLocalRotation(BuildingOrientationRule orientationRule)
     {
-        Vector3 rotationEuler = orientationRule != null
-            ? orientationRule.modelLocalRotationEuler
-            : defaultBuildingModelLocalRotationEuler;
+        // Buildings are allowed to rotate around the vertical Y axis only.
+        // The prefab itself must already stand upright in its prefab asset.
+        float yawDegrees;
+
         if (orientationRule != null)
         {
-            rotationEuler.y += orientationRule.modelYawCorrectionDegrees;
+            yawDegrees = orientationRule.modelLocalRotationEuler.y;
+        }
+        else
+        {
+            yawDegrees =
+                globalBuildingModelAxisCorrectionEuler.y +
+                defaultBuildingModelLocalRotationEuler.y;
         }
 
-        return Quaternion.Euler(rotationEuler);
+        return Quaternion.Euler(0f, yawDegrees, 0f);
     }
 
     Vector3 ComputeVillageScale(float width, float depth, float area)
@@ -1462,125 +2489,180 @@ public class SceneLoaderArcgis : MonoBehaviour
         return baseScale;
     }
 
-    void FitBuildingModelToFootprint(GameObject buildingModel, Transform footprintSpace, float width, float depth, float area, BuildingOrientationRule orientationRule)
+    void FitBuildingModelToFootprint(
+        GameObject buildingModel,
+        Transform footprintOrientation,
+        Transform footprintScaler,
+        Transform footprintSpace,
+        float width,
+        float depth,
+        BuildingOrientationRule orientationRule)
     {
-        if (buildingModel == null || footprintSpace == null)
+        if (buildingModel == null ||
+            footprintOrientation == null ||
+            footprintScaler == null ||
+            footprintSpace == null)
         {
             return;
         }
 
-        Quaternion preferredRotation = buildingModel.transform.localRotation;
-        bool lockRotationToPreferred = orientationRule != null && orientationRule.lockFootprintOrientation;
+        width = Mathf.Max(minimumFootprintDimension, width);
+        depth = Mathf.Max(minimumFootprintDimension, depth);
 
-        if (lockRotationToPreferred)
+        // Asset-specific size correction. This is useful when a prefab includes roof
+        // overhangs, stairs, balconies, or other geometry outside its wall footprint.
+        if (orientationRule != null)
         {
-            string ruleName = !string.IsNullOrWhiteSpace(orientationRule.buildingNameContains)
-                ? orientationRule.buildingNameContains
-                : (orientationRule.prefab != null ? orientationRule.prefab.name : "unnamed");
-            Debug.Log(
-                $"🧭 Footprint orientation locked for {ruleName} | LocalRot={preferredRotation.eulerAngles}"
+            width = Mathf.Max(
+                minimumFootprintDimension,
+                width * Mathf.Max(0.01f, orientationRule.osmWidthMultiplier) +
+                orientationRule.osmSizeOffsetMeters.x
+            );
+
+            depth = Mathf.Max(
+                minimumFootprintDimension,
+                depth * Mathf.Max(0.01f, orientationRule.osmLengthMultiplier) +
+                orientationRule.osmSizeOffsetMeters.y
             );
         }
-        else
+
+        footprintScaler.localPosition = Vector3.zero;
+        footprintScaler.localRotation = Quaternion.identity;
+        footprintScaler.localScale = Vector3.one;
+
+        footprintOrientation.localPosition = Vector3.zero;
+        footprintOrientation.localRotation = Quaternion.identity;
+        footprintOrientation.localScale = Vector3.one;
+
+        // Keep the model's local import correction untouched. Only this separate parent
+        // is allowed to rotate 90 degrees for width/length matching.
+        Quaternion fixedModelRotation = buildingModel.transform.localRotation;
+        Vector3 fixedModelScale = buildingModel.transform.localScale;
+        buildingModel.transform.localPosition = Vector3.zero;
+        buildingModel.transform.localRotation = fixedModelRotation;
+        buildingModel.transform.localScale = fixedModelScale;
+
+        float manualFootprintYaw = orientationRule != null
+            ? orientationRule.footprintYawDegrees
+            : 0f;
+
+        bool tryAdditionalQuarterTurn =
+            orientationRule == null || orientationRule.autoTryAdditionalQuarterTurn;
+
+        float[] candidateYawDegrees = tryAdditionalQuarterTurn
+            ? new[] { manualFootprintYaw, manualFootprintYaw + 90f }
+            : new[] { manualFootprintYaw };
+
+        float bestYaw = 0f;
+        float bestScore = float.MaxValue;
+
+        for (int i = 0; i < candidateYawDegrees.Length; i++)
         {
-            Quaternion bestBaseRotation = preferredRotation;
-            float bestBaseScore = float.MaxValue;
+            footprintOrientation.localPosition = Vector3.zero;
+            footprintOrientation.localRotation = Quaternion.Euler(0f, candidateYawDegrees[i], 0f);
+            buildingModel.transform.localPosition = Vector3.zero;
 
-            Quaternion[] candidateBaseRotations =
+            if (!TryMeasureFootprintBounds(
+                    buildingModel,
+                    footprintSpace,
+                    orientationRule,
+                    out Bounds candidateBounds))
             {
-                preferredRotation,
-                Quaternion.identity,
-                Quaternion.Euler(-90f, 0f, 0f),
-                Quaternion.Euler(90f, 0f, 0f),
-                Quaternion.Euler(0f, 0f, 90f),
-                Quaternion.Euler(0f, 0f, -90f),
-                Quaternion.Euler(180f, 0f, 0f),
-                Quaternion.Euler(0f, 0f, 180f)
-            };
-
-            for (int i = 0; i < candidateBaseRotations.Length; i++)
-            {
-                buildingModel.transform.localRotation = candidateBaseRotations[i];
-
-                if (!TryMeasureFootprintBounds(buildingModel, footprintSpace, out Bounds candidateBounds))
-                {
-                    continue;
-                }
-
-                float uprightness = (candidateBounds.size.x + candidateBounds.size.z) / Mathf.Max(0.001f, candidateBounds.size.y);
-
-                if (uprightness < bestBaseScore)
-                {
-                    bestBaseScore = uprightness;
-                    bestBaseRotation = candidateBaseRotations[i];
-                }
+                continue;
             }
 
-            buildingModel.transform.localRotation = bestBaseRotation;
-
-            Quaternion bestRotation = bestBaseRotation;
-            float bestRotationScore = float.MaxValue;
-            float bestYawOffset = 0f;
-
-            float[] candidateYawOffsets = { 0f, 90f, 180f, 270f };
-            for (int i = 0; i < candidateYawOffsets.Length; i++)
+            if (candidateBounds.size.x <= 0.001f || candidateBounds.size.z <= 0.001f)
             {
-                float yawOffset = candidateYawOffsets[i];
-                buildingModel.transform.localRotation = Quaternion.Euler(0f, yawOffset, 0f) * bestBaseRotation;
-
-                if (!TryMeasureFootprintBounds(buildingModel, footprintSpace, out Bounds candidateBounds))
-                {
-                    continue;
-                }
-
-                float footprintAspect = Mathf.Max(0.001f, width) / Mathf.Max(0.001f, depth);
-                float modelAspect = Mathf.Max(0.001f, candidateBounds.size.x) / Mathf.Max(0.001f, candidateBounds.size.z);
-                float sizeError = Mathf.Abs(candidateBounds.size.x - width) + Mathf.Abs(candidateBounds.size.z - depth);
-                float aspectError = Mathf.Abs(modelAspect - footprintAspect);
-                float score = sizeError + aspectError * 10f;
-
-                if (score < bestRotationScore)
-                {
-                    bestRotationScore = score;
-                    bestRotation = buildingModel.transform.localRotation;
-                    bestYawOffset = yawOffset;
-                }
+                continue;
             }
 
-            buildingModel.transform.localRotation = bestRotation;
+            float requiredScaleX = width / candidateBounds.size.x;
+            float requiredScaleZ = depth / candidateBounds.size.z;
 
-            if (bestBaseRotation != preferredRotation || bestYawOffset != 0f)
+            // Select the orientation needing the least shape distortion.
+            float ratio = Mathf.Max(0.0001f, requiredScaleX) /
+                          Mathf.Max(0.0001f, requiredScaleZ);
+            float score = Mathf.Abs(Mathf.Log(ratio));
+
+            if (score < bestScore)
             {
-                Debug.Log(
-                    $"🧭 Footprint orientation applied | Base={bestBaseRotation.eulerAngles} | Yaw={bestYawOffset:F0}°"
-                );
+                bestScore = score;
+                bestYaw = candidateYawDegrees[i];
             }
         }
 
-        Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>(true);
-        if (renderers == null || renderers.Length == 0)
+        footprintOrientation.localPosition = Vector3.zero;
+        footprintOrientation.localRotation = Quaternion.Euler(0f, bestYaw, 0f);
+        buildingModel.transform.localPosition = Vector3.zero;
+        buildingModel.transform.localRotation = fixedModelRotation;
+        buildingModel.transform.localScale = fixedModelScale;
+
+        if (!TryMeasureFootprintBounds(
+                buildingModel,
+                footprintSpace,
+                orientationRule,
+                out Bounds bounds))
         {
+            Debug.LogWarning($"⚠️ Could not measure footprint bounds for {buildingModel.name}.");
             return;
         }
 
-        if (!TryMeasureFootprintBounds(buildingModel, footprintSpace, out Bounds bounds))
+        bool centerModel = orientationRule == null || orientationRule.centerModelOnFootprint;
+        if (centerModel)
         {
-            return;
+            // FootprintOrientation.localPosition is expressed in FootprintScaler/root axes,
+            // so the root-space bounds centre can be removed directly.
+            footprintOrientation.localPosition = new Vector3(
+                -bounds.center.x,
+                0f,
+                -bounds.center.z
+            );
+
+            if (!TryMeasureFootprintBounds(
+                    buildingModel,
+                    footprintSpace,
+                    orientationRule,
+                    out bounds))
+            {
+                return;
+            }
+        }
+
+        if (orientationRule != null)
+        {
+            // This is intentionally applied after automatic centring so the user can
+            // fine-tune an asset with an unusual pivot directly from the Inspector.
+            buildingModel.transform.localPosition += orientationRule.modelLocalPositionOffset;
         }
 
         if (bounds.size.x <= 0.001f || bounds.size.z <= 0.001f)
         {
+            Debug.LogWarning($"⚠️ Invalid footprint size for {buildingModel.name}: {bounds.size}");
             return;
         }
 
-        Vector3 currentScale = buildingModel.transform.localScale;
-        float targetX = Mathf.Clamp(width / Mathf.Max(0.001f, bounds.size.x), 0.35f, 4f);
-        float targetZ = Mathf.Clamp(depth / Mathf.Max(0.001f, bounds.size.z), 0.35f, 4f);
+        float scaleX = width / bounds.size.x;
+        float scaleZ = depth / bounds.size.z;
 
-        buildingModel.transform.localScale = Vector3.Scale(currentScale, new Vector3(targetX, 1f, targetZ));
+        // Scale only map X/Z. Height remains unchanged because Y is always exactly 1.
+        footprintScaler.localScale = new Vector3(scaleX, 1f, scaleZ);
+
+        Debug.Log(
+            $"📐 Footprint fitted {buildingModel.name} | " +
+            $"Measured={bounds.size.x:F2}×{bounds.size.z:F2} | " +
+            $"Target={width:F2}×{depth:F2}m | " +
+            $"XZ Scale={scaleX:F3},{scaleZ:F3} | " +
+            $"FootprintYaw={bestYaw:F0}° | " +
+            $"ModelLocalEuler={buildingModel.transform.localRotation.eulerAngles} | " +
+            $"Rule={(orientationRule != null ? "per-prefab" : "global")}"
+        );
     }
 
-    bool TryMeasureFootprintBounds(GameObject buildingModel, Transform footprintSpace, out Bounds bounds)
+    bool TryMeasureFootprintBounds(
+        GameObject buildingModel,
+        Transform footprintSpace,
+        BuildingOrientationRule orientationRule,
+        out Bounds bounds)
     {
         bounds = new Bounds(Vector3.zero, Vector3.zero);
 
@@ -1588,6 +2670,58 @@ public class SceneLoaderArcgis : MonoBehaviour
         {
             return false;
         }
+
+        if (preferDedicatedFootprintBounds)
+        {
+            string markerName = orientationRule != null &&
+                                !string.IsNullOrWhiteSpace(orientationRule.footprintBoundsChildName)
+                ? orientationRule.footprintBoundsChildName.Trim()
+                : defaultFootprintBoundsChildName;
+
+            Transform marker = FindChildRecursive(buildingModel.transform, markerName);
+            if (marker != null &&
+                TryMeasureMarkerBounds(marker, footprintSpace, out bounds))
+            {
+                return true;
+            }
+        }
+
+        return TryMeasureRendererBounds(buildingModel, footprintSpace, out bounds);
+    }
+
+    bool TryMeasureMarkerBounds(Transform marker, Transform footprintSpace, out Bounds bounds)
+    {
+        bounds = new Bounds(Vector3.zero, Vector3.zero);
+        bool hasBounds = false;
+
+        BoxCollider boxCollider = marker.GetComponent<BoxCollider>();
+        if (boxCollider != null)
+        {
+            Vector3[] corners = GetBoxColliderWorldCorners(boxCollider);
+            EncapsulateWorldCorners(corners, footprintSpace, ref bounds, ref hasBounds);
+        }
+
+        Renderer[] markerRenderers = marker.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < markerRenderers.Length; i++)
+        {
+            if (markerRenderers[i] == null)
+            {
+                continue;
+            }
+
+            Vector3[] corners = GetRendererWorldCorners(markerRenderers[i]);
+            EncapsulateWorldCorners(corners, footprintSpace, ref bounds, ref hasBounds);
+        }
+
+        return hasBounds;
+    }
+
+    bool TryMeasureRendererBounds(
+        GameObject buildingModel,
+        Transform footprintSpace,
+        out Bounds bounds)
+    {
+        bounds = new Bounds(Vector3.zero, Vector3.zero);
 
         Renderer[] renderers = buildingModel.GetComponentsInChildren<Renderer>(true);
         if (renderers == null || renderers.Length == 0)
@@ -1605,22 +2739,108 @@ public class SceneLoaderArcgis : MonoBehaviour
             }
 
             Vector3[] worldCorners = GetRendererWorldCorners(renderer);
-            for (int c = 0; c < worldCorners.Length; c++)
-            {
-                Vector3 localCorner = footprintSpace.InverseTransformPoint(worldCorners[c]);
-                if (!hasBounds)
-                {
-                    bounds = new Bounds(localCorner, Vector3.zero);
-                    hasBounds = true;
-                }
-                else
-                {
-                    bounds.Encapsulate(localCorner);
-                }
-            }
+            EncapsulateWorldCorners(worldCorners, footprintSpace, ref bounds, ref hasBounds);
         }
 
         return hasBounds;
+    }
+
+    void EncapsulateWorldCorners(
+        Vector3[] worldCorners,
+        Transform footprintSpace,
+        ref Bounds bounds,
+        ref bool hasBounds)
+    {
+        if (worldCorners == null || footprintSpace == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < worldCorners.Length; i++)
+        {
+            Vector3 localCorner = footprintSpace.InverseTransformPoint(worldCorners[i]);
+            if (!hasBounds)
+            {
+                bounds = new Bounds(localCorner, Vector3.zero);
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(localCorner);
+            }
+        }
+    }
+
+    Transform FindChildRecursive(Transform root, string childName)
+    {
+        if (root == null || string.IsNullOrWhiteSpace(childName))
+        {
+            return null;
+        }
+
+        if (root.name.Equals(childName, System.StringComparison.OrdinalIgnoreCase))
+        {
+            return root;
+        }
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindChildRecursive(root.GetChild(i), childName);
+            if (found != null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    Vector3[] GetBoxColliderWorldCorners(BoxCollider boxCollider)
+    {
+        Vector3 center = boxCollider.center;
+        Vector3 extents = boxCollider.size * 0.5f;
+        Vector3[] localCorners =
+        {
+            center + new Vector3(-extents.x, -extents.y, -extents.z),
+            center + new Vector3(-extents.x, -extents.y,  extents.z),
+            center + new Vector3(-extents.x,  extents.y, -extents.z),
+            center + new Vector3(-extents.x,  extents.y,  extents.z),
+            center + new Vector3( extents.x, -extents.y, -extents.z),
+            center + new Vector3( extents.x, -extents.y,  extents.z),
+            center + new Vector3( extents.x,  extents.y, -extents.z),
+            center + new Vector3( extents.x,  extents.y,  extents.z)
+        };
+
+        Vector3[] worldCorners = new Vector3[localCorners.Length];
+        for (int i = 0; i < localCorners.Length; i++)
+        {
+            worldCorners[i] = boxCollider.transform.TransformPoint(localCorners[i]);
+        }
+
+        return worldCorners;
+    }
+
+    void ConfigureBuildingCollider(GameObject buildingRoot, GameObject buildingModel)
+    {
+        if (buildingRoot == null || buildingModel == null)
+        {
+            return;
+        }
+
+        if (!TryMeasureRendererBounds(buildingModel, buildingRoot.transform, out Bounds visualBounds))
+        {
+            return;
+        }
+
+        BoxCollider boxCollider = buildingRoot.GetComponent<BoxCollider>();
+        if (boxCollider == null)
+        {
+            boxCollider = buildingRoot.AddComponent<BoxCollider>();
+        }
+
+        // visualBounds is already measured in buildingRoot local space.
+        boxCollider.center = visualBounds.center;
+        boxCollider.size = visualBounds.size;
     }
 
     Vector3[] GetRendererWorldCorners(Renderer renderer)
@@ -1682,7 +2902,10 @@ public class SceneLoaderArcgis : MonoBehaviour
         return worldCorners;
     }
 
-    void ApplyBuildingReplacementOverrides(GameObject buildingModel, GameObject prefabToUse)
+    void ApplyBuildingReplacementOverrides(
+        GameObject buildingModel,
+        GameObject prefabToUse,
+        int buildingIndex)
     {
         if (buildingModel == null || buildingReplacements == null || prefabToUse == null)
         {
@@ -1691,12 +2914,19 @@ public class SceneLoaderArcgis : MonoBehaviour
 
         foreach (var rule in buildingReplacements)
         {
-            if (rule == null || rule.prefab != prefabToUse)
+            if (rule == null ||
+                rule.prefab != prefabToUse ||
+                rule.buildingIndex != buildingIndex)
             {
                 continue;
             }
 
             buildingModel.transform.localScale *= Mathf.Max(0.01f, rule.scaleMultiplier);
+
+            // Replacement adjustments also rotate around Y only.
+            buildingModel.transform.localRotation =
+                Quaternion.Euler(0f, rule.rotationEulerOffset.y, 0f) *
+                buildingModel.transform.localRotation;
             return;
         }
     }

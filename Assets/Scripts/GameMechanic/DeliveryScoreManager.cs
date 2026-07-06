@@ -8,11 +8,15 @@ using Esri.ArcGISMapsSDK.Components;
 public class DeliveryScoreManager : MonoBehaviour
 {
     public event Action<int> ScoreChanged;
+    public event Action<int> TargetsRemainingChanged;
+    public event Action LevelCompleted;
 
     [Header("References")]
     public Transform drone;
     public TextMeshProUGUI scoreText;
     public TextMeshProUGUI statusText;
+    [Tooltip("Optional separate canvas text for delivery messages. If empty, Status Text is used.")]
+    public TextMeshProUGUI deliveryStatusText;
 
     [Header("Level Target Setup")]
     [Tooltip("How many random spawned buildings become delivery targets in this level.")]
@@ -51,11 +55,74 @@ public class DeliveryScoreManager : MonoBehaviour
     public Color deliveryRingReadyColor = new Color(0.2f, 1f, 0.3f, 0.9f);
     public Color deliveryRingSearchColor = new Color(1f, 0.9f, 0.2f, 0.9f);
 
+    [Header("Target Beacon")]
+    [Tooltip("Optional prefab shown above every selected delivery house. A simple light pillar is created when this is empty.")]
+    public GameObject targetBeaconPrefab;
+    public Vector3 targetBeaconOffset = new Vector3(0f, 8f, 0f);
+    public Vector3 targetBeaconScale = new Vector3(1.5f, 8f, 1.5f);
+    public Color targetBeaconColor = new Color(1f, 0.15f, 0.1f, 0.65f);
+    public bool rotateTargetBeacons = true;
+    public float targetBeaconRotationSpeed = 45f;
+
     [Header("UI")]
     public string progressMessage = "Sending present...";
     public string completeMessage = "Present send complete!";
     public string level1CompleteMessage = "Level 1 Complete!";
     public float completeMessageDuration = 2f;
+
+
+    [Header("Present Drop Animation")]
+    [Tooltip("Add one or more present prefabs. One random prefab is selected for each delivery.")]
+    public GameObject[] presentPrefabs;
+
+    [Tooltip("Message shown while the present is travelling to the house.")]
+    public string droppingPresentMessage = "Dropping present...";
+
+    [Tooltip("Local offset from the drone where the present begins.")]
+    public Vector3 presentSpawnOffset = new Vector3(0f, -0.5f, 0f);
+
+    [Tooltip("Height above the target roof where the present finishes.")]
+    [Min(0f)] public float presentLandingHeight = 0.25f;
+
+    [Tooltip("Time taken for the present to travel from the drone to the roof.")]
+    [Min(0.05f)] public float presentDropDuration = 1.2f;
+
+    [Tooltip("Controls the travel speed over time. The default gives a smooth start and finish.")]
+    public AnimationCurve presentDropCurve =
+        AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+
+    [Tooltip("Extra upward curve during the drop. Set to 0 for a straight fall.")]
+    [Min(0f)] public float presentDropArcHeight = 0.8f;
+
+    [Tooltip("How quickly the present spins while falling.")]
+    public Vector3 presentSpinDegreesPerSecond =
+        new Vector3(180f, 240f, 120f);
+
+    [Tooltip("Small bounce after the present reaches the roof.")]
+    [Min(0f)] public float presentLandingBounceHeight = 0.25f;
+
+    [Tooltip("Duration of the landing bounce.")]
+    [Min(0f)] public float presentLandingBounceDuration = 0.2f;
+
+    [Tooltip("Keep the landed present attached to the delivered building.")]
+    public bool parentPresentToBuildingAfterLanding = true;
+
+    [Tooltip("Optional particle or sparkle prefab spawned when the present lands.")]
+    public GameObject presentLandingEffectPrefab;
+
+    [Tooltip("How long the present remains on the roof before disappearing. Set to 0 to keep it.")]
+    [Min(0f)] public float presentStayDuration = 2f;
+
+    [Tooltip("Scale multiplier applied to the selected present prefab.")]
+    [Min(0.01f)] public float presentScaleMultiplier = 1f;
+
+    [Tooltip("Prevent prefab colliders and rigidbodies from affecting the drone/building during animation.")]
+    public bool disablePresentPhysics = true;
+
+    [Header("Delivered Building")]
+    [Tooltip("Hide the target building after the present is delivered.")]
+    public bool hideDeliveredBuilding = false;
+    [Min(0f)] public float hideDeliveredBuildingDelay = 0.2f;
 
     [Header("Level Progress")]
     [Tooltip("Legacy value kept for existing scenes. Completion now uses the number of randomly selected targets.")]
@@ -73,6 +140,7 @@ public class DeliveryScoreManager : MonoBehaviour
     }
 
     private readonly HashSet<string> deliveredBuildingKeys = new HashSet<string>();
+    private readonly HashSet<string> deliveriesInProgressKeys = new HashSet<string>();
     private readonly Dictionary<string, float> hoverTimers = new Dictionary<string, float>();
     private readonly List<SpawnedBuildingTarget> cachedBuildings = new List<SpawnedBuildingTarget>();
     private readonly List<SpawnedBuildingTarget> activeTargets = new List<SpawnedBuildingTarget>();
@@ -81,7 +149,6 @@ public class DeliveryScoreManager : MonoBehaviour
     public int RemainingTargets => activeTargets.Count;
     public int CompletedTargets => completedDeliveries;
     public int TotalTargets => totalTargets;
-    private float nextScanTime = 0f;
     private string latestStatus = "";
     private float statusUntilTime = -1f;
     private int completedDeliveries = 0;
@@ -91,6 +158,7 @@ public class DeliveryScoreManager : MonoBehaviour
     private SpawnedBuildingTarget currentDeliverableTarget;
     private readonly Dictionary<string, LineRenderer> deliveryRings = new Dictionary<string, LineRenderer>();
     private readonly Dictionary<string, GameObject> deliveryRingObjects = new Dictionary<string, GameObject>();
+    private readonly Dictionary<string, GameObject> targetBeacons = new Dictionary<string, GameObject>();
     private Vector3 lastDronePos;
     private float currentSpeed;
 
@@ -170,10 +238,26 @@ public class DeliveryScoreManager : MonoBehaviour
             mavReceiver.HasNavTargetDistance &&
             mavReceiver.NavTargetDistanceMeters > 25f;
 
+        if (rotateTargetBeacons)
+        {
+            foreach (GameObject beacon in targetBeacons.Values)
+            {
+                if (beacon != null)
+                {
+                    beacon.transform.Rotate(Vector3.up, targetBeaconRotationSpeed * Time.deltaTime, Space.World);
+                }
+            }
+        }
+
         currentSpeed =
             Vector3.Distance(drone.position, lastDronePos) /
             Mathf.Max(Time.deltaTime, 0.0001f);
         lastDronePos = drone.position;
+
+        if (statusUntilTime > 0f && Time.time > statusUntilTime)
+        {
+            ClearDeliveryStatus();
+        }
 
         if (farGuidedTargetActive)
         {
@@ -182,11 +266,7 @@ public class DeliveryScoreManager : MonoBehaviour
                 hoverTimers.Clear();
             }
 
-            if (statusText != null && latestStatus.StartsWith(progressMessage))
-            {
-                statusText.text = "";
-                latestStatus = "";
-            }
+            ClearProgressStatusOnly();
 
             UpdateAllDeliveryRings(null);
             return;
@@ -216,18 +296,50 @@ public class DeliveryScoreManager : MonoBehaviour
                 hoverTimers.Clear();
             }
 
-            if (statusText != null && latestStatus.StartsWith(progressMessage))
-            {
-                statusText.text = "";
-                latestStatus = "";
-            }
+            ClearProgressStatusOnly();
         }
 
-        if (statusText != null && statusUntilTime > 0f && Time.time > statusUntilTime)
+    }
+
+
+    TextMeshProUGUI GetDeliveryStatusText()
+    {
+        return deliveryStatusText != null ? deliveryStatusText : statusText;
+    }
+
+    void SetDeliveryStatus(string message, float durationSeconds = -1f)
+    {
+        TextMeshProUGUI text = GetDeliveryStatusText();
+        latestStatus = string.IsNullOrEmpty(message) ? "" : message;
+
+        if (text != null)
         {
-            statusText.text = "";
-            latestStatus = "";
-            statusUntilTime = -1f;
+            text.text = latestStatus;
+        }
+
+        statusUntilTime = durationSeconds > 0f
+            ? Time.time + durationSeconds
+            : -1f;
+    }
+
+    void ClearDeliveryStatus()
+    {
+        latestStatus = "";
+        statusUntilTime = -1f;
+
+        TextMeshProUGUI text = GetDeliveryStatusText();
+        if (text != null)
+        {
+            text.text = "";
+        }
+    }
+
+    void ClearProgressStatusOnly()
+    {
+        if (latestStatus.StartsWith(progressMessage) ||
+            latestStatus == "Hold position...")
+        {
+            ClearDeliveryStatus();
         }
     }
 
@@ -344,6 +456,8 @@ public class DeliveryScoreManager : MonoBehaviour
 
         totalTargets = activeTargets.Count;
         RefreshDeliveryRings();
+        RefreshTargetBeacons();
+        TargetsRemainingChanged?.Invoke(RemainingTargets);
 
         Debug.Log($"Selected {totalTargets} delivery buildings.");
 
@@ -364,11 +478,21 @@ public class DeliveryScoreManager : MonoBehaviour
 
         while (t != null)
         {
-            if (t.name.EndsWith("_ArcGISBuilding",
-                StringComparison.OrdinalIgnoreCase))
+            bool generatedBuildingName =
+                t.name.EndsWith("_ArcGISBuilding", StringComparison.OrdinalIgnoreCase) ||
+                t.name.IndexOf("_ArcGISBuilding_", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            bool hasArcGISLocation =
+                t.GetComponent<ArcGISLocationComponent>() != null;
+
+            bool hasHouseMarker =
+                t.GetComponent<House>() != null;
+
+            // SceneLoaderArcgis names roots like Prefab_ArcGISBuilding_3.
+            // The previous EndsWith check rejected every numbered root.
+            if (hasArcGISLocation && (generatedBuildingName || hasHouseMarker))
             {
-                if (t.GetComponent<ArcGISLocationComponent>() != null)
-                    return t;
+                return t;
             }
 
             t = t.parent;
@@ -424,16 +548,70 @@ public class DeliveryScoreManager : MonoBehaviour
             return false;
         }
 
+        Transform deliveryMarker = FindChildRecursive(
+            root,
+            "DeliveryTarget"
+        );
+
+        Vector3 roofTarget = deliveryMarker != null
+            ? deliveryMarker.position
+            : new Vector3(
+                combinedBounds.center.x,
+                combinedBounds.max.y,
+                combinedBounds.center.z
+            );
+
         target = new SpawnedBuildingTarget
         {
             root = root,
             representativeRenderer = renderers[0],
             bounds = combinedBounds,
-            roofTarget = new Vector3(combinedBounds.center.x, combinedBounds.max.y, combinedBounds.center.z),
-            key = MakeBuildingKey(combinedBounds.center)
+            roofTarget = roofTarget,
+            key = MakeBuildingKey(roofTarget)
         };
 
+        if (verboseDebugLogs && deliveryMarker != null)
+        {
+            Debug.Log(
+                $"Using explicit DeliveryTarget for {root.name}: " +
+                $"{roofTarget}"
+            );
+        }
+
         return true;
+    }
+
+    Transform FindChildRecursive(
+        Transform parent,
+        string childName)
+    {
+        if (parent == null ||
+            string.IsNullOrWhiteSpace(childName))
+        {
+            return null;
+        }
+
+        if (parent.name.Equals(
+                childName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return parent;
+        }
+
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform result = FindChildRecursive(
+                parent.GetChild(i),
+                childName
+            );
+
+            if (result != null)
+            {
+                return result;
+            }
+        }
+
+        return null;
     }
 
     bool IsDroneWithinDeliveryRadius(SpawnedBuildingTarget target)
@@ -704,11 +882,104 @@ public class DeliveryScoreManager : MonoBehaviour
                 continue;
             }
 
-            if (sceneObject.name == "DeliveryRing")
+            if (sceneObject.name == "DeliveryRing" || sceneObject.name.StartsWith("DeliveryRing_"))
             {
                 Destroy(sceneObject);
             }
         }
+    }
+
+
+    void RefreshTargetBeacons()
+    {
+        RemoveUnusedTargetBeacons();
+
+        for (int i = 0; i < activeTargets.Count; i++)
+        {
+            SpawnedBuildingTarget target = activeTargets[i];
+            if (target == null || target.root == null || targetBeacons.ContainsKey(target.key))
+            {
+                continue;
+            }
+
+            Vector3 position = target.roofTarget + targetBeaconOffset;
+            GameObject beacon;
+
+            if (targetBeaconPrefab != null)
+            {
+                beacon = Instantiate(targetBeaconPrefab, position, Quaternion.identity, transform);
+            }
+            else
+            {
+                beacon = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                beacon.transform.SetParent(transform, true);
+                beacon.transform.position = position;
+
+                Collider collider = beacon.GetComponent<Collider>();
+                if (collider != null)
+                {
+                    Destroy(collider);
+                }
+
+                Renderer renderer = beacon.GetComponent<Renderer>();
+                if (renderer != null)
+                {
+                    Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+                    if (shader == null) shader = Shader.Find("Unlit/Color");
+                    if (shader == null) shader = Shader.Find("Sprites/Default");
+
+                    if (shader != null)
+                    {
+                        Material material = new Material(shader);
+                        material.color = targetBeaconColor;
+                        renderer.material = material;
+                    }
+                }
+            }
+
+            beacon.name = $"DeliveryBeacon_{target.key}";
+            beacon.transform.localScale = targetBeaconScale;
+            targetBeacons[target.key] = beacon;
+        }
+    }
+
+    void RemoveUnusedTargetBeacons()
+    {
+        HashSet<string> activeKeys = new HashSet<string>();
+        for (int i = 0; i < activeTargets.Count; i++)
+        {
+            if (activeTargets[i] != null)
+            {
+                activeKeys.Add(activeTargets[i].key);
+            }
+        }
+
+        List<string> keysToRemove = new List<string>();
+        foreach (KeyValuePair<string, GameObject> pair in targetBeacons)
+        {
+            if (!activeKeys.Contains(pair.Key))
+            {
+                if (pair.Value != null) Destroy(pair.Value);
+                keysToRemove.Add(pair.Key);
+            }
+        }
+
+        for (int i = 0; i < keysToRemove.Count; i++)
+        {
+            targetBeacons.Remove(keysToRemove[i]);
+        }
+    }
+
+    void RemoveTargetBeacon(string key)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+
+        if (targetBeacons.TryGetValue(key, out GameObject beacon) && beacon != null)
+        {
+            Destroy(beacon);
+        }
+
+        targetBeacons.Remove(key);
     }
 
     void OnDrawGizmos()
@@ -739,7 +1010,9 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         string key = building.key;
-        if (deliveredBuildingKeys.Contains(key))
+
+        if (deliveredBuildingKeys.Contains(key) ||
+            deliveriesInProgressKeys.Contains(key))
         {
             return;
         }
@@ -747,16 +1020,12 @@ public class DeliveryScoreManager : MonoBehaviour
         if (currentSpeed > maxHoverSpeed)
         {
             hoverTimers[key] = 0f;
-
-            if (statusText != null)
-            {
-                statusText.text = "Hold position...";
-            }
-
+            SetDeliveryStatus("Hold position...");
             return;
         }
 
-        if (hoverTimers.Count > 1 || (hoverTimers.Count == 1 && !hoverTimers.ContainsKey(key)))
+        if (hoverTimers.Count > 1 ||
+            (hoverTimers.Count == 1 && !hoverTimers.ContainsKey(key)))
         {
             hoverTimers.Clear();
         }
@@ -767,32 +1036,106 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         hoverTimers[key] += Time.deltaTime;
+
         if (hoverTimers[key] < hoverSecondsRequired)
         {
-            float remain = Mathf.Max(0f, hoverSecondsRequired - hoverTimers[key]);
-            latestStatus = $"{progressMessage} {remain:0.0}s";
-            if (statusText != null)
+            float remainingSeconds =
+                Mathf.Max(0f, hoverSecondsRequired - hoverTimers[key]);
+
+            SetDeliveryStatus(
+                $"{progressMessage} {remainingSeconds:0.0}s"
+            );
+
+            return;
+        }
+
+        // Reserve and remove the target immediately so Update cannot start
+        // another delivery while the present animation is running.
+        deliveriesInProgressKeys.Add(key);
+        hoverTimers.Remove(key);
+        activeTargets.Remove(building);
+
+        RemoveDeliveryRing(key);
+        RemoveTargetBeacon(key);
+        TargetsRemainingChanged?.Invoke(RemainingTargets);
+
+        StartCoroutine(CompleteDeliverySequence(building));
+    }
+
+    IEnumerator CompleteDeliverySequence(
+        SpawnedBuildingTarget building)
+    {
+        if (building == null)
+        {
+            yield break;
+        }
+
+        string key = building.key;
+
+        SetDeliveryStatus(droppingPresentMessage);
+
+        bool hasPresentPrefab = HasValidPresentPrefab();
+
+        if (hasPresentPrefab)
+        {
+            yield return PlayPresentDrop(building);
+        }
+        else
+        {
+            Debug.LogWarning(
+                "Delivery completed without an animation because " +
+                "no Present Prefab is assigned."
+            );
+        }
+
+        FinalizeDelivery(building);
+
+        deliveriesInProgressKeys.Remove(key);
+    }
+
+    bool HasValidPresentPrefab()
+    {
+        if (presentPrefabs == null || presentPrefabs.Length == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < presentPrefabs.Length; i++)
+        {
+            if (presentPrefabs[i] != null)
             {
-                statusText.text = latestStatus;
+                return true;
             }
+        }
+
+        return false;
+    }
+
+    void FinalizeDelivery(SpawnedBuildingTarget building)
+    {
+        if (building == null)
+        {
+            return;
+        }
+
+        string key = building.key;
+
+        if (deliveredBuildingKeys.Contains(key))
+        {
             return;
         }
 
         score += rewardPerDelivery;
         deliveredBuildingKeys.Add(key);
         completedDeliveries++;
-        hoverTimers.Remove(key);
-        activeTargets.Remove(building);
-        RemoveDeliveryRing(key);
+
         UpdateScoreUI();
         ScoreChanged?.Invoke(score);
 
-        latestStatus = $"{completeMessage} +{rewardPerDelivery}";
-        statusUntilTime = Time.time + completeMessageDuration;
-        if (statusText != null)
-        {
-            statusText.text = latestStatus;
-        }
+        SetDeliveryStatus(
+            $"{completeMessage} +{rewardPerDelivery}",
+            completeMessageDuration
+        );
 
         Debug.Log(
             $"DELIVERY TARGET = {building.root.name} | " +
@@ -800,16 +1143,243 @@ public class DeliveryScoreManager : MonoBehaviour
             $"Key: {key}"
         );
 
-        if (!level1Completed && completedDeliveries >= Mathf.Max(1, totalTargets))
+        if (hideDeliveredBuilding &&
+            building.root != null)
+        {
+            StartCoroutine(
+                HideDeliveredBuildingAfterDelay(building.root)
+            );
+        }
+
+        if (!level1Completed &&
+            completedDeliveries >= Mathf.Max(1, totalTargets))
         {
             level1Completed = true;
-            latestStatus = level1CompleteMessage;
-            statusUntilTime = Time.time + Mathf.Max(completeMessageDuration, 3f);
-            if (statusText != null)
-            {
-                statusText.text = latestStatus;
-            }
+
+            SetDeliveryStatus(
+                level1CompleteMessage,
+                Mathf.Max(completeMessageDuration, 3f)
+            );
+
+            LevelCompleted?.Invoke();
             Debug.Log("✅ Level 1 Complete");
+        }
+    }
+
+    IEnumerator HideDeliveredBuildingAfterDelay(
+        Transform buildingRoot)
+    {
+        if (buildingRoot == null)
+        {
+            yield break;
+        }
+
+        if (hideDeliveredBuildingDelay > 0f)
+        {
+            yield return new WaitForSeconds(
+                hideDeliveredBuildingDelay
+            );
+        }
+
+        if (buildingRoot != null)
+        {
+            buildingRoot.gameObject.SetActive(false);
+        }
+    }
+
+    IEnumerator PlayPresentDrop(
+        SpawnedBuildingTarget building)
+    {
+        if (drone == null ||
+            building == null ||
+            presentPrefabs == null ||
+            presentPrefabs.Length == 0)
+        {
+            yield break;
+        }
+
+        List<GameObject> validPrefabs = new List<GameObject>();
+
+        for (int i = 0; i < presentPrefabs.Length; i++)
+        {
+            if (presentPrefabs[i] != null)
+            {
+                validPrefabs.Add(presentPrefabs[i]);
+            }
+        }
+
+        if (validPrefabs.Count == 0)
+        {
+            yield break;
+        }
+
+        GameObject selectedPrefab =
+            validPrefabs[
+                UnityEngine.Random.Range(0, validPrefabs.Count)
+            ];
+
+        Vector3 startPosition =
+            drone.TransformPoint(presentSpawnOffset);
+
+        Vector3 endPosition =
+            building.roofTarget +
+            Vector3.up * presentLandingHeight;
+
+        GameObject present = Instantiate(
+            selectedPrefab,
+            startPosition,
+            UnityEngine.Random.rotation
+        );
+
+        present.name = selectedPrefab.name + "_Dropped";
+        present.transform.localScale *= presentScaleMultiplier;
+
+        DisablePresentPhysicsIfRequired(present);
+
+        float elapsed = 0f;
+        float duration = Mathf.Max(0.05f, presentDropDuration);
+
+        while (elapsed < duration && present != null)
+        {
+            elapsed += Time.deltaTime;
+
+            float normalizedTime =
+                Mathf.Clamp01(elapsed / duration);
+
+            float movementTime =
+                presentDropCurve != null
+                    ? Mathf.Clamp01(
+                        presentDropCurve.Evaluate(normalizedTime)
+                    )
+                    : Mathf.SmoothStep(
+                        0f,
+                        1f,
+                        normalizedTime
+                    );
+
+            Vector3 position = Vector3.Lerp(
+                startPosition,
+                endPosition,
+                movementTime
+            );
+
+            position.y +=
+                Mathf.Sin(normalizedTime * Mathf.PI) *
+                presentDropArcHeight;
+
+            present.transform.position = position;
+
+            present.transform.Rotate(
+                presentSpinDegreesPerSecond *
+                Time.deltaTime,
+                Space.Self
+            );
+
+            yield return null;
+        }
+
+        if (present == null)
+        {
+            yield break;
+        }
+
+        present.transform.position = endPosition;
+
+        // Small bounce to make the landing easier to see.
+        float bounceDuration =
+            Mathf.Max(0f, presentLandingBounceDuration);
+
+        if (bounceDuration > 0f &&
+            presentLandingBounceHeight > 0f)
+        {
+            float bounceElapsed = 0f;
+
+            while (bounceElapsed < bounceDuration &&
+                   present != null)
+            {
+                bounceElapsed += Time.deltaTime;
+
+                float t = Mathf.Clamp01(
+                    bounceElapsed / bounceDuration
+                );
+
+                float bounceOffset =
+                    Mathf.Sin(t * Mathf.PI) *
+                    presentLandingBounceHeight;
+
+                present.transform.position =
+                    endPosition +
+                    Vector3.up * bounceOffset;
+
+                yield return null;
+            }
+        }
+
+        if (present == null)
+        {
+            yield break;
+        }
+
+        present.transform.position = endPosition;
+
+        if (parentPresentToBuildingAfterLanding &&
+            building.root != null)
+        {
+            present.transform.SetParent(
+                building.root,
+                true
+            );
+        }
+
+        if (presentLandingEffectPrefab != null)
+        {
+            GameObject landingEffect = Instantiate(
+                presentLandingEffectPrefab,
+                endPosition,
+                Quaternion.identity
+            );
+
+            Destroy(landingEffect, 3f);
+        }
+
+        if (presentStayDuration > 0f)
+        {
+            yield return new WaitForSeconds(
+                presentStayDuration
+            );
+
+            if (present != null)
+            {
+                Destroy(present);
+            }
+        }
+    }
+
+    void DisablePresentPhysicsIfRequired(
+        GameObject present)
+    {
+        if (!disablePresentPhysics || present == null)
+        {
+            return;
+        }
+
+        Collider[] colliders =
+            present.GetComponentsInChildren<Collider>(true);
+
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            colliders[i].enabled = false;
+        }
+
+        Rigidbody[] rigidbodies =
+            present.GetComponentsInChildren<Rigidbody>(true);
+
+        for (int i = 0; i < rigidbodies.Length; i++)
+        {
+            rigidbodies[i].isKinematic = true;
+            rigidbodies[i].useGravity = false;
+            rigidbodies[i].linearVelocity = Vector3.zero;
+            rigidbodies[i].angularVelocity = Vector3.zero;
         }
     }
 

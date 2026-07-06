@@ -7,25 +7,16 @@ public class Level1Manager : MonoBehaviour
     [Header("Delivery System")]
     public DeliveryScoreManager deliveryScoreManager;
 
-    [Tooltip("When enabled, this level uses the target count from DeliveryScoreManager.")]
-    public bool useDeliveryManagerTargetCount = true;
-
-    [Tooltip("Used only when Use Delivery Manager Target Count is disabled.")]
-    [Min(1)]
-    public int requiredDeliveries = 5;
-
     [Header("UI")]
     public TextMeshProUGUI objectiveText;
     public TextMeshProUGUI levelStatusText;
-
-    public string objectivePrefix = "Presents Delivered";
+    public string objectivePrefix = "Remaining Presents: ";
     public string completedMessage = "Level 1 Complete!";
 
     [Header("Scene Flow")]
     public bool autoLoadNextScene = false;
     public string nextSceneName = "";
-    [Min(0f)]
-    public float nextSceneDelaySeconds = 2f;
+    [Min(0f)] public float nextSceneDelaySeconds = 2f;
 
     private bool completed;
 
@@ -33,103 +24,51 @@ public class Level1Manager : MonoBehaviour
     {
         if (deliveryScoreManager == null)
         {
-            deliveryScoreManager =
-                FindFirstObjectByType<DeliveryScoreManager>();
+            deliveryScoreManager = FindFirstObjectByType<DeliveryScoreManager>();
         }
 
         if (deliveryScoreManager == null)
         {
-            SetObjectiveText(0, GetRequiredDeliveries());
+            SetObjectiveText(0);
             SetStatusText("Waiting for delivery system...");
-
-            Debug.LogWarning(
-                "Level1Manager: DeliveryScoreManager was not found."
-            );
-
+            Debug.LogWarning("Level1Manager: DeliveryScoreManager was not found.");
             return;
         }
 
-        deliveryScoreManager.ScoreChanged += OnScoreChanged;
+        deliveryScoreManager.TargetsRemainingChanged += UpdateObjective;
+        deliveryScoreManager.LevelCompleted += CompleteLevel;
 
-        RefreshProgress();
-    }
+        int startingRemaining = deliveryScoreManager.TotalTargets > 0
+            ? deliveryScoreManager.RemainingTargets
+            : deliveryScoreManager.targetBuildingCount;
 
-    void Update()
-    {
-        // This also updates the UI after the random buildings finish spawning.
-        if (!completed && deliveryScoreManager != null)
-        {
-            RefreshProgress();
-        }
+        UpdateObjective(startingRemaining);
+        SetStatusText("");
     }
 
     void OnDestroy()
     {
         if (deliveryScoreManager != null)
         {
-            deliveryScoreManager.ScoreChanged -= OnScoreChanged;
+            deliveryScoreManager.TargetsRemainingChanged -= UpdateObjective;
+            deliveryScoreManager.LevelCompleted -= CompleteLevel;
         }
 
         CancelInvoke();
     }
 
-    void OnScoreChanged(int newScore)
+    void UpdateObjective(int remaining)
     {
-        RefreshProgress();
+        if (completed) return;
+        SetObjectiveText(Mathf.Max(0, remaining));
     }
 
-    void RefreshProgress()
+    void SetObjectiveText(int remaining)
     {
-        if (deliveryScoreManager == null || completed)
+        if (objectiveText != null)
         {
-            return;
+            objectiveText.text = $"{objectivePrefix}: {remaining}";
         }
-
-        int delivered = deliveryScoreManager.CompletedTargets;
-        int required = GetRequiredDeliveries();
-
-        SetObjectiveText(delivered, required);
-
-        if (delivered >= required && required > 0)
-        {
-            CompleteLevel();
-        }
-    }
-
-    int GetRequiredDeliveries()
-    {
-        if (!useDeliveryManagerTargetCount)
-        {
-            return Mathf.Max(1, requiredDeliveries);
-        }
-
-        if (deliveryScoreManager == null)
-        {
-            return Mathf.Max(1, requiredDeliveries);
-        }
-
-        // TotalTargets becomes available after random targets are selected.
-        if (deliveryScoreManager.TotalTargets > 0)
-        {
-            return deliveryScoreManager.TotalTargets;
-        }
-
-        // Display the Inspector target count while waiting for buildings.
-        return Mathf.Max(
-            1,
-            deliveryScoreManager.targetBuildingCount
-        );
-    }
-
-    void SetObjectiveText(int delivered, int required)
-    {
-        if (objectiveText == null)
-        {
-            return;
-        }
-
-        objectiveText.text =
-            $"{objectivePrefix}: {delivered}/{required}";
     }
 
     void SetStatusText(string message)
@@ -142,38 +81,22 @@ public class Level1Manager : MonoBehaviour
 
     void CompleteLevel()
     {
-        if (completed)
-        {
-            return;
-        }
+        if (completed) return;
 
         completed = true;
-
-        int required = GetRequiredDeliveries();
-        SetObjectiveText(required, required);
+        SetObjectiveText(0);
         SetStatusText(completedMessage);
-
         Debug.Log("Level1Manager: Level 1 complete.");
 
-        if (!autoLoadNextScene)
-        {
-            return;
-        }
+        if (!autoLoadNextScene) return;
 
         if (string.IsNullOrWhiteSpace(nextSceneName))
         {
-            Debug.LogWarning(
-                "Level1Manager: Auto Load Next Scene is enabled, " +
-                "but Next Scene Name is empty."
-            );
-
+            Debug.LogWarning("Level1Manager: Next Scene Name is empty.");
             return;
         }
 
-        Invoke(
-            nameof(LoadNextScene),
-            Mathf.Max(0f, nextSceneDelaySeconds)
-        );
+        Invoke(nameof(LoadNextScene), Mathf.Max(0f, nextSceneDelaySeconds));
     }
 
     void LoadNextScene()
