@@ -83,8 +83,11 @@ public class SceneLoaderArcgis : MonoBehaviour
     [Tooltip("Keep Building Replacement Rules as complete special prefabs even when Modular Footprint mode is selected.")]
     [SerializeField] bool replacementRulesForceCompletePrefabs = true;
 
-    [Tooltip("Optional ArcGIS root-heading correction for modular buildings. Polygon points are counter-rotated so the footprint still remains aligned.")]
+    [Tooltip("Optional world Y-axis correction for modular buildings. X and Z rotation are always kept at 0.")]
     [SerializeField] float modularBuildingYawCorrectionDegrees = 0f;
+
+    [Tooltip("Small world-space height adjustment for modular houses after GPS conversion. Increase this if walls are slightly below the map surface.")]
+    [SerializeField] float modularBuildingGroundOffset = 0.05f;
 
     [System.Serializable]
     public class BuildingOrientationRule
@@ -95,9 +98,9 @@ public class SceneLoaderArcgis : MonoBehaviour
         [Tooltip("Optional fallback match when Prefab is empty. The prefab name must contain this text.")]
         public string buildingNameContains;
 
-        [Header("1. Asset Yaw Rotation")]
-        [Tooltip("Only the Y value is used. X and Z are always forced to 0 so the building stays upright.")]
-        public Vector3 modelLocalRotationEuler = new Vector3(0f, 0f, 0f);
+        [Header("1. Asset Axis Rotation")]
+        [Tooltip("Exact local X/Y/Z rotation that makes this asset stand upright. Any prefab with a rule uses this value instead of the global rotation. Example: X=0, Y=90, Z=-90.")]
+        public Vector3 modelLocalRotationEuler = new Vector3(0f, 90f, -90f);
 
         [Header("2. OSM Map Rotation")]
         [Tooltip("Fine adjustment added to the OSM geographic heading. Use this only when the whole asset is consistently rotated on the map.")]
@@ -133,10 +136,10 @@ public class SceneLoaderArcgis : MonoBehaviour
     }
     [SerializeField] BuildingOrientationRule[] buildingOrientationRules;
 
-    [Header("Building Model Yaw Correction")]
-    [Tooltip("Only the Y value is used. X and Z are always forced to 0.")]
-    [SerializeField] Vector3 globalBuildingModelAxisCorrectionEuler = Vector3.zero;
-    [Tooltip("Optional extra Y-axis correction used only when no per-prefab rule matches. X and Z are ignored.")]
+    [Header("Building Model Axis Correction")]
+    [Tooltip("Fallback import-axis correction used only by prefabs that do not have a Building Orientation Rule.")]
+    [SerializeField] Vector3 globalBuildingModelAxisCorrectionEuler = new Vector3(0f, 90f, -90f);
+    [Tooltip("Optional extra fallback correction used only when no per-prefab rule matches.")]
     [SerializeField] Vector3 defaultBuildingModelLocalRotationEuler = Vector3.zero;
 
     [SerializeField] bool useExactOsmFootprintPlacement = true;
@@ -202,7 +205,9 @@ public class SceneLoaderArcgis : MonoBehaviour
     double fallbackOriginLat;
     double fallbackOriginLon;
     Transform generatedObjectsRoot;
+    Transform generatedBuildingsRoot;
     Transform droneTransform;
+    int visibleBuildingCounter;
 
     void Awake()
     {
@@ -1362,24 +1367,6 @@ public class SceneLoaderArcgis : MonoBehaviour
                 generatedBuildingName
             );
 
-            if (mapRoot != null)
-            {
-                buildingRoot.transform.SetParent(mapRoot, false);
-            }
-
-            ArcGISLocationComponent locationComponent =
-                buildingRoot.AddComponent<ArcGISLocationComponent>();
-
-            locationComponent.SurfacePlacementMode =
-                ArcGISSurfacePlacementMode.OnTheGround;
-            locationComponent.SurfacePlacementOffset = 0;
-            locationComponent.Position = new ArcGISPoint(
-                placementLongitude,
-                placementLatitude,
-                0,
-                ArcGISSpatialReference.WGS84()
-            );
-
             if (useModularHouse)
             {
                 ResolveModularHouseGenerator();
@@ -1394,26 +1381,66 @@ public class SceneLoaderArcgis : MonoBehaviour
                     continue;
                 }
 
-                float modularRootHeading = NormalizeHeadingDegrees(
+                // Keep geographic placement on an ArcGIS anchor so the house
+                // stays attached to the map and can still be found by the
+                // delivery system. The visible geometry is generated below a
+                // separate child that cancels the ArcGIS X/Z tilt safely.
+                if (mapRoot != null)
+                {
+                    buildingRoot.transform.SetParent(mapRoot, false);
+                }
+
+                ArcGISLocationComponent modularLocation =
+                    buildingRoot.AddComponent<ArcGISLocationComponent>();
+
+                modularLocation.SurfacePlacementMode =
+                    ArcGISSurfacePlacementMode.OnTheGround;
+                modularLocation.SurfacePlacementOffset =
+                    modularBuildingGroundOffset;
+                modularLocation.Position = new ArcGISPoint(
+                    placementLongitude,
+                    placementLatitude,
+                    0,
+                    ArcGISSpatialReference.WGS84()
+                );
+
+                // Do not put the geographic heading on the ArcGIS anchor.
+                // The upright visual child handles Y rotation in Unity space.
+                modularLocation.Rotation = new ArcGISRotation(0, 0, 0);
+
+                GameObject uprightObject = new GameObject(
+                    "UprightVisualRoot"
+                );
+                uprightObject.transform.SetParent(
+                    buildingRoot.transform,
+                    false
+                );
+                uprightObject.transform.localPosition = Vector3.zero;
+                uprightObject.transform.localRotation = Quaternion.identity;
+                uprightObject.transform.localScale = Vector3.one;
+
+                ArcGISUprightVisualRoot uprightController =
+                    uprightObject.AddComponent<ArcGISUprightVisualRoot>();
+
+                float modularVisualYaw = NormalizeHeadingDegrees(
                     modularBuildingYawCorrectionDegrees
                 );
+                uprightController.Configure(modularVisualYaw);
 
-                locationComponent.Rotation = new ArcGISRotation(
-                    modularRootHeading,
-                    0,
-                    0
-                );
-
+                // Build the exact OSM polygon in east/north metres. Because the
+                // visual root uses a Y-only world rotation, counter-rotate the
+                // footprint by the same yaw so its final world outline remains
+                // aligned with OSM.
                 List<Vector3> localFootprint =
                     ConvertGeographicFootprintToLocalMeters(
                         geographicPoints,
                         placementLatitude,
                         placementLongitude,
-                        modularRootHeading
+                        modularVisualYaw
                     );
 
                 bool generated = modularHouseGenerator.GenerateHouse(
-                    buildingRoot.transform,
+                    uprightObject.transform,
                     localFootprint,
                     i,
                     out Transform deliveryTarget
@@ -1434,16 +1461,37 @@ public class SceneLoaderArcgis : MonoBehaviour
                 }
 
                 Debug.Log(
-                    $"🏗 Spawned modular OSM house {buildingRoot.name} | " +
+                    $"🏗 Spawned ArcGIS-anchored upright modular house {buildingRoot.name} | " +
                     $"Geo=({placementLatitude:F7}, {placementLongitude:F7}) | " +
                     $"Corners={localFootprint.Count} | " +
                     $"Rectangle W×L={width:F2}×{depth:F2}m | " +
+                    $"VisualYaw={modularVisualYaw:F1}° | " +
                     $"DeliveryTarget={(deliveryTarget != null ? deliveryTarget.position.ToString() : "missing")}"
                 );
 
                 spawned++;
                 continue;
             }
+
+            // Complete prefabs keep the ArcGISLocationComponent path because
+            // their imported model-axis correction is handled separately.
+            if (mapRoot != null)
+            {
+                buildingRoot.transform.SetParent(mapRoot, false);
+            }
+
+            ArcGISLocationComponent locationComponent =
+                buildingRoot.AddComponent<ArcGISLocationComponent>();
+
+            locationComponent.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.OnTheGround;
+            locationComponent.SurfacePlacementOffset = 0;
+            locationComponent.Position = new ArcGISPoint(
+                placementLongitude,
+                placementLatitude,
+                0,
+                ArcGISSpatialReference.WGS84()
+            );
 
             string buildingTypeName = prefabToUse.name;
             BuildingOrientationRule orientationRule =
@@ -1718,6 +1766,77 @@ public class SceneLoaderArcgis : MonoBehaviour
         return (float)System.Math.Abs(twiceArea * 0.5);
     }
 
+    float CalculateAverageWorldY(
+        List<Vector3> worldPoints,
+        float fallbackY)
+    {
+        if (worldPoints == null || worldPoints.Count == 0)
+        {
+            return fallbackY;
+        }
+
+        float sum = 0f;
+        int validCount = 0;
+
+        for (int i = 0; i < worldPoints.Count; i++)
+        {
+            float y = worldPoints[i].y;
+            if (float.IsNaN(y) || float.IsInfinity(y))
+            {
+                continue;
+            }
+
+            sum += y;
+            validCount++;
+        }
+
+        return validCount > 0
+            ? sum / validCount
+            : fallbackY;
+    }
+
+    List<Vector3> ConvertWorldFootprintToLocalXZ(
+        List<Vector3> worldPoints,
+        Transform worldUprightRoot)
+    {
+        List<Vector3> localPoints = new List<Vector3>();
+
+        if (worldPoints == null || worldUprightRoot == null)
+        {
+            return localPoints;
+        }
+
+        for (int i = 0; i < worldPoints.Count; i++)
+        {
+            Vector3 localPoint =
+                worldUprightRoot.InverseTransformPoint(worldPoints[i]);
+
+            // The procedural house is intentionally flat and world-Y-up.
+            // ArcGIS geographic tilt is not inherited by this root.
+            localPoint.y = 0f;
+
+            if (localPoints.Count == 0 ||
+                HorizontalSqrDistance(
+                    localPoints[localPoints.Count - 1],
+                    localPoint
+                ) > 0.000001f)
+            {
+                localPoints.Add(localPoint);
+            }
+        }
+
+        if (localPoints.Count > 1 &&
+            HorizontalSqrDistance(
+                localPoints[0],
+                localPoints[localPoints.Count - 1]
+            ) <= 0.000001f)
+        {
+            localPoints.RemoveAt(localPoints.Count - 1);
+        }
+
+        return localPoints;
+    }
+
     List<Vector3> ConvertGeographicFootprintToLocalMeters(
         List<GeoCoordinate> geographicPoints,
         double centerLatitude,
@@ -1836,95 +1955,213 @@ public class SceneLoaderArcgis : MonoBehaviour
                 ? droneCamera.transform
                 : Camera.main != null ? Camera.main.transform : null;
 
-        Vector3 center = anchorTransform != null ? anchorTransform.position : Vector3.zero;
-        Vector3 forward = anchorTransform != null ? anchorTransform.forward : Vector3.forward;
+        Vector3 center = anchorTransform != null
+            ? anchorTransform.position
+            : Vector3.zero;
+
+        Vector3 forward = anchorTransform != null
+            ? anchorTransform.forward
+            : Vector3.forward;
+
         forward.y = 0f;
         if (forward.sqrMagnitude < 0.0001f)
+        {
             forward = Vector3.forward;
+        }
         forward.Normalize();
 
         Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
-        Vector3 clusterCenter = center + forward * 4f + Vector3.up * 0.5f;
         int count = 6;
         float radius = Mathf.Clamp(scale * 0.01f, 2f, 5f);
         float angleStep = 360f / Mathf.Max(1, count);
 
         GameObject heroPrefab = GetGuaranteedVillagePrefab();
-        Vector3 heroLocalPos = new Vector3(0f, -0.5f, 4f);
-        GameObject heroBuilding = CreateVisibleBuildingSpawn(anchorTransform, heroPrefab, heroLocalPos, Quaternion.identity, 1.5f);
-        Debug.Log($"🏠 Hero village building spawned at {heroBuilding.transform.position}");
-        Debug.Log($"CENTER = {center}");
-        Debug.Log($"DRONE = {droneTransform.position}");
-        Debug.Log($"DIST = {Vector3.Distance(center, droneTransform.position)}");
+        Vector3 heroWorldPosition =
+            center + forward * 4f + Vector3.down * 0.5f;
+
+        GameObject heroBuilding = CreateVisibleBuildingSpawn(
+            heroPrefab,
+            heroWorldPosition,
+            Quaternion.LookRotation(forward, Vector3.up),
+            1.5f
+        );
+
+        Debug.Log(
+            $"🏠 Hero fallback delivery building spawned at " +
+            $"{heroBuilding.transform.position}"
+        );
+
         for (int i = 0; i < count; i++)
         {
-            float angle = i * angleStep + UnityEngine.Random.Range(-10f, 10f);
-            float distance = UnityEngine.Random.Range(radius * 0.35f, radius);
-            Vector3 offset = (right * Mathf.Cos(angle * Mathf.Deg2Rad) + forward * Mathf.Sin(angle * Mathf.Deg2Rad)) * distance;
+            float angle =
+                i * angleStep +
+                UnityEngine.Random.Range(-10f, 10f);
 
-            GameObject prefab = PickBuildingPrefab(distance, distance);
-            Vector3 spawnLocalPos = new Vector3(offset.x, -0.5f, 4f + offset.z);
-            Quaternion rotation = Quaternion.Euler(0f, UnityEngine.Random.Range(0f, 360f), 0f);
-            GameObject building = CreateVisibleBuildingSpawn(anchorTransform, prefab, spawnLocalPos, rotation, UnityEngine.Random.Range(0.5f, 0.85f));
-            Debug.Log($"🏠 Village building spawned at {building.transform.position}");
+            float distance =
+                UnityEngine.Random.Range(
+                    radius * 0.35f,
+                    radius
+                );
+
+            Vector3 offset =
+                (right * Mathf.Cos(angle * Mathf.Deg2Rad) +
+                 forward * Mathf.Sin(angle * Mathf.Deg2Rad)) *
+                distance;
+
+            GameObject prefab =
+                PickBuildingPrefab(distance, distance);
+
+            Vector3 spawnWorldPosition =
+                center +
+                forward * 4f +
+                offset +
+                Vector3.down * 0.5f;
+
+            Quaternion rotation = Quaternion.Euler(
+                0f,
+                UnityEngine.Random.Range(0f, 360f),
+                0f
+            );
+
+            GameObject building = CreateVisibleBuildingSpawn(
+                prefab,
+                spawnWorldPosition,
+                rotation,
+                UnityEngine.Random.Range(0.5f, 0.85f)
+            );
+
+            Debug.Log(
+                $"🏠 Fallback delivery building spawned at " +
+                $"{building.transform.position}"
+            );
         }
 
-        Debug.Log("🏙 Visible fallback village cluster spawned");
+        Debug.Log(
+            "🏙 Visible fallback village cluster spawned as fixed " +
+            "delivery buildings."
+        );
     }
 
-    GameObject CreateVisibleBuildingSpawn(Transform anchor, GameObject prefab, Vector3 localPosition, Quaternion localRotation, float scaleMultiplier)
+    GameObject CreateVisibleBuildingSpawn(
+        GameObject prefab,
+        Vector3 worldPosition,
+        Quaternion worldRotation,
+        float scaleMultiplier)
     {
-        GameObject root = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        root.name = prefab != null ? $"VisibleBuilding_{prefab.name}" : "VisibleBuilding";
-        if (anchor != null)
-        {
-            root.transform.SetParent(anchor, false);
-            root.transform.localPosition = localPosition;
-            root.transform.localRotation = localRotation;
-        }
-        else
-        {
-            root.transform.position = localPosition;
-            root.transform.rotation = localRotation;
-        }
-        root.transform.localScale = new Vector3(1f, 1f, 1f) * Mathf.Max(0.1f, scaleMultiplier);
+        Transform buildingContainer =
+            GetGeneratedBuildingsRoot();
 
-        Renderer rootRenderer = root.GetComponent<Renderer>();
-        if (rootRenderer != null && rootRenderer.material != null && rootRenderer.material.HasProperty("_Color"))
+        string prefabName =
+            prefab != null
+                ? prefab.name
+                : "Cube";
+
+        GameObject root = new GameObject(
+            $"VisibleBuilding_{prefabName}_ArcGISBuilding_" +
+            $"{visibleBuildingCounter++}"
+        );
+
+        root.transform.position = worldPosition;
+        root.transform.rotation = Quaternion.Euler(
+            0f,
+            worldRotation.eulerAngles.y,
+            0f
+        );
+        root.transform.localScale =
+            Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
+
+        if (buildingContainer != null)
         {
-            if (!preservePrefabMaterialColors)
-            {
-                rootRenderer.material.color = new Color(0.92f, 0.78f, 0.35f, 1f);
-            }
+            root.transform.SetParent(
+                buildingContainer,
+                true
+            );
         }
+
+        GameObject visibleModel;
 
         if (prefab != null)
         {
-            GameObject child = Instantiate(prefab, root.transform);
-            child.transform.localPosition = Vector3.zero;
-            BuildingOrientationRule orientationRule = GetBuildingOrientationRule(prefab, prefab.name);
-            child.transform.localRotation = GetBuildingModelLocalRotation(orientationRule);
-            child.transform.localScale = Vector3.one;
-            EnsureRenderable(child);
-            ApplyBuildingPalette(child, prefab, root.name);
-            if (child.GetComponent<Collider>() != null)
-            {
-                Destroy(child.GetComponent<Collider>());
-            }
-            //     if (child.GetComponent<House>() == null)
-            //     {
-            //         child.AddComponent<House>();
-            //     }
+            visibleModel = Instantiate(
+                prefab,
+                root.transform
+            );
+
+            visibleModel.name = prefab.name;
+            visibleModel.transform.localPosition = Vector3.zero;
+
+            BuildingOrientationRule orientationRule =
+                GetBuildingOrientationRule(
+                    prefab,
+                    prefab.name
+                );
+
+            visibleModel.transform.localRotation =
+                GetBuildingModelLocalRotation(
+                    orientationRule
+                );
+
+            visibleModel.transform.localScale = Vector3.one;
+
+            EnsureRenderable(visibleModel);
+            ApplyBuildingPalette(
+                visibleModel,
+                prefab,
+                root.name
+            );
+        }
+        else
+        {
+            visibleModel =
+                GameObject.CreatePrimitive(
+                    PrimitiveType.Cube
+                );
+
+            visibleModel.name = "FallbackBuildingMesh";
+            visibleModel.transform.SetParent(
+                root.transform,
+                false
+            );
+            visibleModel.transform.localPosition =
+                Vector3.zero;
+            visibleModel.transform.localRotation =
+                Quaternion.identity;
+            visibleModel.transform.localScale =
+                Vector3.one;
         }
 
-        if (root.GetComponent<Collider>() == null)
+        // The delivery manager can now identify fallback buildings
+        // through both the House marker and the generated root name.
+        if (root.GetComponent<House>() == null)
         {
-            root.AddComponent<BoxCollider>();
+            root.AddComponent<House>();
         }
-        // if (root.GetComponent<House>() == null)
-        // {
-        //     root.AddComponent<House>();
-        // }
+
+        ConfigureBuildingCollider(
+            root,
+            visibleModel
+        );
+
+        EnsureDeliveryTargetMarker(
+            root,
+            visibleModel
+        );
+
+        // Child colliders are unnecessary for the delivery check and
+        // may interfere with the drone. The fitted root collider remains.
+        Collider[] childColliders =
+            visibleModel.GetComponentsInChildren<Collider>(true);
+
+        for (int i = 0; i < childColliders.Length; i++)
+        {
+            Collider childCollider = childColliders[i];
+
+            if (childCollider != null &&
+                childCollider.gameObject != root)
+            {
+                Destroy(childCollider);
+            }
+        }
 
         return root;
     }
@@ -2443,22 +2680,17 @@ public class SceneLoaderArcgis : MonoBehaviour
 
     Quaternion GetBuildingModelLocalRotation(BuildingOrientationRule orientationRule)
     {
-        // Buildings are allowed to rotate around the vertical Y axis only.
-        // The prefab itself must already stand upright in its prefab asset.
-        float yawDegrees;
-
+        // A matching per-prefab rule always supplies the complete local rotation.
+        // Prefabs without a rule use the global fallback rotation below.
         if (orientationRule != null)
         {
-            yawDegrees = orientationRule.modelLocalRotationEuler.y;
-        }
-        else
-        {
-            yawDegrees =
-                globalBuildingModelAxisCorrectionEuler.y +
-                defaultBuildingModelLocalRotationEuler.y;
+            return Quaternion.Euler(orientationRule.modelLocalRotationEuler);
         }
 
-        return Quaternion.Euler(0f, yawDegrees, 0f);
+        return Quaternion.Euler(
+            globalBuildingModelAxisCorrectionEuler +
+            defaultBuildingModelLocalRotationEuler
+        );
     }
 
     Vector3 ComputeVillageScale(float width, float depth, float area)
@@ -2922,10 +3154,8 @@ public class SceneLoaderArcgis : MonoBehaviour
             }
 
             buildingModel.transform.localScale *= Mathf.Max(0.01f, rule.scaleMultiplier);
-
-            // Replacement adjustments also rotate around Y only.
             buildingModel.transform.localRotation =
-                Quaternion.Euler(0f, rule.rotationEulerOffset.y, 0f) *
+                Quaternion.Euler(rule.rotationEulerOffset) *
                 buildingModel.transform.localRotation;
             return;
         }
@@ -3295,6 +3525,55 @@ public class SceneLoaderArcgis : MonoBehaviour
         return null;
     }
 
+    Transform GetGeneratedBuildingsRoot()
+    {
+        if (generatedBuildingsRoot != null)
+        {
+            return generatedBuildingsRoot;
+        }
+
+        Transform mapRoot = GetArcGISRoot();
+        Transform existing = null;
+
+        if (mapRoot != null)
+        {
+            existing = mapRoot.Find("GeneratedBuildings");
+        }
+
+        if (existing == null)
+        {
+            GameObject existingObject =
+                GameObject.Find("GeneratedBuildings");
+
+            if (existingObject != null)
+            {
+                existing = existingObject.transform;
+            }
+        }
+
+        if (existing == null)
+        {
+            GameObject container =
+                new GameObject("GeneratedBuildings");
+
+            existing = container.transform;
+
+            if (mapRoot != null)
+            {
+                existing.SetParent(mapRoot, false);
+            }
+            else
+            {
+                existing.position = Vector3.zero;
+                existing.rotation = Quaternion.identity;
+                existing.localScale = Vector3.one;
+            }
+        }
+
+        generatedBuildingsRoot = existing;
+        return generatedBuildingsRoot;
+    }
+
     Transform GetGeneratedObjectsRoot()
     {
         if (generatedObjectsRoot != null)
@@ -3306,6 +3585,9 @@ public class SceneLoaderArcgis : MonoBehaviour
         if (root == null)
         {
             root = new GameObject("GeneratedArcGISObjects");
+            root.transform.position = Vector3.zero;
+            root.transform.rotation = Quaternion.identity;
+            root.transform.localScale = Vector3.one;
         }
 
         generatedObjectsRoot = root.transform;

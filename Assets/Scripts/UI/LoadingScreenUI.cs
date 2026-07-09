@@ -17,6 +17,23 @@ public class LoadingScreenUI : MonoBehaviour
     [SerializeField] private float fadeDuration = 0.35f;
     [SerializeField] private float spinnerSpeed = 150f;
 
+    [Header("Christmas Loading Theme")]
+    [Tooltip("Display Santa/drone-themed loading messages based on progress.")]
+    [SerializeField] private bool useThemedMessages = true;
+
+    [Tooltip(
+        "When enabled, a message passed by another script to Show() or " +
+        "SetProgress() is shown instead of the themed message."
+    )]
+    [SerializeField] private bool allowExternalStatusMessages = false;
+
+    [Tooltip("Show the technical error message to the player.")]
+    [SerializeField] private bool showDetailedErrorToPlayer = false;
+
+    [TextArea]
+    [SerializeField] private string friendlyErrorMessage =
+        "Oh snow! The elves could not prepare the mission.";
+
     private Coroutine fadeCoroutine;
     private bool spinnerEnabled;
 
@@ -29,7 +46,7 @@ public class LoadingScreenUI : MonoBehaviour
 
         if (showOnAwake)
         {
-            Show("Preparing mission...");
+            Show();
         }
         else
         {
@@ -49,7 +66,7 @@ public class LoadingScreenUI : MonoBehaviour
         }
     }
 
-    public void Show(string message = "Loading...")
+    public void Show(string message = null)
     {
         gameObject.SetActive(true);
         StopFade();
@@ -79,12 +96,15 @@ public class LoadingScreenUI : MonoBehaviour
 
         if (percentageText != null)
         {
-            percentageText.text = Mathf.RoundToInt(progress * 100f) + "%";
+            percentageText.text =
+                progress >= 1f
+                    ? "READY!"
+                    : Mathf.RoundToInt(progress * 100f) + "%";
         }
 
-        if (statusText != null && !string.IsNullOrWhiteSpace(message))
+        if (statusText != null)
         {
-            statusText.text = message;
+            statusText.text = ResolveStatusMessage(progress, message);
         }
     }
 
@@ -94,6 +114,11 @@ public class LoadingScreenUI : MonoBehaviour
         gameObject.SetActive(true);
         spinnerEnabled = false;
 
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            Debug.LogError("Loading screen error: " + message);
+        }
+
         if (canvasGroup != null)
         {
             canvasGroup.alpha = 1f;
@@ -101,11 +126,22 @@ public class LoadingScreenUI : MonoBehaviour
             canvasGroup.blocksRaycasts = true;
         }
 
-        SetProgress(1f, message);
+        float currentProgress =
+            progressSlider != null ? progressSlider.value : 0f;
+
+        string playerMessage = friendlyErrorMessage;
+
+        if (showDetailedErrorToPlayer &&
+            !string.IsNullOrWhiteSpace(message))
+        {
+            playerMessage += "\n" + message;
+        }
+
+        SetProgress(currentProgress, playerMessage);
 
         if (percentageText != null)
         {
-            percentageText.text = "Error";
+            percentageText.text = "OH SNOW!";
         }
     }
 
@@ -134,6 +170,83 @@ public class LoadingScreenUI : MonoBehaviour
         }
 
         gameObject.SetActive(visible);
+    }
+
+    private string ResolveStatusMessage(
+        float progress,
+        string externalMessage
+    )
+    {
+        bool hasExternalMessage =
+            !string.IsNullOrWhiteSpace(externalMessage);
+
+        if (hasExternalMessage &&
+            (!useThemedMessages || allowExternalStatusMessages))
+        {
+            return externalMessage;
+        }
+
+        if (useThemedMessages)
+        {
+            return GetThemedStatusMessage(progress);
+        }
+
+        return hasExternalMessage ? externalMessage : "Loading...";
+    }
+
+    private string GetThemedStatusMessage(float progress)
+    {
+        if (progress < 0.08f)
+        {
+            return "Opening tonight's mission letter...";
+        }
+
+        if (progress < 0.18f)
+        {
+            return "Waking up the delivery drone...";
+        }
+
+        if (progress < 0.30f)
+        {
+            return "Connecting to Santa's navigation system...";
+        }
+
+        if (progress < 0.42f)
+        {
+            return "Unfolding the village map...";
+        }
+
+        if (progress < 0.55f)
+        {
+            return "Building the snowy village...";
+        }
+
+        if (progress < 0.68f)
+        {
+            return "Searching for delivery rooftops...";
+        }
+
+        if (progress < 0.80f)
+        {
+            return "Packing presents into the cargo bay...";
+        }
+
+        if (progress < 0.90f)
+        {
+            return "Planning a safe delivery route...";
+        }
+
+        if (progress < 0.97f)
+        {
+            return "Checking the Christmas spirit signal...";
+        }
+
+        if (progress < 1f)
+        {
+            return "Finishing the elf flight checklist...";
+        }
+
+        return "Mission ready! Prepare for takeoff!";
     }
 
     private IEnumerator FadeOut()

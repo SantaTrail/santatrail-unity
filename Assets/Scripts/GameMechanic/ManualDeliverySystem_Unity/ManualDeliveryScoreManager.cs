@@ -458,8 +458,10 @@ public class ManualDeliveryScoreManager : MonoBehaviour
             return;
         }
 
-        if (presentPrefabs != null && presentPrefabs.Length > 0)
+        bool hasPresentAnimation = HasValidPresentPrefab();
+        if (hasPresentAnimation)
         {
+            // Use the same drop animation as DeliveryScoreManager.
             StartCoroutine(PlayPresentDrop(building.roofTarget));
         }
 
@@ -476,7 +478,8 @@ public class ManualDeliveryScoreManager : MonoBehaviour
 
         if (shouldHideBuilding && building.root != null)
         {
-            StartCoroutine(HideBuildingAfterDelay(building.root));
+            // Do not hide the roof while the present is still falling or resting on it.
+            StartCoroutine(HideBuildingAfterDelay(building.root, hasPresentAnimation));
         }
 
         TargetsRemainingChanged?.Invoke(RemainingTargets);
@@ -498,11 +501,23 @@ public class ManualDeliveryScoreManager : MonoBehaviour
         }
     }
 
-    private IEnumerator HideBuildingAfterDelay(Transform buildingRoot)
+    private IEnumerator HideBuildingAfterDelay(
+        Transform buildingRoot,
+        bool waitForPresentAnimation)
     {
-        if (hideDeliveredBuildingDelay > 0f)
+        float delay = Mathf.Max(0f, hideDeliveredBuildingDelay);
+
+        if (waitForPresentAnimation)
         {
-            yield return new WaitForSeconds(hideDeliveredBuildingDelay);
+            // DeliveryScoreManager leaves the building visible for the complete
+            // drop and roof-stay animation. Match that appearance before hiding.
+            delay += Mathf.Max(0.05f, presentDropDuration);
+            delay += Mathf.Max(0f, presentStayDuration);
+        }
+
+        if (delay > 0f)
+        {
+            yield return new WaitForSeconds(delay);
         }
 
         if (buildingRoot != null)
@@ -840,6 +855,24 @@ public class ManualDeliveryScoreManager : MonoBehaviour
         }
     }
 
+    private bool HasValidPresentPrefab()
+    {
+        if (presentPrefabs == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < presentPrefabs.Length; i++)
+        {
+            if (presentPrefabs[i] != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private IEnumerator PlayPresentDrop(Vector3 roofTarget)
     {
         if (drone == null || presentPrefabs == null || presentPrefabs.Length == 0)
@@ -865,7 +898,12 @@ public class ManualDeliveryScoreManager : MonoBehaviour
         Vector3 startPosition = drone.TransformPoint(presentSpawnOffset);
         Vector3 endPosition = roofTarget + Vector3.up * presentLandingHeight;
 
-        GameObject present = Instantiate(selectedPrefab, startPosition, UnityEngine.Random.rotation);
+        GameObject present = Instantiate(
+            selectedPrefab,
+            startPosition,
+            UnityEngine.Random.rotation
+        );
+
         present.name = selectedPrefab.name + "_Dropped";
         present.transform.localScale *= presentScaleMultiplier;
 
@@ -900,7 +938,11 @@ public class ManualDeliveryScoreManager : MonoBehaviour
             position.y += Mathf.Sin(t * Mathf.PI) * presentDropArcHeight;
 
             present.transform.position = position;
-            present.transform.Rotate(presentSpinDegreesPerSecond * Time.deltaTime, Space.Self);
+            present.transform.Rotate(
+                presentSpinDegreesPerSecond * Time.deltaTime,
+                Space.Self
+            );
+
             yield return null;
         }
 
@@ -914,7 +956,11 @@ public class ManualDeliveryScoreManager : MonoBehaviour
         if (presentStayDuration > 0f)
         {
             yield return new WaitForSeconds(presentStayDuration);
-            if (present != null) Destroy(present);
+
+            if (present != null)
+            {
+                Destroy(present);
+            }
         }
     }
 
