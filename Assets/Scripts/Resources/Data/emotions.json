@@ -1,0 +1,16 @@
+{
+  "emotions": [
+    {
+      "emotion": "Hopeful",
+      "description": "Looking forward to Christmas."
+    },
+    {
+      "emotion": "Excited",
+      "description": "Can't wait to see Santa."
+    },
+    {
+      "emotion": "Grateful",
+      "description": "Feels thankful for family and friends."
+    }
+  ]
+}

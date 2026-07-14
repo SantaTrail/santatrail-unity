@@ -1,0 +1,16 @@
+{
+  "personalities": [
+    {
+      "type": "Kind",
+      "description": "Always helps friends and family."
+    },
+    {
+      "type": "Curious",
+      "description": "Loves learning and exploring new things."
+    },
+    {
+      "type": "Shy",
+      "description": "Quiet but very thoughtful."
+    }
+  ]
+}

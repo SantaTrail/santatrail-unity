@@ -1,0 +1,269 @@
+[
+  {
+    "child_name": "Lily",
+    "child_age": 5,
+    "difficulty": "medium",
+    "letter": "Dear Santa, I've been good this year! I helped my friend study for their test because friends are important to me. I'm really looking forward to Christmas because it's a special time with family and friends. Maybe you can bring something that helps tiny families have fun together?",
+    "hidden_clues": [
+      "a place for tiny families",
+      "tiny families",
+      "small pretend rooms"
+    ],
+    "toy_options": [
+      {
+        "id": "Teddy Bear",
+        "label": "Teddy Bear",
+        "description": ""
+      },
+      {
+        "id": "Doll House",
+        "label": "Doll House",
+        "description": ""
+      },
+      {
+        "id": "Toy Robot",
+        "label": "Toy Robot",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Doll House",
+    "emotion_tone": "hopeful and excited",
+    "narrative_tags": [
+      "friendship",
+      "family"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.36421337723731995,
+      "difficulty_estimate": "medium"
+    }
+  },
+  {
+    "child_name": "Ethan",
+    "child_age": 6,
+    "difficulty": "easy",
+    "letter": "Dear Santa, I've been a good boy this year! I watered Grandma's plants for her. It made me happy to see them grow. I wish you would come visit me soon. Maybe we can have some cookies and talk about my favorite things. I love being at home where it feels cozy. Thank you for listening to my wishes.",
+    "hidden_clues": [
+      "tiny furniture",
+      "small rooms",
+      "a miniature home"
+    ],
+    "toy_options": [
+      {
+        "id": "Toy Robot",
+        "label": "Toy Robot",
+        "description": ""
+      },
+      {
+        "id": "Toy Train",
+        "label": "Toy Train",
+        "description": ""
+      },
+      {
+        "id": "Doll House",
+        "label": "Doll House",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Doll House",
+    "emotion_tone": "lonely but optimistic",
+    "narrative_tags": [
+      "whimsical",
+      "warm"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.42650148272514343,
+      "difficulty_estimate": "medium"
+    }
+  },
+  {
+    "child_name": "Hana",
+    "child_age": 7,
+    "difficulty": "medium",
+    "letter": "Dear Santa, I've been a good girl this year. I helped Mommy with the kitchen and made sure my brother didn't get hurt when he fell down. Sometimes it feels lonely in my room without my best friends to play with. But I know you're always there, listening to me. Please bring me something that will make me feel less alone when I'm playing by myself. Maybe something that makes electronic noises or has tiny machine friends that move on their own? Thank you for being so kind.",
+    "hidden_clues": [
+      "moves on its own",
+      "makes electronic noises",
+      "tiny machine friend"
+    ],
+    "toy_options": [
+      {
+        "id": "Doll House",
+        "label": "Doll House",
+        "description": ""
+      },
+      {
+        "id": "Toy Train",
+        "label": "Toy Train",
+        "description": ""
+      },
+      {
+        "id": "Toy Robot",
+        "label": "Toy Robot",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Toy Robot",
+    "emotion_tone": "lonely",
+    "narrative_tags": [
+      "emotional",
+      "introverted"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.29383063316345215,
+      "difficulty_estimate": "hard"
+    }
+  },
+  {
+    "child_name": "Hana",
+    "child_age": 7,
+    "difficulty": "hard",
+    "letter": "Dear Santa, I've been trying to be brave this year. My brother gets scared at night so I read him stories before bed. It makes me feel happy and strong. Can you bring something that helps me keep my heart warm? Maybe something that goes on a journey that never sleeps or brings distant places together? Oh, and sometimes there's a tiny traveler on endless roads that I like to dream about. Love, Hana",
+    "hidden_clues": [
+      "a journey that never sleeps",
+      "a tiny traveler on endless roads",
+      "brings distant places together"
+    ],
+    "toy_options": [
+      {
+        "id": "Doll House",
+        "label": "Doll House",
+        "description": ""
+      },
+      {
+        "id": "Toy Robot",
+        "label": "Toy Robot",
+        "description": ""
+      },
+      {
+        "id": "Toy Train",
+        "label": "Toy Train",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Toy Train",
+    "emotion_tone": "nervous but trying to stay brave",
+    "narrative_tags": [
+      "sisterly love",
+      "nighttime stories"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.22130626440048218,
+      "difficulty_estimate": "hard"
+    }
+  },
+  {
+    "child_name": "Ethan",
+    "child_age": 9,
+    "difficulty": "medium",
+    "letter": "Dear Santa, I've been good this year! I picked up trash near the playground and helped my mom with chores. I'm so excited for Christmas because it's my favorite holiday! Can you bring me something that takes people on adventures? It would be awesome if it traveled across imaginary lands too! That way, I can connect little towns and explore new places. Thank you!",
+    "hidden_clues": [
+      "takes passengers on adventures",
+      "travels across imaginary lands",
+      "connects little towns"
+    ],
+    "toy_options": [
+      {
+        "id": "Doll House",
+        "label": "Doll House",
+        "description": ""
+      },
+      {
+        "id": "Toy Train",
+        "label": "Toy Train",
+        "description": ""
+      },
+      {
+        "id": "Teddy Bear",
+        "label": "Teddy Bear",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Toy Train",
+    "emotion_tone": "excited",
+    "narrative_tags": [
+      "energetic",
+      "joyful",
+      "playful"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.25357651710510254,
+      "difficulty_estimate": "hard"
+    }
+  },
+  {
+    "child_name": "Amara",
+    "child_age": 6,
+    "difficulty": "easy",
+    "letter": "Dear Santa, I'm being good this year, I promise! I helped take care of my baby cousin. She's always crying and I like to make her smile. Sometimes when I play with toys that lights up, beeps, and walks around, it makes me feel brave like when I held my cousin's hand. Please bring me something special. Thank you for listening.",
+    "hidden_clues": [
+      "lights up",
+      "beeps",
+      "walks around"
+    ],
+    "toy_options": [
+      {
+        "id": "Toy Robot",
+        "label": "Toy Robot",
+        "description": ""
+      },
+      {
+        "id": "Doll House",
+        "label": "Doll House",
+        "description": ""
+      },
+      {
+        "id": "Toy Train",
+        "label": "Toy Train",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Toy Robot",
+    "emotion_tone": "nervous and slightly anxious but trying to stay brave",
+    "narrative_tags": [
+      "shy",
+      "thoughtful"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.23474840819835663,
+      "difficulty_estimate": "hard"
+    }
+  },
+  {
+    "child_name": "Noah",
+    "child_age": 10,
+    "difficulty": "easy",
+    "letter": "Dear Santa, I've been thinking about you a lot lately. I wish I had someone to explore with. I saw a stray cat near my house and I felt bad, so I fed it. Maybe next year I'll have some friends to go on adventures with. I would love something soft and warm from you.",
+    "hidden_clues": [
+      "soft",
+      "warm",
+      "great for hugs"
+    ],
+    "toy_options": [
+      {
+        "id": "Toy Robot",
+        "label": "Toy Robot",
+        "description": ""
+      },
+      {
+        "id": "Toy Train",
+        "label": "Toy Train",
+        "description": ""
+      },
+      {
+        "id": "Teddy Bear",
+        "label": "Teddy Bear",
+        "description": ""
+      }
+    ],
+    "correct_toy_id": "Teddy Bear",
+    "emotion_tone": "lonely",
+    "narrative_tags": [
+      "emotional",
+      "adventurous"
+    ],
+    "semantic_validation": {
+      "semantic_similarity": 0.2575574219226837,
+      "difficulty_estimate": "hard"
+    }
+  }
+]

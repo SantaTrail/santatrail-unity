@@ -1,0 +1,20 @@
+{
+  "toys": [
+    {
+      "id": "teddy",
+      "name": "Teddy Bear",
+      "description": "Soft and cuddly",
+      "easyClues": ["soft", "hug", "warm"],
+      "mediumClues": ["always beside me", "fluffy friend", "keeps me company"],
+      "hardClues": ["comfort after a long day", "never leaves my bed", "silent friend"]
+    },
+    {
+      "id": "robot",
+      "name": "Robot",
+      "description": "Walks and talks",
+      "easyClues": ["beeps", "lights", "walks"],
+      "mediumClues": ["metal friend", "buttons", "machine"],
+      "hardClues": ["future companion", "powered by batteries", "mechanical helper"]
+    }
+  ]
+}
