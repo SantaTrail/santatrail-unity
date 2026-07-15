@@ -1,7 +1,10 @@
 {
   "dependencies": {
+    "ai.undream.llm": "https://github.com/undreamai/LLMUnity.git",
     "com.esri.arcgis-maps-sdk": "file:com.esri.arcgis-maps-sdk",
+    "com.unity.2d.enhancers": "1.0.0",
     "com.unity.2d.sprite": "1.0.0",
+    "com.unity.ai.inference": "2.6.1",
     "com.unity.burst": "1.8.28",
     "com.unity.cinemachine": "3.1.6",
     "com.unity.collections": "2.6.2",
