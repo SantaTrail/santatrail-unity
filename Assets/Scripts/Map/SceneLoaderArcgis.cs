@@ -89,6 +89,16 @@ public class SceneLoaderArcgis : MonoBehaviour
     [Tooltip("Small world-space height adjustment for modular houses after GPS conversion. Increase this if walls are slightly below the map surface.")]
     [SerializeField] float modularBuildingGroundOffset = 0.05f;
 
+    [Range(0.80f, 2.00f)]
+    [Tooltip(
+        "Final X/Z-only scale applied after the modular house has been " +
+        "generated. This changes the visible footprint without increasing " +
+        "the number of wall modules, roof vertices, or colliders. " +
+        "Y remains unchanged. A value around 1.55 to 1.65 can be used " +
+        "when 1.50 is still slightly smaller than the map footprint."
+    )]
+    [SerializeField] float modularFootprintScale = 1.08f;
+
     [System.Serializable]
     public class BuildingOrientationRule
     {
@@ -163,8 +173,32 @@ public class SceneLoaderArcgis : MonoBehaviour
     [Header("Python Script")]
     public string pythonPath = "/Users/notebook/.pyenv/versions/3.10.18/bin/python3";
 
+    [Header("Expanded OSM Building Query")]
+    [Tooltip(
+        "Runs main_with_more_buildings.py instead of main.py. The wrapper " +
+        "first runs the existing backend, then adds more OSM building " +
+        "footprints to output.json."
+    )]
+    [SerializeField] bool fetchMoreOsmBuildings = true;
+
+    [Tooltip(
+        "Python wrapper filename placed beside the existing backend main.py."
+    )]
+    [SerializeField] string expandedBuildingScriptName =
+        "main_with_more_buildings.py";
+
+    [Tooltip(
+        "OSM query radius in metres. Keep this slightly larger than the " +
+        "ArcGIS map extent so edge buildings are not missed."
+    )]
+    [SerializeField] double osmQueryRadiusMeters = 220.0;
+
     string scriptPath;
     string outputPath;
+
+    Process pythonProcess;
+    volatile bool pythonProcessCompleted;
+    volatile int pythonProcessExitCode = int.MinValue;
     [Header("Prefabs")]
     public GameObject treePrefab;
     public GameObject buildingPrefab;
@@ -459,8 +493,40 @@ public class SceneLoaderArcgis : MonoBehaviour
         string projectRoot = Application.dataPath + "/../";
         string backendPath = ResolveBackendPath(projectRoot);
 
-        scriptPath = Path.Combine(backendPath, "main.py");
+        string originalMainPath =
+            Path.Combine(backendPath, "main.py");
+
+        string expandedScriptPath =
+            Path.Combine(
+                backendPath,
+                expandedBuildingScriptName
+            );
+
         outputPath = Path.Combine(backendPath, "output.json");
+
+        if (fetchMoreOsmBuildings &&
+            File.Exists(expandedScriptPath))
+        {
+            scriptPath = expandedScriptPath;
+
+            Debug.Log(
+                "🏘 Expanded OSM building query enabled: " +
+                scriptPath
+            );
+        }
+        else
+        {
+            scriptPath = originalMainPath;
+
+            if (fetchMoreOsmBuildings)
+            {
+                Debug.LogWarning(
+                    "⚠️ Expanded building wrapper was not found at: " +
+                    expandedScriptPath +
+                    ". Falling back to the existing main.py."
+                );
+            }
+        }
 
         if (!File.Exists(scriptPath))
         {
@@ -536,7 +602,28 @@ public class SceneLoaderArcgis : MonoBehaviour
                 TryResolveArcGISConverter();
             }
 
-            if (!jsonReady && File.Exists(outputPath))
+            if (pythonProcessCompleted &&
+                pythonProcessExitCode != 0)
+            {
+                Debug.LogError(
+                    "❌ Python level generation failed with exit code " +
+                    pythonProcessExitCode
+                );
+
+                if (loadingScreen != null)
+                {
+                    loadingScreen.ShowError(
+                        "Python level generation failed. Check the Console."
+                    );
+                }
+
+                yield break;
+            }
+
+            if (!jsonReady &&
+                pythonProcessCompleted &&
+                pythonProcessExitCode == 0 &&
+                File.Exists(outputPath))
             {
                 try
                 {
@@ -1317,10 +1404,32 @@ public class SceneLoaderArcgis : MonoBehaviour
             depth = Mathf.Max(minimumFootprintDimension, depth);
             float area = width * depth;
 
-            if (droneTransform != null)
+            // When the ArcGIS map is limited to a local extent, use that
+            // same geographic circle for building selection. This prevents
+            // the moving drone from deciding which houses are generated.
+            if (limitMapExtent)
+            {
+                if (!IsInsideConfiguredMapExtent(
+                        placementLatitude,
+                        placementLongitude,
+                        out double distanceFromExtentCenter))
+                {
+                    Debug.LogWarning(
+                        $"❌ Building {i} OUTSIDE MAP EXTENT " +
+                        $"({distanceFromExtentCenter:F1}m > " +
+                        $"{mapExtentSizeMeters:F1}m)"
+                    );
+
+                    continue;
+                }
+            }
+            else if (droneTransform != null)
             {
                 float distance = Vector2.Distance(
-                    new Vector2(droneTransform.position.x, droneTransform.position.z),
+                    new Vector2(
+                        droneTransform.position.x,
+                        droneTransform.position.z
+                    ),
                     new Vector2(center.x, center.z)
                 );
 
@@ -1331,7 +1440,11 @@ public class SceneLoaderArcgis : MonoBehaviour
 
                 if (distance > buildingSpawnRadius)
                 {
-                    Debug.LogWarning($"❌ Building {i} OUTSIDE RADIUS ({distance:F1}m)");
+                    Debug.LogWarning(
+                        $"❌ Building {i} OUTSIDE RADIUS " +
+                        $"({distance:F1}m)"
+                    );
+
                     continue;
                 }
             }
@@ -1427,6 +1540,35 @@ public class SceneLoaderArcgis : MonoBehaviour
                 );
                 uprightController.Configure(modularVisualYaw);
 
+                // Keep generation at the real OSM size. Apply any visual
+                // matching correction afterward on this dedicated child.
+                // This prevents a large scale value from creating additional
+                // modules, roof triangles, and colliders.
+                GameObject footprintScaleObject = new GameObject(
+                    "ModularFootprintScaleRoot"
+                );
+                footprintScaleObject.transform.SetParent(
+                    uprightObject.transform,
+                    false
+                );
+                footprintScaleObject.transform.localPosition = Vector3.zero;
+                footprintScaleObject.transform.localRotation =
+                    Quaternion.identity;
+
+                float safeModularFootprintScale =
+                    Mathf.Clamp(
+                        modularFootprintScale,
+                        0.80f,
+                        2.00f
+                    );
+
+                footprintScaleObject.transform.localScale =
+                    new Vector3(
+                        safeModularFootprintScale,
+                        1f,
+                        safeModularFootprintScale
+                    );
+
                 // Build the exact OSM polygon in east/north metres. Because the
                 // visual root uses a Y-only world rotation, counter-rotate the
                 // footprint by the same yaw so its final world outline remains
@@ -1440,7 +1582,7 @@ public class SceneLoaderArcgis : MonoBehaviour
                     );
 
                 bool generated = modularHouseGenerator.GenerateHouse(
-                    uprightObject.transform,
+                    footprintScaleObject.transform,
                     localFootprint,
                     i,
                     out Transform deliveryTarget
@@ -1466,6 +1608,7 @@ public class SceneLoaderArcgis : MonoBehaviour
                     $"Corners={localFootprint.Count} | " +
                     $"Rectangle W×L={width:F2}×{depth:F2}m | " +
                     $"VisualYaw={modularVisualYaw:F1}° | " +
+                    $"FootprintScale={safeModularFootprintScale:F2} | " +
                     $"DeliveryTarget={(deliveryTarget != null ? deliveryTarget.position.ToString() : "missing")}"
                 );
 
@@ -1878,8 +2021,15 @@ public class SceneLoaderArcgis : MonoBehaviour
                 metersPerDegreeLatitude
             );
 
+            // Keep the polygon at its real geographic size here. Any visual
+            // map-matching correction is applied after generation on
+            // ModularFootprintScaleRoot.
             Vector3 localPoint = removeRootHeading *
-                new Vector3(eastMeters, 0f, northMeters);
+                new Vector3(
+                    eastMeters,
+                    0f,
+                    northMeters
+                );
 
             if (localPoints.Count == 0 ||
                 HorizontalSqrDistance(
@@ -2660,6 +2810,76 @@ public class SceneLoaderArcgis : MonoBehaviour
         return true;
     }
 
+    bool IsInsideConfiguredMapExtent(
+        double latitude,
+        double longitude,
+        out double distanceMeters)
+    {
+        distanceMeters = 0.0;
+
+        if (!limitMapExtent ||
+            arcGISMap == null ||
+            arcGISMap.OriginPosition == null)
+        {
+            return true;
+        }
+
+        double centerLatitude = arcGISMap.OriginPosition.Y;
+        double centerLongitude = arcGISMap.OriginPosition.X;
+
+        distanceMeters = CalculateGeographicDistanceMeters(
+            centerLatitude,
+            centerLongitude,
+            latitude,
+            longitude
+        );
+
+        return distanceMeters <=
+            System.Math.Max(1.0, mapExtentSizeMeters);
+    }
+
+    double CalculateGeographicDistanceMeters(
+        double latitudeA,
+        double longitudeA,
+        double latitudeB,
+        double longitudeB)
+    {
+        const double earthRadiusMeters = 6371000.0;
+        const double degreesToRadians =
+            System.Math.PI / 180.0;
+
+        double latitudeARadians =
+            latitudeA * degreesToRadians;
+        double latitudeBRadians =
+            latitudeB * degreesToRadians;
+
+        double latitudeDelta =
+            (latitudeB - latitudeA) * degreesToRadians;
+        double longitudeDelta =
+            (longitudeB - longitudeA) * degreesToRadians;
+
+        double sinLatitude =
+            System.Math.Sin(latitudeDelta * 0.5);
+        double sinLongitude =
+            System.Math.Sin(longitudeDelta * 0.5);
+
+        double haversine =
+            sinLatitude * sinLatitude +
+            System.Math.Cos(latitudeARadians) *
+            System.Math.Cos(latitudeBRadians) *
+            sinLongitude * sinLongitude;
+
+        double centralAngle =
+            2.0 * System.Math.Atan2(
+                System.Math.Sqrt(haversine),
+                System.Math.Sqrt(
+                    System.Math.Max(0.0, 1.0 - haversine)
+                )
+            );
+
+        return earthRadiusMeters * centralAngle;
+    }
+
     float NormalizeHeadingDegrees(float headingDegrees)
     {
         headingDegrees %= 360f;
@@ -3265,35 +3485,109 @@ public class SceneLoaderArcgis : MonoBehaviour
             GameManager.homeAlt
         );
 
+        string radiusArgument =
+            osmQueryRadiusMeters.ToString(
+                CultureInfo.InvariantCulture
+            );
+
+        string arguments =
+            $"\"{scriptPath}\" " +
+            $"--custom-location {customLocation}";
+
+        bool usingExpandedWrapper =
+            fetchMoreOsmBuildings &&
+            string.Equals(
+                Path.GetFileName(scriptPath),
+                expandedBuildingScriptName,
+                System.StringComparison.OrdinalIgnoreCase
+            );
+
+        if (usingExpandedWrapper)
+        {
+            arguments +=
+                $" --radius-meters {radiusArgument}";
+        }
+
         ProcessStartInfo psi = new ProcessStartInfo
         {
             FileName = pythonPath,
-            Arguments = $"\"{scriptPath}\" --custom-location {customLocation}",
+            Arguments = arguments,
+            WorkingDirectory =
+                Path.GetDirectoryName(scriptPath),
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
 
-        Process p = new Process();
-        p.StartInfo = psi;
+        pythonProcessCompleted = false;
+        pythonProcessExitCode = int.MinValue;
 
-        p.OutputDataReceived += (sender, args) =>
+        pythonProcess = new Process
         {
-            if (!string.IsNullOrEmpty(args.Data))
-                Debug.Log("[PYTHON] " + args.Data);
+            StartInfo = psi,
+            EnableRaisingEvents = true
         };
 
-        p.ErrorDataReceived += (sender, args) =>
-        {
-            if (!string.IsNullOrEmpty(args.Data))
-                Debug.LogError("🐍 ERROR: " + args.Data);
-        };
+        pythonProcess.OutputDataReceived +=
+            (sender, args) =>
+            {
+                if (!string.IsNullOrEmpty(args.Data))
+                {
+                    Debug.Log("[PYTHON] " + args.Data);
+                }
+            };
 
-        p.Start();
-        p.BeginOutputReadLine();
-        p.BeginErrorReadLine();
+        pythonProcess.ErrorDataReceived +=
+            (sender, args) =>
+            {
+                if (!string.IsNullOrEmpty(args.Data))
+                {
+                    Debug.LogError(
+                        "🐍 ERROR: " + args.Data
+                    );
+                }
+            };
+
+        pythonProcess.Exited +=
+            (sender, args) =>
+            {
+                try
+                {
+                    pythonProcessExitCode =
+                        pythonProcess.ExitCode;
+                }
+                catch
+                {
+                    pythonProcessExitCode = -1;
+                }
+
+                pythonProcessCompleted = true;
+            };
+
+        try
+        {
+            Debug.Log(
+                "🐍 Starting Python: " +
+                pythonPath + " " + arguments
+            );
+
+            pythonProcess.Start();
+            pythonProcess.BeginOutputReadLine();
+            pythonProcess.BeginErrorReadLine();
+        }
+        catch (System.Exception exception)
+        {
+            pythonProcessExitCode = -1;
+            pythonProcessCompleted = true;
+
+            Debug.LogError(
+                "❌ Could not start Python: " +
+                exception.Message
+            );
+        }
     }
+
     void CarveRiversIntoTerrain(Result result)
     {
         if (terrain == null || result.rivers == null || arcGISConverter == null) return;
@@ -3594,4 +3888,22 @@ public class SceneLoaderArcgis : MonoBehaviour
         return generatedObjectsRoot;
     }
 
+
+    void OnValidate()
+    {
+        modularFootprintScale =
+            Mathf.Clamp(modularFootprintScale, 0.80f, 2.00f);
+
+        mapExtentSizeMeters =
+            System.Math.Max(1.0, mapExtentSizeMeters);
+
+        buildingSpawnRadius =
+            Mathf.Max(1f, buildingSpawnRadius);
+
+        osmQueryRadiusMeters =
+            System.Math.Max(
+                1.0,
+                osmQueryRadiusMeters
+            );
+    }
 }
