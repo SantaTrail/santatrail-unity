@@ -17,6 +17,10 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/DroneTEST-KU.unity
     guid: 27fd756e99d9144a9ab78c2107a4d202
+  - enabled: 1
+    path: Assets/Scenes/Levels/LV1.unity
+    guid: eadc4d26e84fa4a13ba46a502003d8b7
   m_configObjects:
+    com.unity.dt.app-ui: {fileID: 11400000, guid: 1b1c20d82303e4b5781c3ef50ac1449f, type: 2}
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0

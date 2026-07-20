@@ -27,7 +27,6 @@ public class DeliveryScoreManager : MonoBehaviour
     [Min(0f)] public float buildingScanTimeoutSeconds = 60f;
 
     [Header("OSM Delivery")]
-    public float deliveryRange = 2f;
     public float hoverSecondsRequired = 1.5f;
     public int rewardPerDelivery = 100;
     public float scanInterval = 1f;
@@ -36,7 +35,7 @@ public class DeliveryScoreManager : MonoBehaviour
     public bool includeInactiveRenderers = false;
 
     [Header("Delivery Precision")]
-    [Tooltip("Horizontal radius around the selected roof center where a present can be delivered when roof-footprint checking is disabled.")]
+    [Tooltip("Horizontal delivery radius around the chimney opening or roof target. This single value also controls the visible delivery ring size.")]
     [Min(0.1f)] public float deliveryRadius = 5f;
     [Tooltip("Require the drone to be horizontally above the detected roof before delivery starts. This keeps the gift directly below the drone.")]
     public bool requireDroneAboveRoofForDelivery = true;
@@ -104,9 +103,6 @@ public class DeliveryScoreManager : MonoBehaviour
     public float defaultChimneyOpeningWidth = 0.8f;
     [Tooltip("Extra height above the detected or authored chimney opening.")]
     public float chimneyOpeningHeightOffset = 0.02f;
-    [Min(0.1f)]
-    [Tooltip("The drone must hover this close horizontally to the chimney opening.")]
-    public float chimneyDeliveryRadius = 0.75f;
     [Tooltip("Creates a simple square chimney when no chimney prefab is assigned.")]
     public bool createFallbackChimney = true;
     public Vector3 fallbackChimneySize = new Vector3(0.9f, 1.5f, 0.9f);
@@ -398,12 +394,49 @@ public class DeliveryScoreManager : MonoBehaviour
             return;
         }
 
-        GameObject droneObj = GameObject.FindGameObjectWithTag("Drone");
+        GameObject droneObj = FindDroneObject();
         if (droneObj != null)
         {
             ArcGISLocationComponent locationComponent = droneObj.GetComponentInChildren<ArcGISLocationComponent>(true);
             drone = locationComponent != null ? locationComponent.transform : droneObj.transform;
         }
+    }
+
+    GameObject FindDroneObject()
+    {
+        GameObject droneObj = GameObject.FindGameObjectWithTag("Drone");
+        if (droneObj != null)
+        {
+            return droneObj;
+        }
+
+        droneObj = GameObject.Find("drone");
+        if (droneObj != null)
+        {
+            return droneObj;
+        }
+
+        droneObj = GameObject.Find("Drone");
+        if (droneObj != null)
+        {
+            return droneObj;
+        }
+
+        MAVLinkReceiver activeReceiver = MAVLinkReceiver.Active;
+        if (activeReceiver != null)
+        {
+            ArcGISLocationComponent locationComponent =
+                activeReceiver.GetComponentInChildren<ArcGISLocationComponent>(true);
+
+            if (locationComponent != null)
+            {
+                return locationComponent.gameObject;
+            }
+
+            return activeReceiver.gameObject;
+        }
+
+        return null;
     }
 
     void ScanBuildings()
@@ -631,9 +664,7 @@ public class DeliveryScoreManager : MonoBehaviour
 
     float GetTargetDeliveryRadius(SpawnedBuildingTarget target)
     {
-        return target != null && target.chimneyDropPoint != null
-            ? Mathf.Max(0.1f, chimneyDeliveryRadius)
-            : Mathf.Max(0.1f, deliveryRadius);
+        return Mathf.Max(0.1f, deliveryRadius);
     }
 
     bool IsDroneWithinDeliveryRadius(SpawnedBuildingTarget target)
