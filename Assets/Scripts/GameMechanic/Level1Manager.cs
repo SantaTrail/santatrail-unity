@@ -67,7 +67,7 @@ public class Level1Manager : MonoBehaviour
     {
         if (objectiveText != null)
         {
-            objectiveText.text = $"{objectivePrefix}: {remaining}";
+            objectiveText.text = $"{objectivePrefix}{remaining}";
         }
     }
 

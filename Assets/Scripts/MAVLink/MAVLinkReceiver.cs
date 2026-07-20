@@ -9,8 +9,11 @@ using UnityEngine.InputSystem;
 #endif
 
 using Esri.ArcGISMapsSDK.Components;
+using Esri.ArcGISMapsSDK.Utils.GeoCoord;
 using Esri.GameEngine.Geometry;
+using Esri.GameEngine.Extent;
 
+[DefaultExecutionOrder(9000)]
 public class MAVLinkReceiver : MonoBehaviour
 {
     public static MAVLinkReceiver Active { get; private set; }
@@ -44,35 +47,86 @@ public class MAVLinkReceiver : MonoBehaviour
     public float lastAttitudeTime { get; private set; }
     public float lastPositionTime { get; private set; }
 
+    [Header("ArcGIS Rotation Smoothing")]
+    [Tooltip("Apply MAVLink heading to ArcGIS Location rotation. This keeps rotation active even before the drone starts moving.")]
+    public bool applyTelemetryRotation = true;
+
+    [Tooltip("Use GLOBAL_POSITION_INT heading when available. Leave OFF to prefer ATTITUDE yaw, which also updates while stationary.")]
+    public bool useGpsHeadingForRotation = true;
+
+    [Tooltip("Model heading correction. Start with 180 for the current drone asset; use 0 if the model faces backward.")]
+    public float modelHeadingOffsetDegrees = 0.1f;
+
+    [Tooltip("The imported drone asset is upright at ArcGIS pitch 90 in this project.")]
+    public float modelBasePitchDegrees = 90f;
+
+    public float modelBaseRollDegrees = 0f;
+
+    [Tooltip("Keep OFF for the smoothest result. Enable later to show MAVLink pitch and roll.")]
+    public bool applyTelemetryPitchAndRoll = false;
+
+    [Min(0.01f)]
+    [Tooltip("Smaller values rotate faster. Try 0.12 to 0.25 seconds.")]
+    public float headingSmoothTime = 0.22f;
+
+    [Min(1f)]
+    public float maximumHeadingSpeed = 140f;
+
+    [Min(0f)]
+    [Tooltip("Ignores very small heading changes that can look like vibration.")]
+    public float headingDeadZoneDegrees = 0.35f;
+
+    [Min(0.001f)]
+    [Tooltip(
+        "Avoids writing an exact 0/360 heading to the ArcGIS rotation path. " +
+        "0.1 degrees is visually indistinguishable from 0."
+    )]
+    public float zeroHeadingSafetyEpsilon = 0.1f;
+
+    [Min(0f)]
+    [Tooltip(
+        "Do not rewrite ArcGIS rotation when the value has barely changed."
+    )]
+    public float rotationWriteThresholdDegrees = 0.02f;
+
+    private float smoothedArcGisHeading;
+    private float headingSmoothVelocity;
+    private bool hasSmoothedHeading;
+
+    private float lastWrittenHeading;
+    private float lastWrittenPitch;
+    private float lastWrittenRoll;
+    private bool hasWrittenArcGisRotation;
+
     [Header("Smoothing")]
     [Tooltip("Higher = faster response")]
-    public float positionSmoothSpeed = 60f;
+    public float positionSmoothSpeed = 8f;
 
     [Tooltip("How quickly the visible position eases toward incoming telemetry")]
-    public float positionSmoothTime = 0.18f;
+    public float positionSmoothTime = 0.20f;
 
     [Tooltip("Predicts motion between MAVLink packets")]
-    public float extrapolationTime = 0.03f;
+    public float extrapolationTime = 0.04f;
 
     [Tooltip("Max seconds to continue dead-reckoning when GPS packets pause")]
-    public float maxExtrapolationGap = 10f;
+    public float maxExtrapolationGap = 0.25f;
 
     [Tooltip("Snap when close to target position (meters) to avoid apparent short-stop lag")]
-    public float snapDistanceMeters = 0.8f;
+    public float snapDistanceMeters = 0.02f;
 
     [Header("Velocity Recovery")]
     [Tooltip("Treat speeds below this as potentially stale (m/s)")]
     public float staleSpeedThreshold = 0.15f;
 
     [Tooltip("Continue using last non-zero velocity for this long when stream reports near-zero speed")]
-    public float coastSeconds = 2.0f;
+    public float coastSeconds = 0.20f;
 
     [Header("Guided Assist")]
     [Tooltip("When enabled, Unity can keep moving visually if GUIDED stalls. Keep OFF to match QGroundControl exactly.")]
     public bool enableGuidedAssist = false;
 
     [Tooltip("When GUIDED is stalled but target is still far, resend reposition command to wake ArduPilot motion.")]
-    public bool enableGuidedRepositionNudge = true;
+    public bool enableGuidedRepositionNudge = false;
 
     [Tooltip("Seconds of near-zero speed before sending a reposition nudge.")]
     public float guidedStallSecondsBeforeNudge = 2.0f;
@@ -88,9 +142,6 @@ public class MAVLinkReceiver : MonoBehaviour
     private double smoothLat;
     private double smoothLon;
     private double smoothAlt;
-    private float smoothLatVelocity;
-    private float smoothLonVelocity;
-    private float smoothAltVelocity;
 
     private bool hasTargetPosition;
     private bool hasSmoothedPosition;
@@ -173,6 +224,19 @@ public class MAVLinkReceiver : MonoBehaviour
             case 26: return "AUTOROTATE";
             case 27: return "AUTO_RTL";
             default: return "UNKNOWN";
+        }
+    }
+
+    void Awake()
+    {
+        zeroHeadingSafetyEpsilon =
+            Mathf.Max(0.001f, zeroHeadingSafetyEpsilon);
+
+        // Treat an Inspector value of 0 as an almost-zero heading correction.
+        // This keeps the intended direction without writing an exact zero.
+        if (Mathf.Abs(modelHeadingOffsetDegrees) < 0.0001f)
+        {
+            modelHeadingOffsetDegrees = zeroHeadingSafetyEpsilon;
         }
     }
 
@@ -298,9 +362,151 @@ public class MAVLinkReceiver : MonoBehaviour
         }
     }
 
-    void FixedUpdate()
+    void LateUpdate()
     {
+        // Position and rotation are applied together after MAVLink packets are
+        // processed in Update. This prevents physics/render timing mismatch.
         ApplySmoothedTransform();
+        ApplySmoothedRotation();
+    }
+
+    void ApplySmoothedRotation()
+    {
+        if (!applyTelemetryRotation || locationComponent == null)
+        {
+            return;
+        }
+
+        bool attitudeFresh =
+            lastAttitudeTime > 0f &&
+            (Time.time - lastAttitudeTime) <= 0.5f;
+
+        bool headingFresh =
+            hasHeadingDeg &&
+            (Time.time - lastHeadingTime) <= 1.0f;
+
+        float mavHeadingDegrees;
+
+        // Use one stable source instead of switching between ATTITUDE and GPS
+        // every frame. GLOBAL_POSITION_INT.hdg is also the heading normally
+        // represented by the vehicle arrow in QGroundControl.
+        if (useGpsHeadingForRotation && headingFresh)
+        {
+            mavHeadingDegrees = headingDeg;
+        }
+        else if (attitudeFresh)
+        {
+            mavHeadingDegrees = Mathf.Repeat(
+                yaw * Mathf.Rad2Deg,
+                360f
+            );
+        }
+        else if (headingFresh)
+        {
+            mavHeadingDegrees = headingDeg;
+        }
+        else
+        {
+            return;
+        }
+
+        // Apply the heading directly. The model offset is the only place that
+        // should correct a model whose forward axis is reversed.
+        float targetArcGisHeading = MakeHeadingSafe(
+            Mathf.Repeat(
+                mavHeadingDegrees + modelHeadingOffsetDegrees,
+                360f
+            )
+        );
+
+        if (!hasSmoothedHeading)
+        {
+            smoothedArcGisHeading = targetArcGisHeading;
+            headingSmoothVelocity = 0f;
+            hasSmoothedHeading = true;
+        }
+
+        float headingError = Mathf.Abs(
+            Mathf.DeltaAngle(smoothedArcGisHeading, targetArcGisHeading)
+        );
+
+        if (headingError > headingDeadZoneDegrees)
+        {
+            smoothedArcGisHeading = Mathf.SmoothDampAngle(
+                smoothedArcGisHeading,
+                targetArcGisHeading,
+                ref headingSmoothVelocity,
+                Mathf.Max(0.01f, headingSmoothTime),
+                Mathf.Max(1f, maximumHeadingSpeed),
+                Mathf.Max(Time.deltaTime, 0.0001f)
+            );
+        }
+
+        float arcGisPitch = modelBasePitchDegrees;
+        float arcGisRoll = modelBaseRollDegrees;
+
+        if (applyTelemetryPitchAndRoll && attitudeFresh)
+        {
+            arcGisPitch += -pitch * Mathf.Rad2Deg;
+            arcGisRoll += roll * Mathf.Rad2Deg;
+        }
+
+        smoothedArcGisHeading =
+            MakeHeadingSafe(smoothedArcGisHeading);
+
+        if (!IsFinite(smoothedArcGisHeading) ||
+            !IsFinite(arcGisPitch) ||
+            !IsFinite(arcGisRoll))
+        {
+            return;
+        }
+
+        bool headingChanged =
+            !hasWrittenArcGisRotation ||
+            Mathf.Abs(
+                Mathf.DeltaAngle(
+                    lastWrittenHeading,
+                    smoothedArcGisHeading
+                )
+            ) >= rotationWriteThresholdDegrees;
+
+        bool pitchChanged =
+            !hasWrittenArcGisRotation ||
+            Mathf.Abs(lastWrittenPitch - arcGisPitch) >= 0.01f;
+
+        bool rollChanged =
+            !hasWrittenArcGisRotation ||
+            Mathf.Abs(lastWrittenRoll - arcGisRoll) >= 0.01f;
+
+        if (!headingChanged && !pitchChanged && !rollChanged)
+        {
+            return;
+        }
+
+        locationComponent.Rotation = new ArcGISRotation(
+            smoothedArcGisHeading,
+            arcGisPitch,
+            arcGisRoll
+        );
+
+        lastWrittenHeading = smoothedArcGisHeading;
+        lastWrittenPitch = arcGisPitch;
+        lastWrittenRoll = arcGisRoll;
+        hasWrittenArcGisRotation = true;
+    }
+
+    float MakeHeadingSafe(float heading)
+    {
+        float normalized = Mathf.Repeat(heading, 360f);
+        float epsilon = Mathf.Max(0.001f, zeroHeadingSafetyEpsilon);
+
+        if (normalized < epsilon ||
+            normalized > 360f - epsilon)
+        {
+            return epsilon;
+        }
+
+        return normalized;
     }
 
     void HandleMessage(MAVLink.MAVLinkMessage msg)
@@ -597,9 +803,6 @@ public class MAVLinkReceiver : MonoBehaviour
             smoothLat = targetLat;
             smoothLon = targetLon;
             smoothAlt = targetAlt;
-            smoothLatVelocity = 0f;
-            smoothLonVelocity = 0f;
-            smoothAltVelocity = 0f;
             hasSmoothedPosition = true;
         }
 
@@ -676,30 +879,16 @@ public class MAVLinkReceiver : MonoBehaviour
         }
         else
         {
-            smoothLat = Mathf.SmoothDamp(
-                (float)smoothLat,
-                (float)predictedLat,
-                ref smoothLatVelocity,
-                smoothTime,
-                Mathf.Infinity,
-                dt
+            // Keep latitude and longitude as doubles. Converting coordinates
+            // around 13 / 100 degrees to float causes metre-sized quantisation
+            // and visible jitter.
+            double blend = 1.0 - System.Math.Exp(
+                -dt / System.Math.Max(0.01, smoothTime)
             );
-            smoothLon = Mathf.SmoothDamp(
-                (float)smoothLon,
-                (float)predictedLon,
-                ref smoothLonVelocity,
-                smoothTime,
-                Mathf.Infinity,
-                dt
-            );
-            smoothAlt = Mathf.SmoothDamp(
-                (float)smoothAlt,
-                (float)predictedAlt,
-                ref smoothAltVelocity,
-                smoothTime,
-                Mathf.Infinity,
-                dt
-            );
+
+            smoothLat += (predictedLat - smoothLat) * blend;
+            smoothLon += (predictedLon - smoothLon) * blend;
+            smoothAlt += (predictedAlt - smoothAlt) * blend;
         }
 
     double dLatM = (predictedLat - smoothLat) * metersPerDegLat;
@@ -707,14 +896,13 @@ public class MAVLinkReceiver : MonoBehaviour
     double dAltM = predictedAlt - smoothAlt;
     double distM = System.Math.Sqrt(dLatM * dLatM + dLonM * dLonM + dAltM * dAltM);
 
-    if (distM <= snapDistanceMeters)
+    bool nearlyStopped = speed < 0.05f;
+
+    if (nearlyStopped && distM <= snapDistanceMeters)
     {
         smoothLat = predictedLat;
         smoothLon = predictedLon;
         smoothAlt = predictedAlt;
-        smoothLatVelocity = 0f;
-        smoothLonVelocity = 0f;
-        smoothAltVelocity = 0f;
     }
 
     if (!IsValidGeo((double)smoothLat, (double)smoothLon, (double)smoothAlt))
@@ -876,6 +1064,7 @@ public class MAVLinkReceiver : MonoBehaviour
         debugSb.Append("yaw src: ").Append(debugAttitudeSource).Append('\n');
         debugSb.Append("yaw(att): ").Append((yaw * Mathf.Rad2Deg).ToString("F1")).Append(" deg\n");
         debugSb.Append("heading(gps): ").Append(hasHeadingDeg ? headingDeg.ToString("F1") : "N/A").Append(" deg\n");
+        debugSb.Append("heading(applied): ").Append(hasSmoothedHeading ? smoothedArcGisHeading.ToString("F1") : "N/A").Append(" deg\n");
         debugSb.Append("target dist(nav): ").Append(hasNavTargetDist ? navTargetDistM.ToString("F1") : "N/A").Append(" m\n");
         debugSb.Append("target brg(nav): ").Append(hasNavTargetDist ? navTargetBearingDeg.ToString("F1") : "N/A").Append(" deg\n");
         debugSb.Append("armed/guided: ").Append(hbArmed ? "Y" : "N").Append(" / ").Append(hbGuided ? "Y" : "N").Append('\n');
@@ -947,5 +1136,16 @@ public class MAVLinkReceiver : MonoBehaviour
             return false;
 
         return true;
+    }
+
+    void OnValidate()
+    {
+        headingSmoothTime = Mathf.Max(0.01f, headingSmoothTime);
+        maximumHeadingSpeed = Mathf.Max(1f, maximumHeadingSpeed);
+        headingDeadZoneDegrees = Mathf.Max(0f, headingDeadZoneDegrees);
+        zeroHeadingSafetyEpsilon =
+            Mathf.Max(0.001f, zeroHeadingSafetyEpsilon);
+        rotationWriteThresholdDegrees =
+            Mathf.Max(0f, rotationWriteThresholdDegrees);
     }
 }

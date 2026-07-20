@@ -571,7 +571,7 @@ public class ManualDeliveryScoreManager : MonoBehaviour
             return;
         }
 
-        GameObject droneObject = GameObject.FindGameObjectWithTag("Drone");
+        GameObject droneObject = FindDroneObject();
         if (droneObject == null)
         {
             return;
@@ -581,6 +581,43 @@ public class ManualDeliveryScoreManager : MonoBehaviour
             droneObject.GetComponentInChildren<ArcGISLocationComponent>(true);
 
         drone = locationComponent != null ? locationComponent.transform : droneObject.transform;
+    }
+
+    private GameObject FindDroneObject()
+    {
+        GameObject droneObject = GameObject.FindGameObjectWithTag("Drone");
+        if (droneObject != null)
+        {
+            return droneObject;
+        }
+
+        droneObject = GameObject.Find("drone");
+        if (droneObject != null)
+        {
+            return droneObject;
+        }
+
+        droneObject = GameObject.Find("Drone");
+        if (droneObject != null)
+        {
+            return droneObject;
+        }
+
+        MAVLinkReceiver activeReceiver = MAVLinkReceiver.Active;
+        if (activeReceiver != null)
+        {
+            ArcGISLocationComponent locationComponent =
+                activeReceiver.GetComponentInChildren<ArcGISLocationComponent>(true);
+
+            if (locationComponent != null)
+            {
+                return locationComponent.gameObject;
+            }
+
+            return activeReceiver.gameObject;
+        }
+
+        return null;
     }
 
     private string BuildTargetKey(ManualDeliveryTarget marker)
