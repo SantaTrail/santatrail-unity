@@ -94,7 +94,7 @@ public class MissionGenerator : MonoBehaviour
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            Process.Start(openQgcInfo);
+            // Process.Start(openQgcInfo);
         }
         catch (System.Exception ex)
         {

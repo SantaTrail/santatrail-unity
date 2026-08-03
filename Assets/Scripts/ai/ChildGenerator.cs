@@ -3,7 +3,7 @@ using UnityEngine;
 public class ChildGenerator : MonoBehaviour
 {
     private NameList names;
-    private ToyList toys;
+    // private ToyList toys;
     private PersonalityList personalities;
     private EmotionList emotions;
     private GoodDeedList deeds;
@@ -13,8 +13,8 @@ public class ChildGenerator : MonoBehaviour
         names = JsonUtility.FromJson<NameList>(
             Resources.Load<TextAsset>("Data/names").text);
 
-        toys = JsonUtility.FromJson<ToyList>(
-            Resources.Load<TextAsset>("Data/toys").text);
+        // toys = JsonUtility.FromJson<ToyList>(
+        //     Resources.Load<TextAsset>("Data/toys").text);
 
         personalities = JsonUtility.FromJson<PersonalityList>(
             Resources.Load<TextAsset>("Data/personalities").text);
@@ -26,31 +26,57 @@ public class ChildGenerator : MonoBehaviour
             Resources.Load<TextAsset>("Data/good_deeds").text);
     }
 
-    public ChildData Generate()
+    public ChildData Generate(ToyData selectedToy)
     {
         ChildData child = new ChildData();
 
         child.name =
             names.names[Random.Range(0, names.names.Length)];
 
-        child.age =
-            Random.Range(5,11);
+        child.age = 8;
+        // child.age =
+        //     Random.Range(
+        //         selectedToy.minAge,
+        //         selectedToy.maxAge + 1);
 
-        child.personality =
-            personalities.personalities[
-                Random.Range(0, personalities.personalities.Length)];
+        string personalityName =
+            selectedToy.suitablePersonalities[
+                Random.Range(
+                    0,
+                    selectedToy.suitablePersonalities.Length)];
 
-        child.emotion =
-            emotions.emotions[
-                Random.Range(0, emotions.emotions.Length)];
+        child.personality = personalities.personalities[0]; // Default
+
+        foreach (PersonalityData p in personalities.personalities)
+        {
+            if (string.Equals(p.type, personalityName, System.StringComparison.OrdinalIgnoreCase))
+            {
+                child.personality = p;
+                break;
+            }
+        }
+
+        string emotionName =
+            selectedToy.suitableEmotions[
+                Random.Range(0, selectedToy.suitableEmotions.Length)
+            ];
+
+        child.emotion = emotions.emotions[0]; // Default
+
+        foreach (EmotionData e in emotions.emotions)
+        {
+            if (string.Equals(e.emotion, emotionName, System.StringComparison.OrdinalIgnoreCase))
+            {
+                child.emotion = e;
+                break;
+            }
+        }
 
         child.goodDeed =
             deeds.goodDeeds[
                 Random.Range(0, deeds.goodDeeds.Length)];
 
-        child.targetToy =
-            toys.toys[
-                Random.Range(0, toys.toys.Length)];
+        child.targetToy = selectedToy;
 
         string[] diff =
         {
