@@ -13,21 +13,49 @@ public class GiftButton : MonoBehaviour
 
     //-------------------------------------------------
 
+    // public void Setup(
+    //     ToyData newToy,
+    //     SantaLetterGameManager manager)
+    // {
+    //     toy = newToy;
+    //     santaLetterGameManager = manager;
+
+    //     if (toyName != null)
+    //     {
+    //         toyName.text = toy.name;
+    //     }
+
+    //     if (toyImage != null && toy.icon != null)
+    //     {
+    //         toyImage.sprite = toy.icon;
+    //     }
+    // }
+
     public void Setup(
         ToyData newToy,
         SantaLetterGameManager manager)
     {
+        Debug.Log("GiftButton.Setup called");
+
         toy = newToy;
         santaLetterGameManager = manager;
 
-        if (toyName != null)
-            if (toyName != null)
-                {
-                    toyName.text = "";
-                }
+        Debug.Log("Toy = " + toy.name);
+
+        if (toyName == null)
+        {
+            Debug.LogError("toyName is NULL!");
+        }
+        else
+        {
+            toyName.text = toy.name;
+            Debug.Log("Button text = " + toyName.text);
+        }
 
         if (toyImage != null)
+        {
             toyImage.sprite = toy.icon;
+        }
     }
 
     //-------------------------------------------------

@@ -3,18 +3,82 @@
     {
       "id": "teddy",
       "name": "Teddy Bear",
-      "description": "Soft and cuddly",
-      "easyClues": ["soft", "hug", "warm"],
-      "mediumClues": ["always beside me", "fluffy friend", "keeps me company"],
-      "hardClues": ["comfort after a long day", "never leaves my bed", "silent friend"]
+      "description": "A soft cuddly friend.",
+      "easyClues": [
+        "soft",
+        "fluffy",
+        "great for hugs"
+      ],
+      "mediumClues": [
+        "always on my bed",
+        "keeps me company",
+        "my favorite bedtime friend"
+      ],
+      "hardClues": [
+        "comfort after a long day",
+        "never says a word",
+        "always waiting on my pillow"
+      ]
     },
     {
       "id": "robot",
       "name": "Robot",
-      "description": "Walks and talks",
-      "easyClues": ["beeps", "lights", "walks"],
-      "mediumClues": ["metal friend", "buttons", "machine"],
-      "hardClues": ["future companion", "powered by batteries", "mechanical helper"]
+      "description": "A battery-powered mechanical toy.",
+      "easyClues": [
+        "lights",
+        "beeps",
+        "walks"
+      ],
+      "mediumClues": [
+        "metal friend",
+        "buttons",
+        "machine"
+      ],
+      "hardClues": [
+        "future companion",
+        "powered by batteries",
+        "mechanical helper"
+      ]
+    },
+    {
+      "id": "drone",
+      "name": "Toy Drone",
+      "description": "A small flying toy.",
+      "easyClues": [
+        "flies",
+        "propellers",
+        "remote control"
+      ],
+      "mediumClues": [
+        "hovers in the air",
+        "takes off from my hands",
+        "buzzes above me"
+      ],
+      "hardClues": [
+        "mini flying machine",
+        "looks like a tiny aircraft",
+        "can soar without wings flapping"
+      ]
+    },
+    {
+      "id": "puzzle",
+      "name": "Puzzle",
+      "description": "A picture made from many pieces.",
+      "easyClues": [
+        "pieces",
+        "picture",
+        "fit together"
+      ],
+      "mediumClues": [
+        "takes patience",
+        "build one piece at a time",
+        "makes a complete image"
+      ],
+      "hardClues": [
+        "a challenge for careful thinkers",
+        "every small part has its place",
+        "finished only when every piece connects"
+      ]
     }
   ]
 }

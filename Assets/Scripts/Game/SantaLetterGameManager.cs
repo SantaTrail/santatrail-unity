@@ -9,12 +9,15 @@ public class SantaLetterGameManager : MonoBehaviour
     public LetterUI letterUI;
     public HintPanel hintPanel;
     public DeliveryManager deliveryManager;
+    public ToyLoader toyLoader;
+    private ToyData[] allToys;
 
     [Header("Gift Buttons")]
     public GiftButton[] giftButtons;
 
     [Header("Toy Database")]
-    public ToyData[] allToys;
+    // public ToyData[] allToys;
+    public ResultPopup resultPopup;
 
     private ChildData currentChild;
 
@@ -23,9 +26,18 @@ public class SantaLetterGameManager : MonoBehaviour
     //----------------------------------------------------
 
     void Start()
+{
+    allToys = toyLoader.toys;
+
+    Debug.Log("Number of Toys = " + allToys.Length);
+
+    foreach (ToyData toy in allToys)
     {
-        StartNewDelivery();
+        Debug.Log("Loaded Toy: " + toy.name);
     }
+
+    StartNewDelivery();
+}
 
     //----------------------------------------------------
 
@@ -67,6 +79,8 @@ public class SantaLetterGameManager : MonoBehaviour
 
     void GenerateGiftChoices()
     {
+        Debug.Log("GenerateGiftChoices()");
+
         List<ToyData> pool =
             new List<ToyData>(allToys);
 
@@ -91,6 +105,8 @@ public class SantaLetterGameManager : MonoBehaviour
 
         for (int i = 0; i < giftButtons.Length; i++)
         {
+            Debug.Log("Button " + i + " = " + choices[i].name);
+
             giftButtons[i].Setup(
                 choices[i],
                 this
@@ -100,22 +116,47 @@ public class SantaLetterGameManager : MonoBehaviour
 
     //----------------------------------------------------
 
+    // public void SelectGift(ToyData selectedToy)
+    // {
+    //     if (selectedToy.id ==
+    //         currentChild.targetToy.id)
+    //     {
+    //         Debug.Log("Correct!");
+
+    //         deliveryManager.CompleteDelivery();
+
+    //         return;
+    //     }
+
+    //     Debug.Log("Wrong!");
+
+    //     ShowNextHint();
+    // }
+
     public void SelectGift(ToyData selectedToy)
+{
+    Debug.Log("Clicked : " + selectedToy.name);
+
+    // Correct answer
+    if (selectedToy.id == currentChild.targetToy.id)
     {
-        if (selectedToy.id ==
-            currentChild.targetToy.id)
-        {
-            Debug.Log("Correct!");
+        resultPopup.ShowCorrect();
 
-            deliveryManager.CompleteDelivery();
+        Debug.Log("Correct!");
 
-            return;
-        }
+        // Wait 2 seconds before the next child
+        Invoke(nameof(StartNewDelivery), 2f);
 
-        Debug.Log("Wrong!");
-
-        ShowNextHint();
+        return;
     }
+
+    // Wrong answer
+    resultPopup.ShowWrong();
+
+    ShowNextHint();
+
+    Debug.Log("Wrong!");
+}
 
     //----------------------------------------------------
 
