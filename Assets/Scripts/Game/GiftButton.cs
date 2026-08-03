@@ -54,7 +54,12 @@ public class GiftButton : MonoBehaviour
 
         if (toyImage != null)
         {
-            toyImage.sprite = toy.icon;
+            if(toyImage != null)
+            {
+                toyImage.enabled = toy.icon != null;
+
+                toyImage.sprite = toy.icon;
+            }
         }
     }
 

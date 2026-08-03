@@ -54,7 +54,7 @@ public static class AutoArduPilotOnPlay
         Process.Start(sitlStartInfo);
         UnityEngine.Debug.Log($"AutoArduPilotOnPlay: launched ArduPilot using {scriptPath}");
 
-        _ = LaunchQgcAfterSITLBootAsync();
+        // _ = LaunchQgcAfterSITLBootAsync();
     }
 
     private static async Task LaunchQgcAfterSITLBootAsync()

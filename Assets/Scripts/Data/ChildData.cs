@@ -1,6 +1,6 @@
-using System;
+using UnityEngine;
 
-[Serializable]
+[System.Serializable]
 public class ChildData
 {
     public string name;

@@ -66,7 +66,9 @@ public class SantaLetterGameManager : MonoBehaviour
 
     hintPanel.Hide();
 
-    currentChild = childGenerator.Generate();
+    ToyData selectedToy = toyLoader.GetRandomToy();
+    currentChild = childGenerator.Generate(selectedToy);
+    
 
     Debug.Log("Child Generated: " + currentChild.name);
 
@@ -81,8 +83,21 @@ public class SantaLetterGameManager : MonoBehaviour
     {
         Debug.Log("GenerateGiftChoices()");
 
-        List<ToyData> pool =
-            new List<ToyData>(allToys);
+        List<ToyData> pool = new List<ToyData>();
+
+        foreach(ToyData toy in allToys)
+        {
+            if(toy.minAge <= currentChild.age &&
+            toy.maxAge >= currentChild.age)
+            {
+                pool.Add(toy);
+            }
+        }
+
+        if(pool.Count < giftButtons.Length)
+        {
+            pool = new List<ToyData>(allToys);
+        }
 
         List<ToyData> choices =
             new List<ToyData>();
@@ -96,7 +111,11 @@ public class SantaLetterGameManager : MonoBehaviour
             int index =
                 Random.Range(0, pool.Count);
 
-            choices.Add(pool[index]);
+            ToyData toy = pool[index];
+            if(!choices.Contains(toy))
+            {
+                choices.Add(toy);
+            }
 
             pool.RemoveAt(index);
         }
@@ -105,7 +124,7 @@ public class SantaLetterGameManager : MonoBehaviour
 
         for (int i = 0; i < giftButtons.Length; i++)
         {
-            Debug.Log("Button " + i + " = " + choices[i].name);
+            Debug.Log($"Button {i + 1}: {choices[i].name}");
 
             giftButtons[i].Setup(
                 choices[i],

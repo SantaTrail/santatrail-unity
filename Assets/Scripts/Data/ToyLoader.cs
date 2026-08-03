@@ -6,7 +6,6 @@ public class ToyLoader : MonoBehaviour
 
     void Awake()
     {
-        // Load the JSON file from Resources/Data/toys.json
         TextAsset json = Resources.Load<TextAsset>("Data/toys");
 
         if (json == null)
@@ -20,5 +19,16 @@ public class ToyLoader : MonoBehaviour
         toys = toyList.toys;
 
         Debug.Log("Loaded " + toys.Length + " toys.");
+    }
+
+    public ToyData GetRandomToy()
+    {
+        if (toys == null || toys.Length == 0)
+        {
+            Debug.LogError("No toys loaded!");
+            return null;
+        }
+
+        return toys[Random.Range(0, toys.Length)];
     }
 }
