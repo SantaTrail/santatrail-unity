@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class SantaLetterGameManager : MonoBehaviour
 {
@@ -18,6 +19,8 @@ public class SantaLetterGameManager : MonoBehaviour
     [Header("Toy Database")]
     // public ToyData[] allToys;
     public ResultPopup resultPopup;
+    [SerializeField] private string levelPreviewSceneName = "PreviewLV";
+    [SerializeField] private float correctAnswerTransitionDelay = 2f;
 
     private ChildData currentChild;
 
@@ -163,8 +166,10 @@ public class SantaLetterGameManager : MonoBehaviour
 
         Debug.Log("Correct!");
 
-        // Wait 2 seconds before the next child
-        Invoke(nameof(StartNewDelivery), 2f);
+        // Move to the level preview scene after the success popup is visible.
+        CancelInvoke(nameof(StartNewDelivery));
+        CancelInvoke(nameof(LoadLevelPreview));
+        Invoke(nameof(LoadLevelPreview), correctAnswerTransitionDelay);
 
         return;
     }
@@ -176,6 +181,17 @@ public class SantaLetterGameManager : MonoBehaviour
 
     Debug.Log("Wrong!");
 }
+
+    void LoadLevelPreview()
+    {
+        if (string.IsNullOrWhiteSpace(levelPreviewSceneName))
+        {
+            Debug.LogError($"{nameof(SantaLetterGameManager)}: levelPreviewSceneName is empty.");
+            return;
+        }
+
+        SceneManager.LoadScene(levelPreviewSceneName);
+    }
 
     //----------------------------------------------------
 

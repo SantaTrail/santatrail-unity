@@ -22,7 +22,7 @@ public class PrototypeMenuController : MonoBehaviour
     public TMP_Dropdown levelDropdown;
     public List<LevelEntry> levels = new List<LevelEntry>
     {
-        new LevelEntry { label = "Level 1 - Training", sceneName = "LV1", homeLatitude = 52.15603852403063, homeLongitude = 4.963989431212162, homeAltitude = 0, homeYaw = 0 },
+        new LevelEntry { label = "Level 1 - Guided Tutorial", sceneName = "LV1", homeLatitude = 52.15603852403063, homeLongitude = 4.963989431212162, homeAltitude = 0, homeYaw = 0 },
         new LevelEntry { label = "Level 2 - Demo", sceneName = "DroneSimulateDemo", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 },
         new LevelEntry { label = "Level 3 - Sandbox", sceneName = "SampleScene", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 }
     };
@@ -34,13 +34,15 @@ public class PrototypeMenuController : MonoBehaviour
     [TextArea(4, 8)] public string gameStory =
         "Christmas is at risk. The reindeer are grounded and you are the last hope. " +
         "Your only option is a delivery drone.\n\n" +
+        "Level 1 walks you through QGroundControl setup, Guided mode, takeoff, and " +
+        "basic control before the first delivery.\n\n" +
         "Fly over a real OpenStreetMap-based city, locate buildings, fly close, and hover " +
         "stably for a few seconds to complete each delivery. The steadier you fly and the " +
         "more buildings you reach, the higher your score.";
 
     [TextArea(3, 6)] public string gameplayLoop =
-        "Gameplay Loop: receive letter -> select gift -> check requirements -> plan route -> " +
-        "fly to target -> get stability evaluation -> earn reward and progress.";
+        "Gameplay Loop: open QGroundControl -> switch to Guided -> take off -> practice " +
+        "control -> reach the delivery target -> earn reward and progress.";
 
     public TMP_Text storyText;
     public TMP_Text loopText;

@@ -13,7 +13,7 @@ using Esri.GameEngine.Map;
 using Unity.Mathematics;
 
 
-public class SceneLoaderArcgis : MonoBehaviour
+public partial class SceneLoaderArcgis : MonoBehaviour
 {
     [Header("Camera")]
     public Camera droneCamera;
@@ -56,6 +56,7 @@ public class SceneLoaderArcgis : MonoBehaviour
     [Tooltip("Enable this to generate building prefabs from OSM footprints. Disable it in levels that use manually placed building assets.")]
     [SerializeField] bool spawnOsmBuildings = true;
     [SerializeField] float buildingSpawnRadius = 500f;
+    [SerializeField] bool filterBuildingsByDroneDistance = false;
     [SerializeField] bool showSpawnRadius = true;
     [SerializeField] bool hideOsmBuildingLayer = true;
     [SerializeField] bool logLayerVisibilityChanges = true;
@@ -243,6 +244,7 @@ public class SceneLoaderArcgis : MonoBehaviour
     Transform droneTransform;
     int visibleBuildingCounter;
 
+    #if false
     void Awake()
     {
         TryResolveArcGISConverter();
@@ -985,6 +987,7 @@ public class SceneLoaderArcgis : MonoBehaviour
             $"{originWaypoint.alt}"
         );
     }
+    #endif
     // =========================
     // TERRAIN (FIXED)
     // =========================
@@ -1222,14 +1225,14 @@ public class SceneLoaderArcgis : MonoBehaviour
         if (spawnVisibleVillageClusterOnly)
         {
             Debug.Log("🏙 Visible-only village mode enabled. Spawning a small prefab cluster near the drone.");
-            SpawnVisibleVillageCluster();
+            SpawnVisibleVillageCluster(result);
             return;
         }
 
         if (result.buildings.Length == 0)
         {
             Debug.LogWarning("⚠️ Village spawn skipped because no OSM building footprints were returned. Using visible fallback cluster.");
-            SpawnVisibleVillageCluster();
+            SpawnVisibleVillageCluster(result);
             return;
         }
 
@@ -1238,14 +1241,16 @@ public class SceneLoaderArcgis : MonoBehaviour
 
         for (int i = 0; i < result.buildings.Length; i++)
         {
-            var building = result.buildings[i];
-            int pointCount = building != null && building.points != null ? building.points.Length : 0;
-            Debug.Log($"Building {i} has {pointCount} points");
-
-            if (building == null || building.points == null || building.points.Length < 3)
+            try
             {
-                continue;
-            }
+                var building = result.buildings[i];
+                int pointCount = building != null && building.points != null ? building.points.Length : 0;
+                Debug.Log($"Building {i} has {pointCount} points");
+
+                if (building == null || building.points == null || building.points.Length < 3)
+                {
+                    continue;
+                }
 
             List<Vector3> footprintPoints = new List<Vector3>();
             List<GeoCoordinate> geographicPoints = new List<GeoCoordinate>();
@@ -1423,7 +1428,7 @@ public class SceneLoaderArcgis : MonoBehaviour
                     continue;
                 }
             }
-            else if (droneTransform != null)
+            else if (filterBuildingsByDroneDistance && droneTransform != null)
             {
                 float distance = Vector2.Distance(
                     new Vector2(
@@ -1597,10 +1602,13 @@ public class SceneLoaderArcgis : MonoBehaviour
                     continue;
                 }
 
-                if (buildingRoot.GetComponent<House>() == null)
+                House modularHouse = buildingRoot.GetComponent<House>();
+                if (modularHouse == null)
                 {
-                    buildingRoot.AddComponent<House>();
+                    modularHouse = buildingRoot.AddComponent<House>();
                 }
+
+                modularHouse.model = buildingRoot.transform;
 
                 Debug.Log(
                     $"🏗 Spawned ArcGIS-anchored upright modular house {buildingRoot.name} | " +
@@ -1728,10 +1736,15 @@ public class SceneLoaderArcgis : MonoBehaviour
                 );
             }
 
-            if (buildingRoot.GetComponent<House>() == null)
+            House completeHouse = buildingRoot.GetComponent<House>();
+            if (completeHouse == null)
             {
-                buildingRoot.AddComponent<House>();
+                completeHouse = buildingRoot.AddComponent<House>();
             }
+
+            completeHouse.model = buildingModel.transform;
+            completeHouse.styleName = prefabToUse.name;
+            completeHouse.deliveryGroupName = prefabToUse.name;
 
             ConfigureBuildingCollider(
                 buildingRoot,
@@ -1752,12 +1765,17 @@ public class SceneLoaderArcgis : MonoBehaviour
             );
 
             spawned++;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"❌ Building {i} generation failed: {e}");
+            }
         }
 
         if (spawned == 0)
         {
             Debug.LogWarning("⚠️ No village buildings could be placed from OSM footprints. Using visible fallback cluster.");
-            SpawnVisibleVillageCluster();
+            SpawnVisibleVillageCluster(result);
             return;
         }
 
@@ -2088,7 +2106,7 @@ public class SceneLoaderArcgis : MonoBehaviour
         marker.transform.localScale = Vector3.one;
     }
 
-    void SpawnVisibleVillageCluster()
+    void SpawnVisibleVillageCluster(Result result)
     {
         if ((smallHousePrefabs == null || smallHousePrefabs.Length == 0) &&
             (mediumHousePrefabs == null || mediumHousePrefabs.Length == 0) &&
@@ -2099,19 +2117,25 @@ public class SceneLoaderArcgis : MonoBehaviour
             return;
         }
 
-        Transform anchorTransform = droneTransform != null
-            ? droneTransform
-            : droneCamera != null
-                ? droneCamera.transform
-                : Camera.main != null ? Camera.main.transform : null;
+        Vector3 center;
+        Vector3 forward;
 
-        Vector3 center = anchorTransform != null
-            ? anchorTransform.position
-            : Vector3.zero;
+        if (!TryGetVisibleVillageAnchor(result, out center, out forward))
+        {
+            Transform anchorTransform = droneTransform != null
+                ? droneTransform
+                : droneCamera != null
+                    ? droneCamera.transform
+                    : Camera.main != null ? Camera.main.transform : null;
 
-        Vector3 forward = anchorTransform != null
-            ? anchorTransform.forward
-            : Vector3.forward;
+            center = anchorTransform != null
+                ? anchorTransform.position
+                : Vector3.zero;
+
+            forward = anchorTransform != null
+                ? anchorTransform.forward
+                : Vector3.forward;
+        }
 
         forward.y = 0f;
         if (forward.sqrMagnitude < 0.0001f)
@@ -2121,8 +2145,8 @@ public class SceneLoaderArcgis : MonoBehaviour
         forward.Normalize();
 
         Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
-        int count = 6;
-        float radius = Mathf.Clamp(scale * 0.01f, 2f, 5f);
+        int count = 8;
+        float radius = Mathf.Clamp(scale * 0.015f, 5f, 14f);
         float angleStep = 360f / Mathf.Max(1, count);
 
         GameObject heroPrefab = GetGuaranteedVillagePrefab();
@@ -2149,7 +2173,7 @@ public class SceneLoaderArcgis : MonoBehaviour
 
             float distance =
                 UnityEngine.Random.Range(
-                    radius * 0.35f,
+                    radius * 0.4f,
                     radius
                 );
 
@@ -2177,7 +2201,7 @@ public class SceneLoaderArcgis : MonoBehaviour
                 prefab,
                 spawnWorldPosition,
                 rotation,
-                UnityEngine.Random.Range(0.5f, 0.85f)
+                UnityEngine.Random.Range(0.95f, 1.45f)
             );
 
             Debug.Log(
@@ -2190,6 +2214,49 @@ public class SceneLoaderArcgis : MonoBehaviour
             "🏙 Visible fallback village cluster spawned as fixed " +
             "delivery buildings."
         );
+    }
+
+    bool TryGetVisibleVillageAnchor(Result result, out Vector3 center, out Vector3 forward)
+    {
+        center = Vector3.zero;
+        forward = Vector3.forward;
+
+        if (result == null || result.waypoints == null || result.waypoints.Length == 0)
+        {
+            return false;
+        }
+
+        Vector3 sum = Vector3.zero;
+        int validCount = 0;
+        Vector3 first = Vector3.zero;
+        Vector3 last = Vector3.zero;
+
+        for (int i = 0; i < result.waypoints.Length; i++)
+        {
+            GPSWaypoint wp = result.waypoints[i];
+            if (!TryConvertGPS(wp.lat, wp.lon, wp.alt, out Vector3 worldPoint))
+            {
+                continue;
+            }
+
+            if (validCount == 0)
+            {
+                first = worldPoint;
+            }
+
+            last = worldPoint;
+            sum += worldPoint;
+            validCount++;
+        }
+
+        if (validCount == 0)
+        {
+            return false;
+        }
+
+        center = sum / validCount;
+        forward = last - first;
+        return true;
     }
 
     GameObject CreateVisibleBuildingSpawn(
@@ -2282,10 +2349,15 @@ public class SceneLoaderArcgis : MonoBehaviour
 
         // The delivery manager can now identify fallback buildings
         // through both the House marker and the generated root name.
-        if (root.GetComponent<House>() == null)
+        House rootHouse = root.GetComponent<House>();
+        if (rootHouse == null)
         {
-            root.AddComponent<House>();
+            rootHouse = root.AddComponent<House>();
         }
+
+        rootHouse.model = visibleModel.transform;
+        rootHouse.styleName = prefabName;
+        rootHouse.deliveryGroupName = prefabName;
 
         ConfigureBuildingCollider(
             root,
@@ -3381,94 +3453,6 @@ public class SceneLoaderArcgis : MonoBehaviour
         }
     }
 
-    // =========================
-    // PATH
-    // =========================
-    void DrawPath(Result result)
-    {
-        if (result.waypoints == null || result.waypoints.Length == 0) return;
-
-        LineRenderer line = new GameObject("Path").AddComponent<LineRenderer>();
-        line.widthMultiplier = 8f;
-        line.material = new Material(Shader.Find("Sprites/Default"));
-        Vector3[] positions = new Vector3[result.waypoints.Length];
-        int validCount = 0;
-
-        for (int i = 0; i < result.waypoints.Length; i++)
-        {
-            var wp = result.waypoints[i];
-            if (!TryConvertGPS(wp.lat, wp.lon, wp.alt, out Vector3 pos))
-            {
-                Debug.LogWarning($"⚠️ Skipping waypoint {i}");
-                continue;
-            }
-
-            if (terrain != null)
-                pos.y = terrain.SampleHeight(pos) + 2f;
-            positions[validCount] = pos;
-            validCount++;
-        }
-
-        if (validCount < 2)
-        {
-            Destroy(line.gameObject);
-            Debug.LogWarning("⚠️ Path skipped (not enough valid waypoints)");
-            return;
-        }
-
-        line.positionCount = validCount;
-        for (int i = 0; i < validCount; i++)
-            line.SetPosition(i, positions[i]);
-    }
-
-    // =========================
-    // RIVERS
-    // =========================
-    void DrawRivers(Result result)
-    {
-        if (result.rivers == null || terrain == null) return;
-
-        foreach (var river in result.rivers)
-        {
-            if (river == null || river.Length < 2)
-                continue;
-
-            LineRenderer line = new GameObject("River").AddComponent<LineRenderer>();
-            line.widthMultiplier = 8f;
-            line.material = new Material(Shader.Find("Sprites/Default"));
-            line.startColor = Color.blue;
-            line.endColor = Color.blue;
-            Vector3[] positions = new Vector3[river.Length];
-            int validCount = 0;
-
-            for (int i = 0; i < river.Length; i++)
-            {
-                var p = river[i];
-
-                if (!TryConvertGPS(p.lat, p.lon, p.alt, out Vector3 pos))
-                    continue;
-
-                positions[validCount] = pos;
-                validCount++;
-            }
-
-            if (validCount < 2)
-            {
-                Destroy(line.gameObject);
-                continue;
-            }
-
-            line.positionCount = validCount;
-            for (int i = 0; i < validCount; i++)
-                line.SetPosition(i, positions[i]);
-        }
-    }
-
-    // =========================
-    // UTILS
-    // =========================
-
-
     void PositionCamera()
     {
         Camera.main.transform.position = new Vector3(0, scale / 5, -scale / 2);
@@ -3588,53 +3572,6 @@ public class SceneLoaderArcgis : MonoBehaviour
         }
     }
 
-    void CarveRiversIntoTerrain(Result result)
-    {
-        if (terrain == null || result.rivers == null || arcGISConverter == null) return;
-
-        TerrainData data = terrain.terrainData;
-        int res = data.heightmapResolution;
-
-        float[,] heights = data.GetHeights(0, 0, res, res);
-
-        float riverWidth = 6f;
-        float depth = 0.02f;
-
-        foreach (var river in result.rivers)
-        {
-            foreach (var point in river)
-            {
-                if (!TryConvertGPS(point.lat, point.lon, point.alt, out Vector3 pos))
-                    continue;
-                int x = (int)((pos.x + scale / 2) / scale * res);
-                int y = (int)((pos.z + scale / 2) / scale * res);
-
-                for (int i = -10; i <= 10; i++)
-                {
-                    for (int j = -10; j <= 10; j++)
-                    {
-                        int nx = x + i;
-                        int ny = y + j;
-
-                        if (nx < 0 || ny < 0 || nx >= res || ny >= res) continue;
-
-                        float dist = Mathf.Sqrt(i * i + j * j);
-
-                        if (dist < riverWidth)
-                        {
-                            float falloff = 1f - (dist / riverWidth);
-
-                            heights[ny, nx] -= depth * falloff;
-                        }
-                    }
-                }
-            }
-        }
-
-        data.SetHeights(0, 0, heights);
-
-        Debug.Log("🌊 Rivers carved into terrain");
-    }
     bool TryConvertGPS(double lat, double lon, double alt, out Vector3 pos)
     {
         pos = Vector3.zero;
@@ -3718,54 +3655,6 @@ public class SceneLoaderArcgis : MonoBehaviour
 
 
         Debug.Log("🚁 Drone placed over ArcGIS surface");
-    }
-
-    void GenerateSceneSafe(Result result)
-    {
-        try
-        {
-            GenerateScene(result);
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError("❌ Scene generation failed: " + e.Message);
-        }
-    }
-
-    void DrawPathSafe(Result result)
-    {
-        try
-        {
-            DrawPath(result);
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError("❌ Path generation failed: " + e.Message);
-        }
-    }
-
-    void DrawRiversSafe(Result result)
-    {
-        try
-        {
-            DrawRivers(result);
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError("❌ River drawing failed: " + e.Message);
-        }
-    }
-
-    void CarveRiversIntoTerrainSafe(Result result)
-    {
-        try
-        {
-            CarveRiversIntoTerrain(result);
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError("❌ River carving failed: " + e.Message);
-        }
     }
 
     void SetupDroneReference()

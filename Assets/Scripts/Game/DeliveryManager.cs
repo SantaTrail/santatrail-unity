@@ -1,5 +1,6 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class DeliveryManager : MonoBehaviour
 {
@@ -43,7 +44,6 @@ public class DeliveryManager : MonoBehaviour
     {
         Debug.Log("Santa Delivery Minigame Complete!");
 
-        // We'll replace this later with whatever
-        // your main game needs.
+        SceneManager.LoadScene("PreviewLV");
     }
 }

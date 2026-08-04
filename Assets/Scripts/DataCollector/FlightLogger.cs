@@ -6,12 +6,16 @@ public class FlightLogger : MonoBehaviour
 {
     public Transform drone;
     public Terrain terrain;
+    public DeliveryScoreManager deliveryScoreManager;
 
     string path;
 
     // ✅ ADD: manual velocity tracking
     Vector3 lastPosition;
     Vector3 velocity;
+    bool hasLastPosition;
+    bool levelCompleted;
+    float levelCompletedAt = -1f;
 
     void Start()
     {
@@ -22,6 +26,35 @@ public class FlightLogger : MonoBehaviour
 
         string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
         path = folder + "flight_log_" + timestamp + ".csv";
+
+        if (deliveryScoreManager == null)
+        {
+            deliveryScoreManager = Object.FindFirstObjectByType<DeliveryScoreManager>();
+        }
+
+        if (deliveryScoreManager != null)
+        {
+            deliveryScoreManager.LevelCompleted += HandleLevelCompleted;
+        }
+
+        File.WriteAllText(
+            path,
+            "time,x,y,z,vel,roll,pitch,yaw,terrainHeight,altitudeAboveGround,reward,completedTargets,totalTargets,remainingTargets,levelCompleted,levelCompletedAt,missionState\n"
+        );
+    }
+
+    void OnDestroy()
+    {
+        if (deliveryScoreManager != null)
+        {
+            deliveryScoreManager.LevelCompleted -= HandleLevelCompleted;
+        }
+    }
+
+    void HandleLevelCompleted()
+    {
+        levelCompleted = true;
+        levelCompletedAt = Time.time;
     }
 
     void Update()
@@ -37,6 +70,13 @@ public class FlightLogger : MonoBehaviour
 
         Vector3 pos = drone.position;
 
+        if (!hasLastPosition)
+        {
+            lastPosition = pos;
+            hasLastPosition = true;
+            velocity = Vector3.zero;
+        }
+
         // ✅ FIX: manual velocity (NO Rigidbody)
         Vector3 rawVel = (pos - lastPosition) / Time.deltaTime;
         velocity = Vector3.Lerp(velocity, rawVel, 0.5f);
@@ -47,10 +87,18 @@ public class FlightLogger : MonoBehaviour
         float yaw = drone.eulerAngles.y;
 
         float terrainHeight = terrain.SampleHeight(pos);
+        float altitudeAboveGround = pos.y - terrainHeight;
 
         float reward = CalculateReward(pos, velocity);
+        int completedTargets = deliveryScoreManager != null ? deliveryScoreManager.CompletedTargets : 0;
+        int totalTargets = deliveryScoreManager != null ? deliveryScoreManager.TotalTargets : 0;
+        int remainingTargets = deliveryScoreManager != null ? deliveryScoreManager.RemainingTargets : 0;
+        string missionState = levelCompleted ? "completed" : "in_progress";
 
-        string line = $"{Time.time},{pos.x},{pos.y},{pos.z},{velocity.magnitude},{roll},{pitch},{yaw},{terrainHeight},{reward}\n";
+        string line =
+            $"{Time.time},{pos.x},{pos.y},{pos.z},{velocity.magnitude},{roll},{pitch},{yaw}," +
+            $"{terrainHeight},{altitudeAboveGround},{reward},{completedTargets},{totalTargets},{remainingTargets}," +
+            $"{(levelCompleted ? 1 : 0)},{levelCompletedAt},{missionState}\n";
 
         File.AppendAllText(path, line);
     }

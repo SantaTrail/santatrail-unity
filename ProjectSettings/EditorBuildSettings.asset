@@ -12,6 +12,9 @@ EditorBuildSettings:
     path: Assets/Scenes/MainMenuScene.unity
     guid: c0493f5cb223a45c886862ee55e0c456
   - enabled: 1
+    path: Assets/Scenes/HowToPlayScene.unity
+    guid: 22cb1ffcce6e4b0e9ff26354985f1511
+  - enabled: 1
     path: Assets/Scenes/HomeScene.unity
     guid: 697ca60f1ee3940abaec0a162c2f7396
   - enabled: 1
@@ -20,6 +23,12 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/Levels/LV1.unity
     guid: eadc4d26e84fa4a13ba46a502003d8b7
+  - enabled: 1
+    path: Assets/Scenes/letter.unity
+    guid: 43459fa93e19b4f4c9fe3a2080a7a095
+  - enabled: 1
+    path: Assets/Scenes/PreviewLV.unity
+    guid: 1c93f34494695415abdcfa1716b45ffc
   m_configObjects:
     com.unity.dt.app-ui: {fileID: 11400000, guid: 1b1c20d82303e4b5781c3ef50ac1449f, type: 2}
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
