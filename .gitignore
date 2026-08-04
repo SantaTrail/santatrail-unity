@@ -26,6 +26,12 @@ Assets/FlightLogs/
 *.tlog
 *.raw
 
+# Unity recovery scene copies.
+Assets/_Recovery/
+
+# Prefab assets in the main prefab folder.
+Assets/Prefabs/
+
 # OS files
 .DS_Store
 Thumbs.db
