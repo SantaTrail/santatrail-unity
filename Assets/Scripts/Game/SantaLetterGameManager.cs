@@ -1,5 +1,13 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
+
+public enum Difficulty
+{
+    Easy,
+    Medium,
+    Hard
+}
 
 public class SantaLetterGameManager : MonoBehaviour
 {
@@ -22,37 +30,35 @@ public class SantaLetterGameManager : MonoBehaviour
     private ChildData currentChild;
 
     private int wrongAttempts = 0;
+    public Difficulty difficulty;
+    private int totalDeliveries;
+    private ToyData selectedToy;
+
+    [Header("Mission UI")]
+    public MissionProgressUI missionUI;
+
+    [Header("Buttons")]
+    public Button packPresentButton;
+    public Button retryButton;
 
     //----------------------------------------------------
 
     void Start()
-{
-    allToys = toyLoader.toys;
-
-    Debug.Log("Number of Toys = " + allToys.Length);
-
-    foreach (ToyData toy in allToys)
     {
-        Debug.Log("Loaded Toy: " + toy.name);
+        allToys = toyLoader.toys;
+
+        totalDeliveries = GetDeliveryCount();
+        missionUI.SetupMission(totalDeliveries);
+
+        Debug.Log("Number of Toys = " + allToys.Length);
+
+        foreach (ToyData toy in allToys)
+        {
+            Debug.Log("Loaded Toy: " + toy.name);
+        }
+
+        StartNewDelivery();
     }
-
-    StartNewDelivery();
-}
-
-    //----------------------------------------------------
-
-    // public async void StartNewDelivery()
-    // {
-    //     wrongAttempts = 0;
-
-    //     hintPanel.Hide();
-
-    //     currentChild = childGenerator.Generate();
-
-    //     await letterGenerator.GenerateLetter(currentChild);
-
-    //     GenerateGiftChoices();
-    // }
 
     public async void StartNewDelivery()
 {
@@ -63,11 +69,11 @@ public class SantaLetterGameManager : MonoBehaviour
     Debug.Log("letterGenerator = " + letterGenerator);
 
     wrongAttempts = 0;
+    selectedToy = null;
+    packPresentButton.interactable = false;
 
-    hintPanel.Hide();
-
-    ToyData selectedToy = toyLoader.GetRandomToy();
-    currentChild = childGenerator.Generate(selectedToy);
+    ToyData targetToy = toyLoader.GetRandomToy();
+    currentChild = childGenerator.Generate(targetToy);
     
 
     Debug.Log("Child Generated: " + currentChild.name);
@@ -133,51 +139,51 @@ public class SantaLetterGameManager : MonoBehaviour
         }
     }
 
-    //----------------------------------------------------
-
-    // public void SelectGift(ToyData selectedToy)
-    // {
-    //     if (selectedToy.id ==
-    //         currentChild.targetToy.id)
-    //     {
-    //         Debug.Log("Correct!");
-
-    //         deliveryManager.CompleteDelivery();
-
-    //         return;
-    //     }
-
-    //     Debug.Log("Wrong!");
-
-    //     ShowNextHint();
-    // }
-
-    public void SelectGift(ToyData selectedToy)
-{
-    Debug.Log("Clicked : " + selectedToy.name);
-
-    // Correct answer
-    if (selectedToy.id == currentChild.targetToy.id)
+    public void SelectGift(ToyData toy)
     {
-        resultPopup.ShowCorrect();
+        selectedToy = toy;
 
-        Debug.Log("Correct!");
+        Debug.Log("Selected " + toy.name);
 
-        // Wait 2 seconds before the next child
-        Invoke(nameof(StartNewDelivery), 2f);
-
-        return;
+        // Enable Pack Present button
+        packPresentButton.interactable = true;
     }
 
-    // Wrong answer
-    resultPopup.ShowWrong();
+    public void PackPresent()
+    {
+        if (selectedToy == null)
+        return;
 
-    ShowNextHint();
+        if(selectedToy.id == currentChild.targetToy.id)
+        {
+            AudioManager.Instance.PlayCorrect();
 
-    Debug.Log("Wrong!");
-}
+            resultPopup.ShowCorrect();
 
-    //----------------------------------------------------
+            bool missionFinished = missionUI.CompleteDelivery();
+
+        if (missionFinished)
+        {
+            Debug.Log("Mission Complete!");
+
+            // TODO:
+            // Show mission complete popup
+            // Load next level
+        }
+        else
+        {
+            Invoke(nameof(StartNewDelivery), 2f);
+        }
+        }
+        else
+        {
+            AudioManager.Instance.PlayWrong();
+
+            resultPopup.ShowWrong();
+
+            ShowNextHint();
+        }
+    }
 
     void ShowNextHint()
 {
@@ -224,5 +230,34 @@ public class SantaLetterGameManager : MonoBehaviour
             list[r] =
                 temp;
         }
+    }
+
+    int GetDeliveryCount()
+    {
+        switch (difficulty)
+        {
+            case Difficulty.Easy:
+                return 3;
+
+            case Difficulty.Medium:
+                return 5;
+
+            case Difficulty.Hard:
+                return 8;
+
+            default:
+                return 5;
+        }
+    }
+
+    public void Retry()
+    {
+        AudioManager.Instance.PlayClick();
+
+        selectedToy = null;
+
+        hintPanel.Hide();
+
+        StartNewDelivery();
     }
 }

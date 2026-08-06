@@ -67,6 +67,7 @@ public class GiftButton : MonoBehaviour
 
     public void OnClick()
     {
+        AudioManager.Instance.PlayClick();  // clicking sound
         santaLetterGameManager.SelectGift(toy);
     }
 }

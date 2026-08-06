@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 2c9a167e6b75d4d3f9f404e411acb971
+guid: a15e9ae23a388433ca7700c0fcf9b19c
 TrueTypeFontImporter:
   externalObjects: {}
   serializedVersion: 4
@@ -9,7 +9,7 @@ TrueTypeFontImporter:
   characterPadding: 1
   includeFontData: 1
   fontNames:
-  - Kids Drawing
+  - HazesSprayPaint
   fallbackFontReferences: []
   customCharacters: 
   fontRenderingMode: 0
