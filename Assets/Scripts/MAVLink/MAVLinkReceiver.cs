@@ -188,6 +188,11 @@ public class MAVLinkReceiver : MonoBehaviour
     private byte vehicleComponentId = 1;
 
     public bool IsGuidedArmed => hbGuided && hbArmed;
+    public bool IsGuidedMode => hbGuided;
+    public bool IsArmed => hbArmed;
+    public bool HasRecentTelemetry => lastAnyPacketTime > 0f && (Time.time - lastAnyPacketTime) <= 2f;
+    public MAVLink.MAV_LANDED_STATE LandedState => landedState;
+    public float RelativeAltitudeMeters => targetRelativeAlt;
     public bool HasNavTargetDistance => hasNavTargetDist;
     public float NavTargetDistanceMeters => navTargetDistM;
     public Vector3 VelocityNed => new Vector3(velNorthMps, velEastMps, velDownMps);

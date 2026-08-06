@@ -156,22 +156,29 @@ public class ModularHouseGenerator : MonoBehaviour
         public Material glassMaterial;
         public Material doorMaterial;
         public Material chimneyMaterial;
+        [ColorUsage(false, true)]
+        public Color chimneyColor = new Color(0.35f, 0.08f, 0.05f, 1f);
+        [Tooltip("Extra scaling applied to chimney parts for this style. Use Y to make it taller and X/Z to make it wider.")]
+        public Vector3 chimneyScaleMultiplier = Vector3.one;
     }
 
     [Header("Building Appearance")]
     [SerializeField] BuildingStyle[] buildingStyles;
-    BuildingStyle GetBuildingStyle(int buildingIndex)
+    int GetBuildingStyleIndex(int buildingIndex)
     {
         if (buildingStyles == null || buildingStyles.Length == 0)
         {
-            return null;
+            return -1;
         }
 
         // Stable variation: the same OSM building index keeps the same style.
-        int styleIndex = Mathf.Abs(buildingIndex * 31 + 7)
-                         % buildingStyles.Length;
+        return Mathf.Abs(buildingIndex * 31 + 7) % buildingStyles.Length;
+    }
 
-        return buildingStyles[styleIndex];
+    BuildingStyle GetBuildingStyle(int buildingIndex)
+    {
+        int styleIndex = GetBuildingStyleIndex(buildingIndex);
+        return styleIndex >= 0 ? buildingStyles[styleIndex] : null;
     }
 
     void ApplyBuildingStyle(
@@ -185,6 +192,7 @@ public class ModularHouseGenerator : MonoBehaviour
 
         Renderer[] renderers =
             buildingObject.GetComponentsInChildren<Renderer>(true);
+        HashSet<Transform> scaledChimneys = new HashSet<Transform>();
 
         foreach (Renderer renderer in renderers)
         {
@@ -226,7 +234,39 @@ public class ModularHouseGenerator : MonoBehaviour
             {
                 renderer.sharedMaterial = selectedMaterial;
             }
+
+            if (objectName.Contains("chimney"))
+            {
+                ApplyRendererTint(renderer, style.chimneyColor);
+                ApplyChimneyScale(renderer.transform, style.chimneyScaleMultiplier, scaledChimneys);
+            }
         }
+    }
+
+    void ApplyChimneyScale(
+        Transform chimneyTransform,
+        Vector3 scaleMultiplier,
+        HashSet<Transform> scaledChimneys)
+    {
+        if (chimneyTransform == null || scaledChimneys == null)
+        {
+            return;
+        }
+
+        if (!scaledChimneys.Add(chimneyTransform))
+        {
+            return;
+        }
+
+        Vector3 safeMultiplier = new Vector3(
+            Mathf.Max(0.01f, scaleMultiplier.x),
+            Mathf.Max(0.01f, scaleMultiplier.y),
+            Mathf.Max(0.01f, scaleMultiplier.z));
+
+        chimneyTransform.localScale = Vector3.Scale(
+            chimneyTransform.localScale,
+            safeMultiplier
+        );
     }
     public bool GenerateHouse(
         Transform buildingRoot,
@@ -432,8 +472,10 @@ public class ModularHouseGenerator : MonoBehaviour
 
         // Apply one coordinated appearance to the entire generated house.
         // deterministicSeed is the OSM building index passed by SceneLoaderArcgis.
-        BuildingStyle style = GetBuildingStyle(deterministicSeed);
+        int styleIndex = GetBuildingStyleIndex(deterministicSeed);
+        BuildingStyle style = styleIndex >= 0 ? buildingStyles[styleIndex] : null;
         ApplyBuildingStyle(buildingRoot.gameObject, style);
+        ApplyHouseMetadata(buildingRoot.gameObject, styleIndex, style);
 
         Debug.Log(
             $"🏗 Modular house generated: {buildingRoot.name} | " +
@@ -442,6 +484,45 @@ public class ModularHouseGenerator : MonoBehaviour
         );
 
         return true;
+    }
+
+    void ApplyHouseMetadata(
+        GameObject buildingRoot,
+        int styleIndex,
+        BuildingStyle style)
+    {
+        if (buildingRoot == null)
+        {
+            return;
+        }
+
+        House house = buildingRoot.GetComponent<House>();
+        if (house == null)
+        {
+            house = buildingRoot.AddComponent<House>();
+        }
+
+        house.styleIndex = styleIndex;
+        house.styleName = style != null &&
+                          !string.IsNullOrWhiteSpace(style.styleName)
+            ? style.styleName.Trim()
+            : (styleIndex >= 0 ? $"Style {styleIndex}" : "");
+        house.deliveryGroupName = house.styleName;
+        house.model = buildingRoot.transform;
+    }
+
+    void ApplyRendererTint(Renderer renderer, Color tint)
+    {
+        if (renderer == null)
+        {
+            return;
+        }
+
+        MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
+        renderer.GetPropertyBlock(propertyBlock);
+        propertyBlock.SetColor("_BaseColor", tint);
+        propertyBlock.SetColor("_Color", tint);
+        renderer.SetPropertyBlock(propertyBlock);
     }
 
     void CreateWallModule(

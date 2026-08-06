@@ -21,6 +21,10 @@ public class DeliveryScoreManager : MonoBehaviour
     [Header("Level Target Setup")]
     [Tooltip("How many random spawned buildings become delivery targets in this level.")]
     [Min(1)] public int targetBuildingCount = 5;
+    [Tooltip("Leave empty to allow every house set. Otherwise only buildings whose House style/group name matches one of these entries can become targets.")]
+    public string[] allowedHouseSetNames = Array.Empty<string>();
+    [Tooltip("Only select delivery targets within this many meters of the drone's starting position. Set to 0 to disable the distance filter.")]
+    [Min(0f)] public float maxTargetDistanceFromDroneStart = 350f;
     [Tooltip("How often the manager retries while waiting for ArcGIS buildings to spawn.")]
     [Min(0.1f)] public float buildingScanRetrySeconds = 1f;
     [Tooltip("Maximum time spent waiting for spawned buildings. Use 0 to keep retrying forever.")]
@@ -103,7 +107,7 @@ public class DeliveryScoreManager : MonoBehaviour
     public float defaultChimneyOpeningWidth = 0.8f;
     [Tooltip("Extra height above the detected or authored chimney opening.")]
     public float chimneyOpeningHeightOffset = 0.02f;
-    [Tooltip("Creates a simple square chimney when no chimney prefab is assigned.")]
+    [Tooltip("Creates a simple fallback chimney when no chimney prefab is assigned.")]
     public bool createFallbackChimney = true;
     public Vector3 fallbackChimneySize = new Vector3(0.9f, 1.5f, 0.9f);
     public Color fallbackChimneyColor = new Color(0.35f, 0.08f, 0.05f, 1f);
@@ -179,6 +183,8 @@ public class DeliveryScoreManager : MonoBehaviour
     [Header("Level Progress")]
     [Tooltip("Legacy value kept for existing scenes. Completion now uses the number of randomly selected targets.")]
     public int level1RequiredDeliveries = 5;
+    [Tooltip("When enabled, delivery targets stay locked until a tutorial script explicitly unlocks them.")]
+    public bool tutorialLockout = false;
 
     public int score = 0;
     private bool buildingsInitialized = false;
@@ -189,6 +195,7 @@ public class DeliveryScoreManager : MonoBehaviour
         public Bounds bounds;
         public Vector3 roofTarget;
         public string key;
+        public string houseSetName;
         public GameObject chimneyObject;
         public Transform chimneyDropPoint;
         public float chimneyOpeningWidth;
@@ -214,6 +221,8 @@ public class DeliveryScoreManager : MonoBehaviour
     private readonly Dictionary<string, GameObject> deliveryRingObjects = new Dictionary<string, GameObject>();
     private readonly Dictionary<string, GameObject> targetChimneys = new Dictionary<string, GameObject>();
     private Vector3 lastDronePos;
+    private Vector3 droneStartPos;
+    private bool hasDroneStartPos;
     private float currentSpeed;
 
     void Start()
@@ -221,12 +230,15 @@ public class DeliveryScoreManager : MonoBehaviour
         AutoBindDrone();
         CleanupLegacyDeliveryRings();
         CleanupLegacyTargetBeacons();
+        showSpawnRadius = true;
         UpdateScoreUI();
         ScoreChanged?.Invoke(score);
 
         if (drone != null)
         {
             lastDronePos = drone.position;
+            droneStartPos = drone.position;
+            hasDroneStartPos = true;
         }
 
         StartCoroutine(InitializeBuildingTargets());
@@ -235,6 +247,7 @@ public class DeliveryScoreManager : MonoBehaviour
     IEnumerator InitializeBuildingTargets()
     {
         float elapsed = 0f;
+        int requestedCount = Mathf.Max(1, targetBuildingCount);
 
         while (!buildingsInitialized)
         {
@@ -243,17 +256,19 @@ public class DeliveryScoreManager : MonoBehaviour
 
             if (cachedBuildings.Count > 0)
             {
-                int requestedCount = Mathf.Max(1, targetBuildingCount);
-                SelectRandomTargets(requestedCount);
-                buildingsInitialized = activeTargets.Count > 0;
-
-                if (buildingsInitialized)
+                if (cachedBuildings.Count >= requestedCount)
                 {
-                    Debug.Log(
-                        $"Delivery system initialized with {activeTargets.Count} random targets " +
-                        $"from {cachedBuildings.Count} detected buildings."
-                    );
-                    yield break;
+                    SelectRandomTargets(requestedCount);
+                    buildingsInitialized = activeTargets.Count > 0;
+
+                    if (buildingsInitialized)
+                    {
+                        Debug.Log(
+                            $"Delivery system initialized with {activeTargets.Count} random targets " +
+                            $"from {cachedBuildings.Count} detected buildings."
+                        );
+                        yield break;
+                    }
                 }
             }
 
@@ -284,6 +299,13 @@ public class DeliveryScoreManager : MonoBehaviour
         if (drone == null)
         {
             SetAllDeliveryRingsActive(false);
+            return;
+        }
+
+        if (tutorialLockout)
+        {
+            SetAllDeliveryRingsActive(false);
+            ClearProgressStatusOnly();
             return;
         }
 
@@ -387,10 +409,30 @@ public class DeliveryScoreManager : MonoBehaviour
         }
     }
 
+    public void SetTutorialLockout(bool locked)
+    {
+        tutorialLockout = locked;
+
+        if (tutorialLockout)
+        {
+            SetAllDeliveryRingsActive(false);
+            ClearProgressStatusOnly();
+        }
+        else
+        {
+            RefreshDeliveryRings();
+        }
+    }
+
     void AutoBindDrone()
     {
         if (drone != null)
         {
+            if (!hasDroneStartPos)
+            {
+                droneStartPos = drone.position;
+                hasDroneStartPos = true;
+            }
             return;
         }
 
@@ -399,6 +441,12 @@ public class DeliveryScoreManager : MonoBehaviour
         {
             ArcGISLocationComponent locationComponent = droneObj.GetComponentInChildren<ArcGISLocationComponent>(true);
             drone = locationComponent != null ? locationComponent.transform : droneObj.transform;
+
+            if (drone != null && !hasDroneStartPos)
+            {
+                droneStartPos = drone.position;
+                hasDroneStartPos = true;
+            }
         }
     }
 
@@ -524,14 +572,38 @@ public class DeliveryScoreManager : MonoBehaviour
 
         List<SpawnedBuildingTarget> candidates =
             new List<SpawnedBuildingTarget>(cachedBuildings);
+        candidates.RemoveAll(target => !IsTargetInAllowedHouseSet(target));
+
+        if (hasDroneStartPos && maxTargetDistanceFromDroneStart > 0f)
+        {
+            float maxDistance = Mathf.Max(0f, maxTargetDistanceFromDroneStart);
+            candidates.RemoveAll(target =>
+                target == null ||
+                Vector2.Distance(
+                    new Vector2(target.bounds.center.x, target.bounds.center.z),
+                    new Vector2(droneStartPos.x, droneStartPos.z)
+                ) > maxDistance);
+        }
+
+        if (candidates.Count == 0)
+        {
+            candidates = new List<SpawnedBuildingTarget>(cachedBuildings);
+            candidates.RemoveAll(target => !IsTargetInAllowedHouseSet(target));
+        }
+
+        candidates.Sort((a, b) =>
+        {
+            float aDistance = GetDistanceFromDroneStart(a);
+            float bDistance = GetDistanceFromDroneStart(b);
+            return aDistance.CompareTo(bDistance);
+        });
 
         while (candidates.Count > 0 &&
                activeTargets.Count < amount)
         {
-            int index = UnityEngine.Random.Range(0, candidates.Count);
-
+            int pickWindow = Mathf.Min(candidates.Count, Mathf.Max(1, amount));
+            int index = UnityEngine.Random.Range(0, pickWindow);
             activeTargets.Add(candidates[index]);
-
             candidates.RemoveAt(index);
         }
 
@@ -549,6 +621,22 @@ public class DeliveryScoreManager : MonoBehaviour
                 Debug.Log($"Delivery Target: {target.root.name}");
             }
         }
+    }
+
+    float GetDistanceFromDroneStart(SpawnedBuildingTarget target)
+    {
+        if (target == null)
+        {
+            return float.MaxValue;
+        }
+
+        Vector3 origin =
+            hasDroneStartPos
+                ? droneStartPos
+                : (drone != null ? drone.position : Vector3.zero);
+        Vector2 targetPos = new Vector2(target.bounds.center.x, target.bounds.center.z);
+        Vector2 originPos = new Vector2(origin.x, origin.z);
+        return Vector2.Distance(originPos, targetPos);
     }
     Transform GetSpawnedBuildingRoot(Renderer renderer)
     {
@@ -640,10 +728,73 @@ public class DeliveryScoreManager : MonoBehaviour
             representativeRenderer = renderers[0],
             bounds = combinedBounds,
             roofTarget = new Vector3(combinedBounds.center.x, combinedBounds.max.y, combinedBounds.center.z),
-            key = MakeBuildingKey(combinedBounds.center)
+            key = MakeBuildingKey(combinedBounds.center),
+            houseSetName = GetHouseSetName(root)
         };
 
         return true;
+    }
+
+    string GetHouseSetName(Transform root)
+    {
+        if (root == null)
+        {
+            return "";
+        }
+
+        House house = root.GetComponent<House>();
+        if (house != null)
+        {
+            if (!string.IsNullOrWhiteSpace(house.deliveryGroupName))
+            {
+                return house.deliveryGroupName.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(house.styleName))
+            {
+                return house.styleName.Trim();
+            }
+        }
+
+        return root.name ?? "";
+    }
+
+    bool IsTargetInAllowedHouseSet(SpawnedBuildingTarget target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        if (allowedHouseSetNames == null || allowedHouseSetNames.Length == 0)
+        {
+            return true;
+        }
+
+        string targetName = target.houseSetName;
+        if (string.IsNullOrWhiteSpace(targetName))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < allowedHouseSetNames.Length; i++)
+        {
+            string allowedName = allowedHouseSetNames[i];
+            if (string.IsNullOrWhiteSpace(allowedName))
+            {
+                continue;
+            }
+
+            if (string.Equals(
+                    targetName.Trim(),
+                    allowedName.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     Vector3 GetDeliveryPoint(SpawnedBuildingTarget target)
@@ -1422,24 +1573,94 @@ public class DeliveryScoreManager : MonoBehaviour
         Vector3 position,
         Quaternion rotation)
     {
-        GameObject chimney =
-            GameObject.CreatePrimitive(PrimitiveType.Cube);
+        GameObject chimney = new GameObject("FallbackChimney");
         chimney.transform.SetParent(transform, true);
         chimney.transform.position = position;
         chimney.transform.rotation = rotation;
-        chimney.transform.localScale = fallbackChimneySize;
+        chimney.transform.localScale = Vector3.one;
 
-        Collider collider = chimney.GetComponent<Collider>();
+        Vector3 size = new Vector3(
+            Mathf.Max(0.1f, fallbackChimneySize.x),
+            Mathf.Max(0.1f, fallbackChimneySize.y),
+            Mathf.Max(0.1f, fallbackChimneySize.z));
+
+        float capHeight = Mathf.Max(0.12f, size.y * 0.20f);
+        float shaftHeight = Mathf.Max(0.12f, size.y - capHeight);
+
+        float shaftWidth = Mathf.Max(0.18f, size.x * 0.68f);
+        float shaftDepth = Mathf.Max(0.18f, size.z * 0.68f);
+        float capWidth = Mathf.Max(size.x * 1.02f, shaftWidth * 1.08f);
+        float capDepth = Mathf.Max(size.z * 1.02f, shaftDepth * 1.08f);
+
+        CreateFallbackChimneyPart(
+            "ChimneyShaft",
+            chimney.transform,
+            PrimitiveType.Cube,
+            new Vector3(0f, shaftHeight * 0.5f, 0f),
+            new Vector3(shaftWidth, shaftHeight, shaftDepth),
+            Color.Lerp(fallbackChimneyColor, Color.black, 0.10f));
+
+        CreateFallbackChimneyPart(
+            "ChimneyCap",
+            chimney.transform,
+            PrimitiveType.Cube,
+            new Vector3(
+                0f,
+                shaftHeight + capHeight * 0.5f - 0.03f,
+                0f),
+            new Vector3(capWidth, capHeight, capDepth),
+            Color.Lerp(fallbackChimneyColor, Color.black, 0.18f));
+
+        CreateFallbackChimneyPart(
+            "ChimneyOpeningVisual",
+            chimney.transform,
+            PrimitiveType.Cube,
+            new Vector3(
+                0f,
+                shaftHeight + capHeight * 0.10f,
+                0f),
+            new Vector3(
+                Mathf.Max(0.08f, shaftWidth * 0.42f),
+                Mathf.Max(0.05f, capHeight * 0.22f),
+                Mathf.Max(0.08f, shaftDepth * 0.42f)),
+            Color.Lerp(fallbackChimneyColor, Color.black, 0.65f));
+
+        // Keep a clean delivery marker at the top of the opening.
+        GameObject dropPointObject = new GameObject(chimneyDropPointName);
+        dropPointObject.transform.SetParent(chimney.transform, false);
+        dropPointObject.transform.localScale = Vector3.one * 0.01f;
+        dropPointObject.transform.localPosition = new Vector3(
+            0f,
+            shaftHeight + capHeight + 0.02f,
+            0f);
+        return chimney;
+    }
+
+    GameObject CreateFallbackChimneyPart(
+        string name,
+        Transform parent,
+        PrimitiveType primitiveType,
+        Vector3 localPosition,
+        Vector3 localScale,
+        Color color)
+    {
+        GameObject part = GameObject.CreatePrimitive(primitiveType);
+        part.name = name;
+        part.transform.SetParent(parent, false);
+        part.transform.localPosition = localPosition;
+        part.transform.localRotation = Quaternion.identity;
+        part.transform.localScale = localScale;
+
+        Collider collider = part.GetComponent<Collider>();
         if (collider != null)
         {
             Destroy(collider);
         }
 
-        Renderer renderer = chimney.GetComponent<Renderer>();
+        Renderer renderer = part.GetComponent<Renderer>();
         if (renderer != null)
         {
-            Shader shader =
-                Shader.Find("Universal Render Pipeline/Lit");
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
             if (shader == null)
             {
                 shader = Shader.Find("Standard");
@@ -1452,12 +1673,12 @@ public class DeliveryScoreManager : MonoBehaviour
             if (shader != null)
             {
                 Material material = new Material(shader);
-                material.color = fallbackChimneyColor;
+                material.color = color;
                 renderer.material = material;
             }
         }
 
-        return chimney;
+        return part;
     }
 
     void ResizeChimney(GameObject chimney)

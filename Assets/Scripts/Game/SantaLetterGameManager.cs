@@ -26,6 +26,8 @@ public class SantaLetterGameManager : MonoBehaviour
     [Header("Toy Database")]
     // public ToyData[] allToys;
     public ResultPopup resultPopup;
+    [SerializeField] private string levelPreviewSceneName = "PreviewLV";
+    [SerializeField] private float correctAnswerTransitionDelay = 2f;
 
     private ChildData currentChild;
 

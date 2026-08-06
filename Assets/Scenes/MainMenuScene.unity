@@ -621,21 +621,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 888446769}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1350f004f968345558056a77c7f9567c, type: 3}
+  m_Script: {fileID: 11500000, guid: d72d56e9ccc248de96ae0289cb30286e, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::SceneLoader
-  droneCamera: {fileID: 0}
-  scale: 5000
-  overrideHomeLocation: 0
-  homeLatitude: 0
-  homeLongitude: 0
-  homeAltitude: 0
-  homeYaw: 0
-  pythonPath: /Users/notebook/.pyenv/versions/3.10.18/bin/python3
-  treePrefab: {fileID: 0}
-  buildingPrefab: {fileID: 0}
-  randomHousePrefabs: []
-  buildingReplacements: []
+  m_EditorClassIdentifier: Assembly-CSharp::SceneLoaderButton
+  sceneName: LV1
 --- !u!4 &888446771
 Transform:
   m_ObjectHideFlags: 0
@@ -1369,11 +1358,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_MethodName
-      value: LoadLevel1
+      value: LoadScene
       objectReference: {fileID: 0}
     - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_TargetAssemblyTypeName
-      value: SceneLoader, Assembly-CSharp
+      value: SceneLoaderButton, Assembly-CSharp
       objectReference: {fileID: 0}
     - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Arguments.m_ObjectArgumentAssemblyTypeName
@@ -1431,7 +1420,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4703328724223665345, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_text
-      value: SETTINGS
+      value: HOW TO PLAY
       objectReference: {fileID: 0}
     - target: {fileID: 4703328724223665345, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_fontAsset
@@ -1451,7 +1440,7 @@ PrefabInstance:
       objectReference: {fileID: 21300000, guid: 41d67d0a04cdd0444952e90b87966a7b, type: 3}
     - target: {fileID: 5455271186829707781, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_Name
-      value: SettingButton
+      value: HowToPlayButton
       objectReference: {fileID: 0}
     - target: {fileID: 7420034510537438799, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
       propertyPath: m_Pivot.x
@@ -1533,6 +1522,34 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Target
+      value: 
+      objectReference: {fileID: 3000000011}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Mode
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_CallState
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_MethodName
+      value: LoadScene
+      objectReference: {fileID: 0}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_TargetAssemblyTypeName
+      value: SceneLoaderButton, Assembly-CSharp
+      objectReference: {fileID: 0}
+    - target: {fileID: 7649115378710424714, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[0].m_Arguments.m_ObjectArgumentAssemblyTypeName
+      value: UnityEngine.Object, UnityEngine
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -1543,6 +1560,51 @@ RectTransform:
   m_CorrespondingSourceObject: {fileID: 7420034510537438799, guid: 6fd98c663240d4fa195f1af8e6db7dd0, type: 3}
   m_PrefabInstance: {fileID: 1998161978}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &3000000010
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3000000012}
+  - component: {fileID: 3000000011}
+  m_Layer: 0
+  m_Name: HowToPlaySceneLoader
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &3000000011
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3000000010}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d72d56e9ccc248de96ae0289cb30286e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SceneLoaderButton
+  sceneName: HowToPlayScene
+--- !u!4 &3000000012
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3000000010}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -1552,3 +1614,4 @@ SceneRoots:
   - {fileID: 1267604982}
   - {fileID: 1089529049}
   - {fileID: 888446771}
+  - {fileID: 3000000012}

@@ -5,6 +5,9 @@ public class House : MonoBehaviour
     public Transform model;
 
     public bool delivered;
+    public string styleName;
+    public int styleIndex = -1;
+    public string deliveryGroupName;
 
     public Bounds GetBounds()
     {
