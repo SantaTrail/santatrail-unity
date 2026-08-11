@@ -13,7 +13,7 @@ public class ResultPopup : MonoBehaviour
 
     public void ShowCorrect()
     {
-        resultText.text = "🎉 Correct!";
+        resultText.text = "Correct!";
         panel.SetActive(true);
 
         Invoke(nameof(Hide), 2f);
@@ -21,7 +21,7 @@ public class ResultPopup : MonoBehaviour
 
     public void ShowWrong()
     {
-        resultText.text = "❌ Wrong!\nTry again!";
+        resultText.text = "Wrong!\nTry again!";
         panel.SetActive(true);
 
         Invoke(nameof(Hide), 1.5f);
