@@ -260,6 +260,6 @@ public class SantaLetterGameManager : MonoBehaviour
 
         hintPanel.Hide();
 
-        StartNewDelivery();
+        // StartNewDelivery();
     }
 }

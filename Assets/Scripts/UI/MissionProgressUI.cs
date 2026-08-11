@@ -19,7 +19,7 @@ public class MissionProgressUI : MonoBehaviour
     public void SetupMission(int total)
     {
         totalDeliveries = total;
-        currentDelivery = 1;
+        currentDelivery = 0;
 
         RefreshUI();
     }

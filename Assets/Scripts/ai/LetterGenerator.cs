@@ -1,23 +1,31 @@
 using UnityEngine;
 using LLMUnity;
+using System;
+using System.Threading.Tasks;
 
 public class LetterGenerator : MonoBehaviour
 {
     public LLMAgent agent;
-
     public LetterUI ui;
 
-    public async System.Threading.Tasks.Task GenerateLetter(
-        ChildData child)
+    public async Task<bool> GenerateLetter(ChildData child)
     {
-        string prompt =
-            PromptBuilder.Build(child);
+        try
+        {
+            string prompt = PromptBuilder.Build(child);
 
-        Debug.Log(prompt);
+            Debug.Log(prompt);
 
-        string letter =
-            await agent.Chat(prompt);
+            string letter = await agent.Chat(prompt);
 
-        ui.UpdateUI(child, letter);
+            ui.UpdateUI(child, letter);
+
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogException(e);
+            return false;
+        }
     }
 }
