@@ -4,8 +4,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARAM_FILE="${SCRIPT_DIR}/sitl_unity_safe.parm"
-HOME_LAT="${1:-13.8455}"
-HOME_LON="${2:-100.5688}"
+HOME_LAT="${1:-52.155719}"
+HOME_LON="${2:-4.964212}"
 HOME_ALT="${3:-10}"
 HOME_YAW="${4:-0}"
 

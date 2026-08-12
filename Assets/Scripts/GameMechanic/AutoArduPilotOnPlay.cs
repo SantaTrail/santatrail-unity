@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Globalization;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public static class AutoArduPilotOnPlay
 {
@@ -27,6 +28,7 @@ public static class AutoArduPilotOnPlay
 
         hasLaunchedThisSession = true;
 
+        GameManager.TryApplyLevelForScene(SceneManager.GetActiveScene().name);
         await WaitForHomeLocationAsync();
 
         string scriptPath = Path.Combine(Application.dataPath, "Scripts/start_ardupilot.sh");
@@ -85,6 +87,7 @@ public static class AutoArduPilotOnPlay
         float waitedMs = 0f;
         while (!GameManager.hasHomeLocation && waitedMs < 2000f)
         {
+            GameManager.TryApplyLevelForScene(SceneManager.GetActiveScene().name);
             await Task.Delay(100);
             waitedMs += 100f;
         }

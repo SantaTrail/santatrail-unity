@@ -62,6 +62,8 @@ public class Level1Manager : MonoBehaviour
 
     void Start()
     {
+        ApplyActiveLevelOverrides();
+
         if (deliveryScoreManager == null)
         {
             deliveryScoreManager = FindFirstObjectByType<DeliveryScoreManager>();
@@ -99,6 +101,35 @@ public class Level1Manager : MonoBehaviour
                 ? deliveryScoreManager.RemainingTargets
                 : deliveryScoreManager.targetBuildingCount);
             SetStatusText("");
+        }
+    }
+
+    void ApplyActiveLevelOverrides()
+    {
+        if (!GameManager.hasActiveLevelSettings)
+        {
+            return;
+        }
+
+        showTutorial = GameManager.activeShowTutorial;
+        autoLoadNextScene = GameManager.activeAutoLoadNextScene;
+
+        if (!string.IsNullOrWhiteSpace(GameManager.activeNextSceneName))
+        {
+            nextSceneName = GameManager.activeNextSceneName;
+        }
+
+        if (GameManager.activeNextSceneDelaySeconds >= 0f)
+        {
+            nextSceneDelaySeconds = GameManager.activeNextSceneDelaySeconds;
+        }
+
+        if (GameManager.hasActiveDeliveryCount)
+        {
+            string presentWord = GameManager.activeDeliveryCount == 1 ? "present" : "presents";
+            transitionMessage =
+                $"Good. The delivery targets are now unlocked. " +
+                $"You still need to deliver {GameManager.activeDeliveryCount} {presentWord}.";
         }
     }
 

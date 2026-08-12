@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 public enum Difficulty
@@ -26,7 +27,7 @@ public class SantaLetterGameManager : MonoBehaviour
     [Header("Toy Database")]
     // public ToyData[] allToys;
     public ResultPopup resultPopup;
-    [SerializeField] private string levelPreviewSceneName = "PreviewLV";
+    [SerializeField] private string level1SceneName = "LV1";
     [SerializeField] private float correctAnswerTransitionDelay = 2f;
 
     private ChildData currentChild;
@@ -162,20 +163,14 @@ public class SantaLetterGameManager : MonoBehaviour
 
             resultPopup.ShowCorrect();
 
-            bool missionFinished = missionUI.CompleteDelivery();
-
-        if (missionFinished)
-        {
-            Debug.Log("Mission Complete!");
-
-            // TODO:
-            // Show mission complete popup
-            // Load next level
-        }
-        else
-        {
-            Invoke(nameof(StartNewDelivery), 2f);
-        }
+            if (correctAnswerTransitionDelay > 0f)
+            {
+                Invoke(nameof(LoadLevel1Scene), correctAnswerTransitionDelay);
+            }
+            else
+            {
+                LoadLevel1Scene();
+            }
         }
         else
         {
@@ -185,6 +180,23 @@ public class SantaLetterGameManager : MonoBehaviour
 
             ShowNextHint();
         }
+    }
+
+    private void LoadLevel1Scene()
+    {
+        string targetSceneName =
+            GameManager.hasActiveLevelSettings &&
+            !string.IsNullOrWhiteSpace(GameManager.activeSceneName)
+                ? GameManager.activeSceneName
+                : level1SceneName;
+
+        if (string.IsNullOrWhiteSpace(targetSceneName))
+        {
+            Debug.LogError("SantaLetterGameManager: level1SceneName is empty.");
+            return;
+        }
+
+        SceneManager.LoadScene(targetSceneName);
     }
 
     void ShowNextHint()

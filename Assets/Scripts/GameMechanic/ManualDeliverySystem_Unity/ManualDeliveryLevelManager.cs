@@ -27,6 +27,8 @@ public class ManualDeliveryLevelManager : MonoBehaviour
 
     private void Start()
     {
+        ApplyActiveLevelOverrides();
+
         if (deliveryScoreManager == null)
         {
             deliveryScoreManager = FindFirstObjectByType<ManualDeliveryScoreManager>();
@@ -87,6 +89,26 @@ public class ManualDeliveryLevelManager : MonoBehaviour
         if (objectiveText != null)
         {
             objectiveText.text = $"{objectivePrefix}: {completedTargets}/{totalTargets}";
+        }
+    }
+
+    private void ApplyActiveLevelOverrides()
+    {
+        if (!GameManager.hasActiveLevelSettings)
+        {
+            return;
+        }
+
+        autoLoadNextScene = GameManager.activeAutoLoadNextScene;
+
+        if (!string.IsNullOrWhiteSpace(GameManager.activeNextSceneName))
+        {
+            nextSceneName = GameManager.activeNextSceneName;
+        }
+
+        if (GameManager.activeNextSceneDelaySeconds >= 0f)
+        {
+            nextSceneDelaySeconds = GameManager.activeNextSceneDelaySeconds;
         }
     }
 
