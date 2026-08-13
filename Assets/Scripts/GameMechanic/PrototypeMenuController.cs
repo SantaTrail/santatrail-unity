@@ -16,13 +16,19 @@ public class PrototypeMenuController : MonoBehaviour
         public double homeLongitude = 100.5688;
         public double homeAltitude = 10;
         public double homeYaw = 0;
+        public MissionDifficulty missionDifficulty = MissionDifficulty.Easy;
+        public int deliveryCount = 5;
+        public bool showTutorial = true;
+        public bool autoLoadNextScene = false;
+        public string nextSceneName = "";
+        public float nextSceneDelaySeconds = 2f;
     }
 
     [Header("Level Select (Optional Dropdown)")]
     public TMP_Dropdown levelDropdown;
     public List<LevelEntry> levels = new List<LevelEntry>
     {
-        new LevelEntry { label = "Level 1 - Guided Tutorial", sceneName = "LV1", homeLatitude = 52.15603852403063, homeLongitude = 4.963989431212162, homeAltitude = 0, homeYaw = 0 },
+        new LevelEntry { label = "Level 1 - Guided Tutorial", sceneName = "LV1", homeLatitude = 52.155719, homeLongitude = 4.964212, homeAltitude = 0, homeYaw = 0 },
         new LevelEntry { label = "Level 2 - Demo", sceneName = "DroneSimulateDemo", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 },
         new LevelEntry { label = "Level 3 - Sandbox", sceneName = "SampleScene", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 }
     };
@@ -50,19 +56,42 @@ public class PrototypeMenuController : MonoBehaviour
 
     private int selectedLevelIndex;
     private string selectedSceneName;
+    private List<LevelConfig> resolvedLevels = new List<LevelConfig>();
 
     void Awake()
     {
-        if (levels.Count > 0)
+        ResolveLevels();
+
+        if (resolvedLevels.Count > 0)
         {
             selectedLevelIndex = 0;
-            selectedSceneName = levels[0].sceneName;
-            ApplySelectedLevelHome();
+            ApplySelectedLevel(resolvedLevels[0]);
         }
 
         SetupLevelDropdown();
         SetupButtons();
         RefreshUI();
+    }
+
+    void ResolveLevels()
+    {
+        resolvedLevels = new List<LevelConfig>();
+
+        if (LevelConfigLoader.TryLoadLevels(out List<LevelConfig> loadedLevels))
+        {
+            resolvedLevels.AddRange(loadedLevels);
+            Debug.Log(
+                $"PrototypeMenuController: loaded {resolvedLevels.Count} levels from Resources/LevelDatabase.json"
+            );
+            return;
+        }
+
+        foreach (LevelEntry legacyLevel in levels)
+        {
+            resolvedLevels.Add(ConvertLegacyLevel(legacyLevel));
+        }
+
+        Debug.Log($"PrototypeMenuController: using {resolvedLevels.Count} legacy scene levels.");
     }
 
     void SetupLevelDropdown()
@@ -71,15 +100,20 @@ public class PrototypeMenuController : MonoBehaviour
 
         levelDropdown.ClearOptions();
         var options = new List<TMP_Dropdown.OptionData>();
-        for (int i = 0; i < levels.Count; i++)
+        for (int i = 0; i < resolvedLevels.Count; i++)
         {
-            options.Add(new TMP_Dropdown.OptionData(levels[i].label));
+            options.Add(new TMP_Dropdown.OptionData(resolvedLevels[i].label));
         }
 
         levelDropdown.AddOptions(options);
         levelDropdown.onValueChanged.RemoveListener(OnDropdownChanged);
         levelDropdown.onValueChanged.AddListener(OnDropdownChanged);
-        selectedLevelIndex = Mathf.Clamp(levelDropdown.value, 0, Mathf.Max(0, levels.Count - 1));
+        selectedLevelIndex = Mathf.Clamp(levelDropdown.value, 0, Mathf.Max(0, resolvedLevels.Count - 1));
+
+        if (resolvedLevels.Count > 0)
+        {
+            ApplySelectedLevel(resolvedLevels[selectedLevelIndex]);
+        }
     }
 
     void SetupButtons()
@@ -93,23 +127,22 @@ public class PrototypeMenuController : MonoBehaviour
     void OnDropdownChanged(int index)
     {
         selectedLevelIndex = index;
-        if (levels.Count > 0)
+        if (resolvedLevels.Count > 0)
         {
-            selectedSceneName = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)].sceneName;
-            ApplySelectedLevelHome();
+            ApplySelectedLevel(resolvedLevels[Mathf.Clamp(selectedLevelIndex, 0, resolvedLevels.Count - 1)]);
         }
         RefreshUI();
     }
 
-    void ApplySelectedLevelHome()
+    void ApplySelectedLevel(LevelConfig level)
     {
-        if (levels.Count == 0)
+        if (level == null)
         {
             return;
         }
 
-        LevelEntry level = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)];
-        GameManager.SetHomeLocation(level.homeLatitude, level.homeLongitude, level.homeAltitude, level.homeYaw);
+        selectedSceneName = level.sceneName;
+        GameManager.ApplyLevel(level);
     }
 
     void RefreshUI()
@@ -119,13 +152,13 @@ public class PrototypeMenuController : MonoBehaviour
 
         if (selectedLevelText != null)
         {
-            if (levels.Count == 0)
+            if (resolvedLevels.Count == 0)
             {
                 selectedLevelText.text = "No levels configured";
             }
             else
             {
-                var lvl = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)];
+                var lvl = resolvedLevels[Mathf.Clamp(selectedLevelIndex, 0, resolvedLevels.Count - 1)];
                 selectedLevelText.text = $"Selected: {lvl.label}";
             }
         }
@@ -133,11 +166,10 @@ public class PrototypeMenuController : MonoBehaviour
 
     public void SelectLevel(int index)
     {
-        if (levels.Count == 0) return;
+        if (resolvedLevels.Count == 0) return;
 
-        selectedLevelIndex = Mathf.Clamp(index, 0, levels.Count - 1);
-        selectedSceneName = levels[selectedLevelIndex].sceneName;
-        ApplySelectedLevelHome();
+        selectedLevelIndex = Mathf.Clamp(index, 0, resolvedLevels.Count - 1);
+        ApplySelectedLevel(resolvedLevels[selectedLevelIndex]);
         if (levelDropdown != null) levelDropdown.value = selectedLevelIndex;
         RefreshUI();
     }
@@ -151,11 +183,11 @@ public class PrototypeMenuController : MonoBehaviour
         }
 
         selectedSceneName = sceneName;
-        int foundIndex = levels.FindIndex(l => l.sceneName == sceneName);
+        int foundIndex = resolvedLevels.FindIndex(l => l.sceneName == sceneName);
         if (foundIndex >= 0)
         {
             selectedLevelIndex = foundIndex;
-            ApplySelectedLevelHome();
+            ApplySelectedLevel(resolvedLevels[selectedLevelIndex]);
             if (levelDropdown != null) levelDropdown.value = selectedLevelIndex;
         }
         RefreshUI();
@@ -169,12 +201,15 @@ public class PrototypeMenuController : MonoBehaviour
     public void OnPlayPressed()
     {
         string targetScene = selectedSceneName;
-        if (string.IsNullOrWhiteSpace(targetScene) && levels.Count > 0)
+        if (string.IsNullOrWhiteSpace(targetScene) && resolvedLevels.Count > 0)
         {
-            targetScene = levels[Mathf.Clamp(selectedLevelIndex, 0, levels.Count - 1)].sceneName;
+            targetScene = resolvedLevels[Mathf.Clamp(selectedLevelIndex, 0, resolvedLevels.Count - 1)].sceneName;
         }
 
-        ApplySelectedLevelHome();
+        if (resolvedLevels.Count > 0)
+        {
+            ApplySelectedLevel(resolvedLevels[Mathf.Clamp(selectedLevelIndex, 0, resolvedLevels.Count - 1)]);
+        }
 
         if (string.IsNullOrWhiteSpace(targetScene))
         {
@@ -184,5 +219,24 @@ public class PrototypeMenuController : MonoBehaviour
 
         Debug.Log($"PrototypeMenuController: loading {targetScene}");
         SceneManager.LoadScene(targetScene);
+    }
+
+    private static LevelConfig ConvertLegacyLevel(LevelEntry legacyLevel)
+    {
+        return new LevelConfig
+        {
+            label = legacyLevel.label,
+            sceneName = legacyLevel.sceneName,
+            homeLatitude = legacyLevel.homeLatitude,
+            homeLongitude = legacyLevel.homeLongitude,
+            homeAltitude = legacyLevel.homeAltitude,
+            homeYaw = legacyLevel.homeYaw,
+            missionDifficulty = MissionDifficulty.Easy,
+            deliveryCount = 5,
+            showTutorial = true,
+            autoLoadNextScene = false,
+            nextSceneName = "",
+            nextSceneDelaySeconds = 2f
+        };
     }
 }

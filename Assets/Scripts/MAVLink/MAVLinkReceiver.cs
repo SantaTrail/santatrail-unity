@@ -31,6 +31,8 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("If enabled, the drone starts at the ArcGIS map's origin position.")]
     public bool alignToMapOriginOnStart = true;
     private bool hasAlignedToMapOrigin;
+    private bool hasConfirmedHomeSync;
+    private float lastHomeSyncRequestTime = -1000f;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -306,6 +308,7 @@ public class MAVLinkReceiver : MonoBehaviour
             if (AlignToMapOrigin())
             {
                 hasAlignedToMapOrigin = true;
+                TrySyncHomeLocation();
                 yield break;
             }
 
@@ -329,6 +332,85 @@ public class MAVLinkReceiver : MonoBehaviour
         locationComponent.Position = mapComponent.OriginPosition;
         Debug.Log($"🧭 Drone aligned to ArcGIS map origin: {mapComponent.OriginPosition}");
         return true;
+    }
+
+    void TrySyncHomeLocation()
+    {
+        if (hasConfirmedHomeSync ||
+            commandClient == null ||
+            txParser == null ||
+            !GameManager.hasHomeLocation)
+        {
+            return;
+        }
+
+        if ((Time.time - lastHomeSyncRequestTime) < 1.0f)
+        {
+            return;
+        }
+
+        lastHomeSyncRequestTime = Time.time;
+
+        var setHome = new MAVLink.mavlink_command_long_t(
+            0f,
+            0f,
+            0f,
+            0f,
+            (float)GameManager.homeLat,
+            (float)GameManager.homeLon,
+            (float)GameManager.homeAlt,
+            (ushort)MAVLink.MAV_CMD.DO_SET_HOME,
+            vehicleSystemId,
+            vehicleComponentId,
+            0
+        );
+
+        byte[] setHomePacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_LONG,
+            setHome,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        commandClient.Send(setHomePacket, setHomePacket.Length, commandEndPoint);
+        commandClient.Send(
+            setHomePacket,
+            setHomePacket.Length,
+            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14551)
+        );
+
+        var requestHome = new MAVLink.mavlink_command_long_t(
+            242f,
+            0f,
+            0f,
+            0f,
+            0f,
+            0f,
+            0f,
+            (ushort)MAVLink.MAV_CMD.REQUEST_MESSAGE,
+            vehicleSystemId,
+            vehicleComponentId,
+            0
+        );
+
+        byte[] requestHomePacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_LONG,
+            requestHome,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        commandClient.Send(requestHomePacket, requestHomePacket.Length, commandEndPoint);
+        commandClient.Send(
+            requestHomePacket,
+            requestHomePacket.Length,
+            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14551)
+        );
+        Debug.Log(
+            $"🧭 Requested home sync: {GameManager.homeLat}, {GameManager.homeLon}, {GameManager.homeAlt}"
+        );
     }
 
     void Update()
@@ -558,6 +640,7 @@ public class MAVLinkReceiver : MonoBehaviour
             targetRelativeAlt = gps.relative_alt * 0.001f;
             lastGpsPacketTime = Time.time;
             lastPositionTime = Time.time;
+            TrySyncHomeLocation();
 
 
             float rawNorthMps = gps.vx * 0.01f;
@@ -751,6 +834,12 @@ public class MAVLinkReceiver : MonoBehaviour
             lastCommandAckResult = ack.result;
             hasCommandAck = true;
             lastStatusText = $"CMD_ACK cmd={ack.command} result={ack.result}";
+
+            if (ack.command == (ushort)MAVLink.MAV_CMD.DO_SET_HOME &&
+                ack.result == (byte)MAVLink.MAV_RESULT.ACCEPTED)
+            {
+                hasConfirmedHomeSync = true;
+            }
         }
 
         if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.HEARTBEAT)
@@ -760,6 +849,7 @@ public class MAVLinkReceiver : MonoBehaviour
             hbSystemStatus = hb.system_status;
             hbArmed = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.SAFETY_ARMED) != 0;
             hbGuided = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.GUIDED_ENABLED) != 0;
+            TrySyncHomeLocation();
         }
 
         if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.EXTENDED_SYS_STATE)
