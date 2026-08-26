@@ -17,9 +17,10 @@ public class LetterUI : MonoBehaviour
     {
         ApplyFont(child.age);
 
-        childName.text = child.name.ToUpper();
-        childAge.text = "AGE " + child.age;
-        letter.text = aiLetter;
+        childName.SetText(child.name.ToUpper());
+        childAge.SetText("AGE {0}", child.age);
+        letter.SetText(aiLetter);
+        letter.ForceMeshUpdate();
     }
 
     void ApplyFont(int age)

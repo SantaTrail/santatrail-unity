@@ -5,20 +5,33 @@ using System.Globalization;
 using System.Collections.Generic;
 using Debug = UnityEngine.Debug;
 using System.Collections;
+using UnityEngine.SceneManagement;
 using Esri.ArcGISMapsSDK.Components;
 using Esri.ArcGISMapsSDK.Utils;
 using Esri.ArcGISMapsSDK.Utils.GeoCoord;
+using Esri.GameEngine;
 using Esri.GameEngine.Geometry;
 using Esri.GameEngine.Map;
 using Unity.Mathematics;
 
 public partial class SceneLoaderArcgis
 {
+    string validatedJsonContent;
+
     void Awake()
     {
+        // Unity invokes Awake on disabled behaviours. Ignore the legacy loader
+        // component so it cannot reconfigure the map before the active loader.
+        if (!enabled)
+        {
+            return;
+        }
+
         TryResolveArcGISConverter();
         ResolveModularHouseGenerator();
+        GameManager.TryApplyLevelForScene(SceneManager.GetActiveScene().name);
         ApplyConfiguredMapOrigin();
+        InitializeFallbackOriginFromHome();
 
         arcGISMap = FindFirstObjectByType<ArcGISMapComponent>();
 
@@ -31,6 +44,7 @@ public partial class SceneLoaderArcgis
             );
 
             ApplyLayerVisibilityOverrides();
+            EnsureArcGISMapLoading(arcGISMap);
         }
         else
         {
@@ -244,6 +258,28 @@ public partial class SceneLoaderArcgis
         }
     }
 
+    void EnsureArcGISMapLoading(ArcGISMapComponent mapComponent)
+    {
+        var map = mapComponent?.View?.Map;
+        if (map == null)
+        {
+            Debug.LogWarning("⚠️ ArcGIS map load could not start because the SDK map is missing.");
+            return;
+        }
+
+        if (map.LoadStatus == ArcGISLoadStatus.FailedToLoad)
+        {
+            string error = map.LoadError?.Message ?? "unknown ArcGIS load error";
+            Debug.LogWarning($"⚠️ Retrying ArcGIS map load: {error}");
+            map.RetryLoad();
+        }
+        else if (map.LoadStatus == ArcGISLoadStatus.NotLoaded)
+        {
+            Debug.Log("🗺 Starting ArcGIS map load after level configuration.");
+            map.Load();
+        }
+    }
+
     void Start()
     {
         Debug.Log("🏘 Visible-only village test mode enabled");
@@ -318,10 +354,15 @@ public partial class SceneLoaderArcgis
             return;
         }
 
-        if (File.Exists(outputPath))
+        if (File.Exists(outputPath) &&
+            !CanUseCachedOutputForCurrentHome(outputPath))
         {
             File.Delete(outputPath);
             Debug.Log("🧹 Old JSON deleted");
+        }
+        else if (File.Exists(outputPath))
+        {
+            Debug.Log("✅ Using cached map data while OSM refreshes in the background");
         }
 
         SetupDroneReference();
@@ -330,11 +371,48 @@ public partial class SceneLoaderArcgis
 
     string ResolveBackendPath(string projectRoot)
     {
+        string packagedBackendPath = Path.Combine(
+            Application.streamingAssetsPath,
+            "Backend"
+        );
+
+        if (File.Exists(Path.Combine(packagedBackendPath, "main.py")))
+        {
+            string writableBackendPath = Path.Combine(
+                Application.persistentDataPath,
+                "Backend"
+            );
+
+            Directory.CreateDirectory(writableBackendPath);
+
+            foreach (string sourcePath in Directory.GetFiles(
+                         packagedBackendPath,
+                         "*.py"
+                     ))
+            {
+                string destinationPath = Path.Combine(
+                    writableBackendPath,
+                    Path.GetFileName(sourcePath)
+                );
+                File.Copy(sourcePath, destinationPath, true);
+            }
+
+            Debug.Log(
+                "📦 Prepared packaged Python backend at: " +
+                writableBackendPath
+            );
+            return writableBackendPath;
+        }
+
         string[] candidates =
         {
-        Path.GetFullPath(Path.Combine(projectRoot, "../santatrail-backend/backend")),
-        Path.Combine(projectRoot, "uav-terrain-ai/backend")
-    };
+            Path.GetFullPath(Path.Combine(
+                projectRoot,
+                "../santatrail-backend/backend"
+            )),
+            Path.Combine(projectRoot, "uav-terrain-ai/backend"),
+            Path.Combine(System.AppContext.BaseDirectory, "Backend")
+        };
 
         foreach (string candidate in candidates)
         {
@@ -344,7 +422,7 @@ public partial class SceneLoaderArcgis
             }
         }
 
-        return candidates[0];
+        return packagedBackendPath;
     }
 
     IEnumerator InitializeEverything()
@@ -366,6 +444,7 @@ public partial class SceneLoaderArcgis
 
         bool jsonReady = false;
         bool arcgisReady = false;
+        bool pythonExitWarningLogged = false;
 
         while (timer < timeout)
         {
@@ -376,27 +455,7 @@ public partial class SceneLoaderArcgis
                 TryResolveArcGISConverter();
             }
 
-            if (pythonProcessCompleted &&
-                pythonProcessExitCode != 0)
-            {
-                Debug.LogError(
-                    "❌ Python level generation failed with exit code " +
-                    pythonProcessExitCode
-                );
-
-                if (loadingScreen != null)
-                {
-                    loadingScreen.ShowError(
-                        "Python level generation failed. Check the Console."
-                    );
-                }
-
-                yield break;
-            }
-
             if (!jsonReady &&
-                pythonProcessCompleted &&
-                pythonProcessExitCode == 0 &&
                 File.Exists(outputPath))
             {
                 try
@@ -405,6 +464,7 @@ public partial class SceneLoaderArcgis
 
                     if (IsValidJson(content))
                     {
+                        validatedJsonContent = content;
                         jsonReady = true;
                         TrySetFallbackOriginFromJson(content);
                         Debug.Log("✅ JSON READY (validated)");
@@ -415,6 +475,38 @@ public partial class SceneLoaderArcgis
                     Debug.LogWarning(
                         "⚠️ JSON read error: " + e.Message
                     );
+                }
+            }
+
+            if (pythonProcessCompleted &&
+                pythonProcessExitCode != 0)
+            {
+                if (pythonProcessExitCode == 143)
+                {
+                    if (!pythonExitWarningLogged)
+                    {
+                        Debug.LogWarning(
+                            "⚠️ Python exited with code 143. " +
+                            "Waiting for output.json to finish loading if it was written before shutdown."
+                        );
+                        pythonExitWarningLogged = true;
+                    }
+                }
+                else
+                {
+                    Debug.LogError(
+                        "❌ Python level generation failed with exit code " +
+                        pythonProcessExitCode
+                    );
+
+                    if (loadingScreen != null)
+                    {
+                        loadingScreen.ShowError(
+                            "Python level generation failed. Check the Console."
+                        );
+                    }
+
+                    yield break;
                 }
             }
 
@@ -505,6 +597,131 @@ public partial class SceneLoaderArcgis
                     }
 
                     yield break;
+                }
+
+                DeliveryScoreManager deliveryManager =
+                    FindFirstObjectByType<DeliveryScoreManager>(
+                        FindObjectsInactive.Include
+                    );
+
+                if (deliveryManager != null)
+                {
+                    // Generation may take longer than the manager's first scan.
+                    // Restart only when its earlier scan already timed out.
+                    deliveryManager.EnsureInitializationStarted(
+                        retryIfFinished: true
+                    );
+                }
+
+                float readyTimer = 0f;
+                bool mapReady =
+                    !waitForArcGISBeforeHidingLoadingScreen ||
+                    (arcGISConverter != null && arcGISConverter.IsReady());
+                bool deliveryReady =
+                    !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
+                    deliveryManager == null ||
+                    deliveryManager.IsInitializationComplete;
+
+                while ((!mapReady || !deliveryReady) &&
+                       readyTimer < finalLevelReadyTimeoutSeconds)
+                {
+                    if (arcGISConverter == null)
+                    {
+                        TryResolveArcGISConverter();
+                    }
+
+                    if (deliveryManager == null)
+                    {
+                        deliveryManager =
+                            FindFirstObjectByType<DeliveryScoreManager>(
+                                FindObjectsInactive.Include
+                            );
+
+                        if (deliveryManager != null)
+                        {
+                            deliveryManager.EnsureInitializationStarted(
+                                retryIfFinished: true
+                            );
+                        }
+                    }
+
+                    mapReady =
+                        !waitForArcGISBeforeHidingLoadingScreen ||
+                        (arcGISConverter != null && arcGISConverter.IsReady());
+                    deliveryReady =
+                        !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
+                        deliveryManager == null ||
+                        deliveryManager.IsInitializationComplete;
+
+                    if (loadingScreen != null)
+                    {
+                        string readinessMessage =
+                            !mapReady
+                                ? "Finishing ArcGIS map tiles..."
+                                : "Preparing delivery targets and minimap...";
+                        float readinessProgress =
+                            0.88f +
+                            Mathf.Clamp01(
+                                readyTimer / finalLevelReadyTimeoutSeconds
+                            ) * 0.10f;
+
+                        loadingScreen.SetProgress(
+                            readinessProgress,
+                            readinessMessage
+                        );
+                    }
+
+                    yield return new WaitForSecondsRealtime(0.2f);
+                    readyTimer += 0.2f;
+                }
+
+                if (!mapReady)
+                {
+                    Debug.LogError(
+                        "❌ Level objects finished, but ArcGIS did not become ready."
+                    );
+
+                    if (loadingScreen != null)
+                    {
+                        loadingScreen.ShowError(
+                            "ArcGIS map did not finish loading. Check the Console."
+                        );
+                    }
+
+                    yield break;
+                }
+
+                if (waitForDeliveryTargetsBeforeHidingLoadingScreen &&
+                    deliveryManager != null &&
+                    (!deliveryManager.IsInitializationComplete ||
+                     !deliveryManager.HasInitializedTargets))
+                {
+                    Debug.LogError(
+                        "❌ Level generation finished without delivery targets."
+                    );
+
+                    if (loadingScreen != null)
+                    {
+                        loadingScreen.ShowError(
+                            "No delivery houses were ready. Check generated buildings."
+                        );
+                    }
+
+                    yield break;
+                }
+
+                if (loadingScreen != null)
+                {
+                    loadingScreen.SetProgress(
+                        0.99f,
+                        "Finalizing camera and minimap..."
+                    );
+                }
+
+                int renderFrames = Mathf.Max(1, finalRenderFrameCount);
+                for (int frame = 0; frame < renderFrames; frame++)
+                {
+                    yield return new WaitForEndOfFrame();
                 }
 
                 if (loadingScreen != null)
@@ -599,6 +816,72 @@ public partial class SceneLoaderArcgis
         return allowLocalGpsFallback && fallbackOriginSet;
     }
 
+    void InitializeFallbackOriginFromHome()
+    {
+        if (!allowLocalGpsFallback || fallbackOriginSet)
+        {
+            return;
+        }
+
+        if (!GameManager.hasHomeLocation)
+        {
+            return;
+        }
+
+        if (double.IsNaN(GameManager.homeLat) ||
+            double.IsInfinity(GameManager.homeLat) ||
+            double.IsNaN(GameManager.homeLon) ||
+            double.IsInfinity(GameManager.homeLon) ||
+            System.Math.Abs(GameManager.homeLat) > 90.0 ||
+            System.Math.Abs(GameManager.homeLon) > 180.0)
+        {
+            return;
+        }
+
+        fallbackOriginLat = GameManager.homeLat;
+        fallbackOriginLon = GameManager.homeLon;
+        fallbackOriginSet = true;
+    }
+
+    bool CanUseCachedOutputForCurrentHome(string path)
+    {
+        try
+        {
+            string json = File.ReadAllText(path);
+            if (!IsValidJson(json))
+            {
+                return false;
+            }
+
+            Result cached = JsonUtility.FromJson<Result>(json);
+            if (cached == null ||
+                cached.waypoints == null ||
+                cached.waypoints.Length == 0)
+            {
+                return false;
+            }
+
+            GPSWaypoint origin = cached.waypoints[0];
+            double latitudeMeters =
+                (origin.lat - GameManager.homeLat) * 111320.0;
+            double longitudeMeters =
+                (origin.lon - GameManager.homeLon) *
+                111320.0 *
+                System.Math.Cos(GameManager.homeLat * System.Math.PI / 180.0);
+            double distanceMeters = System.Math.Sqrt(
+                latitudeMeters * latitudeMeters +
+                longitudeMeters * longitudeMeters
+            );
+
+            return distanceMeters <= System.Math.Max(250.0, osmQueryRadiusMeters);
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogWarning("⚠️ Cached map data could not be read: " + exception.Message);
+            return false;
+        }
+    }
+
     void TrySetFallbackOriginFromJson(string json)
     {
         if (!allowLocalGpsFallback || fallbackOriginSet)
@@ -620,7 +903,12 @@ public partial class SceneLoaderArcgis
 
     bool LoadAndGenerateSafe()
     {
-        string json = File.ReadAllText(outputPath);
+        string json = validatedJsonContent;
+        if (string.IsNullOrEmpty(json))
+        {
+            json = File.ReadAllText(outputPath);
+        }
+
         Result result = JsonUtility.FromJson<Result>(json);
 
         if (result == null)

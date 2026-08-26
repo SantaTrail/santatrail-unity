@@ -31,6 +31,13 @@ public class Building
 }
 
 [System.Serializable]
+public class Road
+{
+    public string highway;
+    public GPSPoint[] points;
+}
+
+[System.Serializable]
 public class Result
 {
     public string scene;
@@ -41,4 +48,5 @@ public class Result
     public int grid_size;
 
     public Building[] buildings;
+    public Road[] roads;
 }

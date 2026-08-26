@@ -122,6 +122,11 @@ public class ManualDeliveryScoreManager : MonoBehaviour
 
     private void Start()
     {
+        if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
+        {
+            targetLimit = Mathf.Max(1, GameManager.activeDeliveryCount);
+        }
+
         AutoBindDrone();
         CleanupLegacyDeliveryObjects();
         UpdateScoreUI();

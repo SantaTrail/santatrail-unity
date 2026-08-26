@@ -27,7 +27,7 @@ public class SantaLetterGameManager : MonoBehaviour
     [Header("Toy Database")]
     // public ToyData[] allToys;
     public ResultPopup resultPopup;
-    [SerializeField] private string level1SceneName = "LV1";
+    [SerializeField] private string level1SceneName = "PreviewLV";
     [SerializeField] private float correctAnswerTransitionDelay = 2f;
 
     private ChildData currentChild;
@@ -50,7 +50,26 @@ public class SantaLetterGameManager : MonoBehaviour
     {
         allToys = toyLoader.toys;
 
+        if (letterGenerator != null && letterUI != null)
+        {
+            letterGenerator.ui = letterUI;
+        }
+
+        if (deliveryManager != null)
+        {
+            deliveryManager.santaLetterGameManager = this;
+        }
+
+        if (GameManager.hasActiveLevelSettings)
+        {
+            difficulty = (Difficulty)GameManager.activeMissionDifficulty;
+        }
+
         totalDeliveries = GetDeliveryCount();
+        if (deliveryManager != null)
+        {
+            deliveryManager.totalDeliveries = totalDeliveries;
+        }
         missionUI.SetupMission(totalDeliveries);
 
         Debug.Log("Number of Toys = " + allToys.Length);
@@ -162,14 +181,15 @@ public class SantaLetterGameManager : MonoBehaviour
             AudioManager.Instance.PlayCorrect();
 
             resultPopup.ShowCorrect();
+            packPresentButton.interactable = false;
 
             if (correctAnswerTransitionDelay > 0f)
             {
-                Invoke(nameof(LoadLevel1Scene), correctAnswerTransitionDelay);
+                Invoke(nameof(AdvanceCorrectDelivery), correctAnswerTransitionDelay);
             }
             else
             {
-                LoadLevel1Scene();
+                AdvanceCorrectDelivery();
             }
         }
         else
@@ -182,21 +202,26 @@ public class SantaLetterGameManager : MonoBehaviour
         }
     }
 
+    private void AdvanceCorrectDelivery()
+    {
+        if (deliveryManager != null)
+        {
+            deliveryManager.CompleteDelivery();
+            return;
+        }
+
+        LoadLevel1Scene();
+    }
+
     private void LoadLevel1Scene()
     {
-        string targetSceneName =
-            GameManager.hasActiveLevelSettings &&
-            !string.IsNullOrWhiteSpace(GameManager.activeSceneName)
-                ? GameManager.activeSceneName
-                : level1SceneName;
-
-        if (string.IsNullOrWhiteSpace(targetSceneName))
+        if (string.IsNullOrWhiteSpace(level1SceneName))
         {
             Debug.LogError("SantaLetterGameManager: level1SceneName is empty.");
             return;
         }
 
-        SceneManager.LoadScene(targetSceneName);
+        SceneManager.LoadScene(level1SceneName);
     }
 
     void ShowNextHint()
@@ -248,6 +273,11 @@ public class SantaLetterGameManager : MonoBehaviour
 
     int GetDeliveryCount()
     {
+        if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
+        {
+            return Mathf.Max(1, GameManager.activeDeliveryCount);
+        }
+
         switch (difficulty)
         {
             case Difficulty.Easy:

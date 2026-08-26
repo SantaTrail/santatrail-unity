@@ -1896,7 +1896,7 @@ MonoBehaviour:
   arcGISConverter: {fileID: 1663710037}
   allowLocalGpsFallback: 1
   useArcGISTerrainOnly: 1
-  pythonPath: /Users/notebook/.pyenv/versions/3.10.18/bin/python3
+  pythonPath:
   treePrefab: {fileID: 5917764883595587885, guid: 736422f8743be4b4f9b0455b7ba85096, type: 3}
   buildingPrefab: {fileID: 5099033651495012606, guid: 55fa3330e109d974d93a4bf6ebfed017, type: 3}
   randomHousePrefabs: []

@@ -69,10 +69,10 @@ public class ModularHouseGenerator : MonoBehaviour
 
     [Header("Wall Variety")]
     [Range(0f, 1f)]
-    [SerializeField] float groundFloorWindowChance = 0.18f;
+    [SerializeField] float groundFloorWindowChance = 0.25f;
 
     [Range(0f, 1f)]
-    [SerializeField] float upperFloorWindowChance = 0.30f;
+    [SerializeField] float upperFloorWindowChance = 0.35f;
 
     [Tooltip("Do not place windows in the first or last module of an edge. This makes corners look less crowded.")]
     [SerializeField] bool avoidWindowsAtCorners = true;
@@ -119,7 +119,11 @@ public class ModularHouseGenerator : MonoBehaviour
 
     [Min(0.02f)]
     [Tooltip("Vertical thickness of the visible roof edge.")]
-    [SerializeField] float roofEdgeHeight = 0.20f;
+    [SerializeField] float roofEdgeHeight = 0.12f;
+
+    [Min(0f)]
+    [Tooltip("How far the lower roof edge is tucked inward to create a softer eave shape.")]
+    [SerializeField] float roofEdgeInset = 0.10f;
 
     [Tooltip("Cover the gap between the top of the rectangular walls and a sloped Shed roof.")]
     [SerializeField] bool createShedWallFill = true;
@@ -164,6 +168,18 @@ public class ModularHouseGenerator : MonoBehaviour
 
     [Header("Building Appearance")]
     [SerializeField] BuildingStyle[] buildingStyles;
+
+    struct FootprintShapeInfo
+    {
+        public float area;
+        public float perimeter;
+        public float averageEdgeLength;
+        public float longestEdgeLength;
+        public float shortestEdgeLength;
+        public float edgeAspectRatio;
+        public float compactness;
+    }
+
     int GetBuildingStyleIndex(int buildingIndex)
     {
         if (buildingStyles == null || buildingStyles.Length == 0)
@@ -300,10 +316,21 @@ public class ModularHouseGenerator : MonoBehaviour
             return false;
         }
 
+        FootprintShapeInfo shapeInfo =
+            AnalyzeFootprintShape(
+                footprint,
+                signedArea
+            );
+
         int safeMinimumFloors = Mathf.Max(1, minimumFloors);
         int safeMaximumFloors = Mathf.Max(safeMinimumFloors, maximumFloors);
         System.Random random = new System.Random(deterministicSeed);
-        int floorCount = random.Next(safeMinimumFloors, safeMaximumFloors + 1);
+        int floorCount = ChooseFloorCount(
+            safeMinimumFloors,
+            safeMaximumFloors,
+            shapeInfo,
+            random
+        );
         float totalWallHeight = floorCount * Mathf.Max(0.5f, floorHeight);
 
         GameObject generatedRootObject = new GameObject("GeneratedModules");
@@ -345,6 +372,7 @@ public class ModularHouseGenerator : MonoBehaviour
             }
 
             outward.Normalize();
+            bool isFrontEdge = edgeIndex == doorEdgeIndex;
 
             float safePreferredWidth =
                 Mathf.Max(0.25f, preferredModuleWidth);
@@ -386,6 +414,17 @@ public class ModularHouseGenerator : MonoBehaviour
                     float windowChance = floorIndex == 0
                         ? groundFloorWindowChance
                         : upperFloorWindowChance;
+
+                    windowChance = Mathf.Clamp01(
+                        windowChance *
+                        GetResidentialWindowChanceMultiplier(
+                            shapeInfo,
+                            isFrontEdge,
+                            floorIndex,
+                            moduleCount,
+                            moduleIndex
+                        )
+                    );
 
                     bool cornerAllowsWindow =
                         !avoidWindowsAtCorners ||
@@ -523,6 +562,159 @@ public class ModularHouseGenerator : MonoBehaviour
         propertyBlock.SetColor("_BaseColor", tint);
         propertyBlock.SetColor("_Color", tint);
         renderer.SetPropertyBlock(propertyBlock);
+    }
+
+    FootprintShapeInfo AnalyzeFootprintShape(
+        List<Vector3> footprint,
+        float signedArea)
+    {
+        FootprintShapeInfo info = new FootprintShapeInfo();
+
+        if (footprint == null || footprint.Count < 3)
+        {
+            return info;
+        }
+
+        info.area = Mathf.Abs(signedArea);
+
+        float perimeter = 0f;
+        float longestEdge = 0f;
+        float shortestEdge = float.MaxValue;
+
+        for (int i = 0; i < footprint.Count; i++)
+        {
+            Vector3 edge =
+                footprint[(i + 1) % footprint.Count] - footprint[i];
+            edge.y = 0f;
+
+            float edgeLength = edge.magnitude;
+            perimeter += edgeLength;
+            longestEdge = Mathf.Max(longestEdge, edgeLength);
+            shortestEdge = Mathf.Min(shortestEdge, edgeLength);
+        }
+
+        info.perimeter = perimeter;
+        info.averageEdgeLength =
+            footprint.Count > 0
+                ? perimeter / footprint.Count
+                : 0f;
+        info.longestEdgeLength = longestEdge;
+        info.shortestEdgeLength =
+            shortestEdge == float.MaxValue ? 0f : shortestEdge;
+        info.edgeAspectRatio =
+            info.shortestEdgeLength > 0.001f
+                ? info.longestEdgeLength / info.shortestEdgeLength
+                : 1f;
+
+        float perimeterSquared = perimeter * perimeter;
+        info.compactness = perimeterSquared > 0.001f
+            ? Mathf.Clamp01(
+                (4f * Mathf.PI * info.area) / perimeterSquared
+            )
+            : 0f;
+
+        return info;
+    }
+
+    int ChooseFloorCount(
+        int safeMinimumFloors,
+        int safeMaximumFloors,
+        FootprintShapeInfo shapeInfo,
+        System.Random random)
+    {
+        if (safeMaximumFloors <= safeMinimumFloors)
+        {
+            return safeMinimumFloors;
+        }
+
+        float extraFloorChance = 0.10f;
+
+        if (shapeInfo.area >= 40f)
+        {
+            extraFloorChance += Mathf.InverseLerp(
+                40f,
+                180f,
+                shapeInfo.area
+            ) * 0.40f;
+        }
+
+        if (shapeInfo.area <= 60f)
+        {
+            extraFloorChance -= 0.20f;
+        }
+
+        if (shapeInfo.compactness >= 0.65f)
+        {
+            extraFloorChance += 0.15f;
+        }
+        else if (shapeInfo.compactness <= 0.45f)
+        {
+            extraFloorChance -= 0.10f;
+        }
+
+        if (shapeInfo.edgeAspectRatio >= 1.35f)
+        {
+            extraFloorChance += 0.05f;
+        }
+
+        extraFloorChance = Mathf.Clamp01(extraFloorChance);
+
+        return random.NextDouble() < extraFloorChance
+            ? safeMaximumFloors
+            : safeMinimumFloors;
+    }
+
+    float GetResidentialWindowChanceMultiplier(
+        FootprintShapeInfo shapeInfo,
+        bool isFrontEdge,
+        int floorIndex,
+        int moduleCount,
+        int moduleIndex)
+    {
+        float multiplier = 1f;
+
+        if (floorIndex == 0)
+        {
+            multiplier *= isFrontEdge ? 0.70f : 0.45f;
+        }
+        else
+        {
+            multiplier *= isFrontEdge ? 1.05f : 0.90f;
+        }
+
+        if (moduleCount <= 2)
+        {
+            multiplier *= 0.35f;
+        }
+        else if (moduleCount == 3)
+        {
+            multiplier *= moduleIndex == 1 ? 1.0f : 0.55f;
+        }
+        else
+        {
+            float center = (moduleCount - 1) * 0.5f;
+            float distanceFromCenter =
+                Mathf.Abs(moduleIndex - center) /
+                Mathf.Max(1f, center);
+
+            multiplier *= Mathf.Lerp(1.0f, 0.50f, distanceFromCenter);
+        }
+
+        if (shapeInfo.area < 70f)
+        {
+            multiplier *= 0.75f;
+        }
+        else if (shapeInfo.area > 160f)
+        {
+            multiplier *= 1.08f;
+        }
+
+        if (shapeInfo.compactness < 0.50f)
+        {
+            multiplier *= 0.88f;
+        }
+
+        return multiplier;
     }
 
     void CreateWallModule(
@@ -705,6 +897,12 @@ public class ModularHouseGenerator : MonoBehaviour
         List<Vector3> footprint,
         System.Random random)
     {
+        FootprintShapeInfo shapeInfo =
+            AnalyzeFootprintShape(
+                footprint,
+                CalculateSignedArea(footprint)
+            );
+
         bool supportsFourSidedRoof =
             IsValidConvexQuadrilateral(footprint);
 
@@ -715,7 +913,25 @@ public class ModularHouseGenerator : MonoBehaviour
 
         if (roofStyle == RoofStyle.Random)
         {
-            return random.Next(0, 2) == 0
+            float gableBias = 0.50f;
+
+            if (shapeInfo.edgeAspectRatio >= 1.35f)
+            {
+                gableBias += 0.20f;
+            }
+            else if (shapeInfo.edgeAspectRatio <= 1.10f)
+            {
+                gableBias -= 0.10f;
+            }
+
+            if (shapeInfo.compactness >= 0.70f)
+            {
+                gableBias += 0.10f;
+            }
+
+            gableBias = Mathf.Clamp01(gableBias);
+
+            return random.NextDouble() < gableBias
                 ? RoofStyle.Gable
                 : RoofStyle.Hip;
         }
@@ -1672,6 +1888,13 @@ public class ModularHouseGenerator : MonoBehaviour
         int pointCount =
             topEdgePoints.Length;
 
+        Vector3 centre = Vector3.zero;
+        for (int i = 0; i < pointCount; i++)
+        {
+            centre += topEdgePoints[i];
+        }
+        centre /= pointCount;
+
         Vector3[] vertices =
             new Vector3[pointCount * 2];
 
@@ -1682,10 +1905,40 @@ public class ModularHouseGenerator : MonoBehaviour
             vertices[i] =
                 topEdgePoints[i];
 
+            Vector3 inward =
+                centre - topEdgePoints[i];
+            inward.y = 0f;
+
+            if (inward.sqrMagnitude <= 0.0001f)
+            {
+                int next = (i + 1) % pointCount;
+                Vector3 edge =
+                    topEdgePoints[next] - topEdgePoints[i];
+                edge.y = 0f;
+                inward = new Vector3(
+                    -edge.z,
+                    0f,
+                    edge.x
+                );
+            }
+
+            inward.y = 0f;
+
+            float inwardDistance =
+                Mathf.Min(
+                    roofEdgeInset,
+                    Vector3.Distance(topEdgePoints[i], centre) * 0.25f
+                );
+
+            if (inward.sqrMagnitude > 0.0001f)
+            {
+                inward.Normalize();
+            }
+
             vertices[i + pointCount] =
-                topEdgePoints[i] -
-                Vector3.up *
-                roofEdgeHeight;
+                topEdgePoints[i] +
+                inward * inwardDistance -
+                Vector3.up * roofEdgeHeight;
         }
 
         List<int> triangles =

@@ -8,55 +8,152 @@ using UnityEngine.SceneManagement;
 public static class AutoArduPilotOnPlay
 {
     private static bool hasLaunchedThisSession;
+    private static bool isLaunchInProgress;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetLaunchState()
+    {
+        hasLaunchedThisSession = false;
+        isLaunchInProgress = false;
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    private static void LaunchArduPilotOnPlay()
+    private static void InitializeAutoLaunch()
     {
 #if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
-        _ = LaunchArduPilotOnPlayAsync();
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+        SceneManager.sceneLoaded += OnSceneLoaded;
 #else
         UnityEngine.Debug.LogWarning("AutoArduPilotOnPlay: auto-launch is configured for macOS only.");
 #endif
     }
 
-    private static async Task LaunchArduPilotOnPlayAsync()
+    private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        if (hasLaunchedThisSession)
+        RequestLaunchForScene(scene.name);
+    }
+
+    public static void RequestLaunchForScene(string sceneName)
+    {
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+        if (hasLaunchedThisSession || isLaunchInProgress)
         {
             return;
         }
 
-        hasLaunchedThisSession = true;
+        // The active LV1 loader assigns its map home during Awake, before it
+        // calls this method from Start.
+        GameManager.TryApplyLevelForScene(sceneName);
 
-        GameManager.TryApplyLevelForScene(SceneManager.GetActiveScene().name);
-        await WaitForHomeLocationAsync();
-
-        string scriptPath = Path.Combine(Application.dataPath, "Scripts/start_ardupilot.sh");
-        if (!File.Exists(scriptPath))
+        if (!GameManager.hasHomeLocation)
         {
-            UnityEngine.Debug.LogError($"AutoArduPilotOnPlay: script not found at {scriptPath}");
+            UnityEngine.Debug.Log(
+                $"AutoArduPilotOnPlay: no home location for scene {sceneName}; SITL was not launched."
+            );
             return;
         }
 
-        ProcessStartInfo sitlStartInfo = new ProcessStartInfo
+        isLaunchInProgress = true;
+
+        try
         {
-            FileName = "osascript",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
+            string scriptPath = ResolveSitlScriptPath();
+            if (!File.Exists(scriptPath))
+            {
+                UnityEngine.Debug.LogError(
+                    "AutoArduPilotOnPlay: start_ardupilot.sh was not found. " +
+                    "Place it in StreamingAssets/SITL for standalone builds."
+                );
+                return;
+            }
 
-        string escapedPath = scriptPath.Replace("\"", "\\\"");
-        string homeLat = GameManager.homeLat.ToString(CultureInfo.InvariantCulture);
-        string homeLon = GameManager.homeLon.ToString(CultureInfo.InvariantCulture);
-        string homeAlt = GameManager.homeAlt.ToString(CultureInfo.InvariantCulture);
-        string homeYaw = GameManager.homeYaw.ToString(CultureInfo.InvariantCulture);
-        string scriptCommand = $"{escapedPath} {homeLat} {homeLon} {homeAlt} {homeYaw}";
-        sitlStartInfo.Arguments = $"-e \"tell application \\\"Terminal\\\" to do script \\\"{scriptCommand}\\\"\"";
+            string homeLat = GameManager.homeLat.ToString(CultureInfo.InvariantCulture);
+            string homeLon = GameManager.homeLon.ToString(CultureInfo.InvariantCulture);
+            string homeAlt = GameManager.homeAlt.ToString(CultureInfo.InvariantCulture);
+            string homeYaw = GameManager.homeYaw.ToString(CultureInfo.InvariantCulture);
+            UnityEngine.Debug.Log(
+                $"AutoArduPilotOnPlay: launching SITL for {sceneName} at " +
+                $"{homeLat}, {homeLon}, {homeAlt}, {homeYaw}."
+            );
 
-        Process.Start(sitlStartInfo);
-        UnityEngine.Debug.Log($"AutoArduPilotOnPlay: launched ArduPilot using {scriptPath}");
+            ProcessStartInfo sitlStartInfo = new ProcessStartInfo
+            {
+                // Run without Terminal/AppleScript so a packaged app does not need
+                // macOS Automation permission on the player's computer.
+                FileName = "/bin/bash",
+                Arguments =
+                    $"{QuoteShellArgument(scriptPath)} " +
+                    $"{homeLat} {homeLon} {homeAlt} {homeYaw}",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
 
-        // _ = LaunchQgcAfterSITLBootAsync();
+            Process sitlProcess = Process.Start(sitlStartInfo);
+            if (sitlProcess == null)
+            {
+                UnityEngine.Debug.LogError(
+                    "AutoArduPilotOnPlay: could not start the SITL process."
+                );
+                return;
+            }
+
+            hasLaunchedThisSession = true;
+            UnityEngine.Debug.Log(
+                $"AutoArduPilotOnPlay: launched ArduPilot using {scriptPath}"
+            );
+
+            _ = LaunchQgcAfterSITLBootAsync();
+        }
+        catch (System.Exception exception)
+        {
+            UnityEngine.Debug.LogError(
+                "AutoArduPilotOnPlay: failed to launch SITL. " +
+                exception.Message
+            );
+        }
+        finally
+        {
+            isLaunchInProgress = false;
+        }
+#else
+        UnityEngine.Debug.LogWarning(
+            "AutoArduPilotOnPlay: auto-launch is configured for macOS only."
+        );
+#endif
+    }
+
+    private static string ResolveSitlScriptPath()
+    {
+        string packagedPath = Path.Combine(
+            Application.streamingAssetsPath,
+            "SITL",
+            "start_ardupilot.sh"
+        );
+
+        if (File.Exists(packagedPath))
+        {
+            return packagedPath;
+        }
+
+#if UNITY_EDITOR
+        string editorPath = Path.Combine(
+            Application.dataPath,
+            "Scripts",
+            "start_ardupilot.sh"
+        );
+        if (File.Exists(editorPath))
+        {
+            return editorPath;
+        }
+#endif
+
+        return packagedPath;
+    }
+
+    private static string QuoteShellArgument(string value)
+    {
+        return "'" + value.Replace("'", "'\"'\"'") + "'";
     }
 
     private static async Task LaunchQgcAfterSITLBootAsync()
@@ -70,26 +167,49 @@ public static class AutoArduPilotOnPlay
             return;
         }
 
+        string qgcAppPath = ResolveQGroundControlPath();
+        if (qgcAppPath == null)
+        {
+            UnityEngine.Debug.LogWarning(
+                "AutoArduPilotOnPlay: QGroundControl.app was not found beside the game or in /Applications."
+            );
+            return;
+        }
+
         ProcessStartInfo qgcStartInfo = new ProcessStartInfo
         {
             FileName = "open",
-            Arguments = "-a /Applications/QGroundControl.app",
+            Arguments = QuoteShellArgument(qgcAppPath),
             UseShellExecute = false,
             CreateNoWindow = true
         };
 
         Process.Start(qgcStartInfo);
-        UnityEngine.Debug.Log("AutoArduPilotOnPlay: launched QGroundControl.");
+        UnityEngine.Debug.Log($"AutoArduPilotOnPlay: launched QGroundControl from {qgcAppPath}.");
     }
 
-    private static async Task WaitForHomeLocationAsync()
+    private static string ResolveQGroundControlPath()
     {
-        float waitedMs = 0f;
-        while (!GameManager.hasHomeLocation && waitedMs < 2000f)
+        if (!Application.isEditor)
         {
-            GameManager.TryApplyLevelForScene(SceneManager.GetActiveScene().name);
-            await Task.Delay(100);
-            waitedMs += 100f;
+            DirectoryInfo directory = new DirectoryInfo(Application.dataPath);
+            for (int i = 0; i < 4 && directory != null; i++)
+            {
+                directory = directory.Parent;
+            }
+
+            if (directory != null)
+            {
+                string bundledPath = Path.Combine(directory.FullName, "QGroundControl.app");
+                if (Directory.Exists(bundledPath))
+                {
+                    return bundledPath;
+                }
+            }
         }
+
+        const string applicationsPath = "/Applications/QGroundControl.app";
+        return Directory.Exists(applicationsPath) ? applicationsPath : null;
     }
+
 }

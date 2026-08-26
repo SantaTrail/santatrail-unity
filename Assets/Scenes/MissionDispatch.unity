@@ -966,8 +966,8 @@ MonoBehaviour:
   levels:
   - label: Level 1 - Training
     sceneName: LV1
-    homeLatitude: 52.15603852403063
-    homeLongitude: 4.963989431212162
+    homeLatitude: 52.155719
+    homeLongitude: 4.964212
     homeAltitude: 0
     homeYaw: 0
   - label: Level 2 - Demo

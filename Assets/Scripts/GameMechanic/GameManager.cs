@@ -68,7 +68,7 @@ public class GameManager : MonoBehaviour
         activeSceneName = level.sceneName ?? "";
         activeLevelLabel = level.label ?? "";
         activeMissionDifficulty = level.missionDifficulty;
-        hasActiveDeliveryCount = true;
+        hasActiveDeliveryCount = level.deliveryCount > 0;
         activeDeliveryCount = Mathf.Max(0, level.deliveryCount);
         activeShowTutorial = level.showTutorial;
         activeAutoLoadNextScene = level.autoLoadNextScene;
@@ -84,7 +84,8 @@ public class GameManager : MonoBehaviour
 
     public static bool TryApplyLevelForScene(string sceneName)
     {
-        if (hasActiveLevelSettings && !string.IsNullOrWhiteSpace(activeSceneName))
+        if (hasActiveLevelSettings &&
+            string.Equals(activeSceneName, sceneName, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -126,7 +127,7 @@ public class GameManager : MonoBehaviour
     {
         if (hasActiveDeliveryCount)
         {
-            return Mathf.Max(0, activeDeliveryCount);
+            return Mathf.Max(1, activeDeliveryCount);
         }
 
         switch (difficulty)

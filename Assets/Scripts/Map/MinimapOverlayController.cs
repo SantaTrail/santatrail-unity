@@ -54,10 +54,17 @@ public class MinimapOverlayController : MonoBehaviour
     private void Awake()
     {
         rectTransform = GetComponent<RectTransform>();
-        defaultSprite = Resources.GetBuiltinResource<Sprite>("UI/Skin/UISprite.psd");
+        defaultSprite = CreateFallbackSprite();
         playerTextureSprite = CreateSpriteFromTexture(playerMarkerTexture);
         missionTextureSprite = CreateSpriteFromTexture(missionMarkerTexture);
         EnsureMarkerLayer();
+    }
+
+    private static Sprite CreateFallbackSprite()
+    {
+        Texture2D texture = Texture2D.whiteTexture;
+        Rect rect = new Rect(0f, 0f, texture.width, texture.height);
+        return Sprite.Create(texture, rect, new Vector2(0.5f, 0.5f), 1f);
     }
 
     private void Start()

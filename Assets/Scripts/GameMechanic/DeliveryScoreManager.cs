@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using Esri.ArcGISMapsSDK.Components;
+using Esri.HPFramework;
+using UnityEngine.Serialization;
 
 public class DeliveryScoreManager : MonoBehaviour
 {
@@ -23,8 +25,13 @@ public class DeliveryScoreManager : MonoBehaviour
     [Min(1)] public int targetBuildingCount = 5;
     [Tooltip("Leave empty to allow every house set. Otherwise only buildings whose House style/group name matches one of these entries can become targets.")]
     public string[] allowedHouseSetNames = Array.Empty<string>();
-    [Tooltip("Only select delivery targets within this many meters of the drone's starting position. Set to 0 to disable the distance filter.")]
-    [Min(0f)] public float maxTargetDistanceFromDroneStart = 350f;
+    [FormerlySerializedAs("maxTargetDistanceFromDroneStart")]
+    [Tooltip("Only select delivery targets within this many meters of the drone's ArcGIS home position. This position is captured after generated buildings appear. Set to 0 to disable the distance filter.")]
+    [Min(0f)] public float targetSpawnRadiusFromDroneStart = 350f;
+    [Tooltip("Choose the closest eligible houses to the drone home position before considering farther houses.")]
+    public bool preferNearestTargetsToDroneHome = true;
+    [Tooltip("If ArcGIS reports no houses inside the radius, use the closest eligible houses so the level still has delivery targets.")]
+    public bool fallbackToNearestTargetsWhenRadiusEmpty = true;
     [Tooltip("How often the manager retries while waiting for ArcGIS buildings to spawn.")]
     [Min(0.1f)] public float buildingScanRetrySeconds = 1f;
     [Tooltip("Maximum time spent waiting for spawned buildings. Use 0 to keep retrying forever.")]
@@ -72,6 +79,11 @@ public class DeliveryScoreManager : MonoBehaviour
     [Range(0f, 0.45f)]
     [Tooltip("How far the chimney may move away from the roof center, as a fraction of the usable roof half-size.")]
     public float chimneyRandomPositionRange = 0.25f;
+    [Tooltip("Prefer corner positions when placing a chimney so the target sits closer to the roof edge.")]
+    public bool preferCornerChimneyPlacement = true;
+    [Range(0f, 1f)]
+    [Tooltip("Higher values push the chimney closer to the roof corners. Lower values keep it nearer the center.")]
+    public float chimneyCornerBias = 0.8f;
     [Min(0f)]
     [Tooltip("Keeps the chimney away from the detected roof bounds edges.")]
     public float chimneyRoofEdgeInset = 0.6f;
@@ -185,9 +197,13 @@ public class DeliveryScoreManager : MonoBehaviour
     public int level1RequiredDeliveries = 5;
     [Tooltip("When enabled, delivery targets stay locked until a tutorial script explicitly unlocks them.")]
     public bool tutorialLockout = false;
+    [Tooltip("Keep target rings visible as guidance while tutorial delivery controls are locked.")]
+    public bool showDeliveryRingsDuringTutorial = true;
 
     public int score = 0;
     private bool buildingsInitialized = false;
+    private bool initializationFinished = false;
+    private Coroutine initializationCoroutine;
     private sealed class SpawnedBuildingTarget
     {
         public Transform root;
@@ -210,6 +226,8 @@ public class DeliveryScoreManager : MonoBehaviour
     public int RemainingTargets => activeTargets.Count;
     public int CompletedTargets => completedDeliveries;
     public int TotalTargets => totalTargets;
+    public bool IsInitializationComplete => initializationFinished;
+    public bool HasInitializedTargets => buildingsInitialized;
     private string latestStatus = "";
     private float statusUntilTime = -1f;
     private int completedDeliveries = 0;
@@ -223,10 +241,24 @@ public class DeliveryScoreManager : MonoBehaviour
     private Vector3 lastDronePos;
     private Vector3 droneStartPos;
     private bool hasDroneStartPos;
+    private double homeLatitude;
+    private double homeLongitude;
+    private bool hasGeographicHomePosition;
+    private double homeUniverseX;
+    private double homeUniverseY;
+    private double homeUniverseZ;
+    private bool hasUniverseHomePosition;
+    private bool hasLoggedDeliveryHome;
+    private bool hasLoggedNoDeliveryCandidates;
     private float currentSpeed;
 
     void Start()
     {
+        if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
+        {
+            targetBuildingCount = Mathf.Max(1, GameManager.activeDeliveryCount);
+        }
+
         AutoBindDrone();
         CleanupLegacyDeliveryRings();
         CleanupLegacyTargetBeacons();
@@ -237,15 +269,32 @@ public class DeliveryScoreManager : MonoBehaviour
         if (drone != null)
         {
             lastDronePos = drone.position;
-            droneStartPos = drone.position;
-            hasDroneStartPos = true;
         }
 
-        StartCoroutine(InitializeBuildingTargets());
+        EnsureInitializationStarted();
+    }
+
+    public void EnsureInitializationStarted(bool retryIfFinished = false)
+    {
+        if (buildingsInitialized || initializationCoroutine != null)
+        {
+            return;
+        }
+
+        if (initializationFinished && !retryIfFinished)
+        {
+            return;
+        }
+
+        initializationFinished = false;
+        initializationCoroutine = StartCoroutine(InitializeBuildingTargets());
     }
 
     IEnumerator InitializeBuildingTargets()
     {
+        // Ensure StartCoroutine returns its handle before this routine can finish.
+        yield return null;
+
         float elapsed = 0f;
         int requestedCount = Mathf.Max(1, targetBuildingCount);
 
@@ -256,17 +305,34 @@ public class DeliveryScoreManager : MonoBehaviour
 
             if (cachedBuildings.Count > 0)
             {
-                if (cachedBuildings.Count >= requestedCount)
+                CaptureDroneHomePosition();
+
+                int targetCountToSelect = Mathf.Min(
+                    requestedCount,
+                    cachedBuildings.Count
+                );
+
+                if (targetCountToSelect > 0)
                 {
-                    SelectRandomTargets(requestedCount);
+                    SelectRandomTargets(targetCountToSelect);
                     buildingsInitialized = activeTargets.Count > 0;
 
                     if (buildingsInitialized)
                     {
+                        initializationFinished = true;
+                        initializationCoroutine = null;
                         Debug.Log(
                             $"Delivery system initialized with {activeTargets.Count} random targets " +
                             $"from {cachedBuildings.Count} detected buildings."
                         );
+
+                        if (targetCountToSelect < requestedCount)
+                        {
+                            Debug.LogWarning(
+                                $"Only {targetCountToSelect} delivery houses were available; " +
+                                $"starting the mission with the safe houses that were generated."
+                            );
+                        }
                         yield break;
                     }
                 }
@@ -274,6 +340,8 @@ public class DeliveryScoreManager : MonoBehaviour
 
             if (buildingScanTimeoutSeconds > 0f && elapsed >= buildingScanTimeoutSeconds)
             {
+                initializationFinished = true;
+                initializationCoroutine = null;
                 Debug.LogWarning(
                     $"DeliveryScoreManager found no spawned building targets after " +
                     $"{buildingScanTimeoutSeconds:0.0} seconds."
@@ -282,9 +350,12 @@ public class DeliveryScoreManager : MonoBehaviour
             }
 
             float delay = Mathf.Max(0.1f, buildingScanRetrySeconds);
-            yield return new WaitForSeconds(delay);
+            yield return new WaitForSecondsRealtime(delay);
             elapsed += delay;
         }
+
+        initializationFinished = true;
+        initializationCoroutine = null;
     }
 
     void Update()
@@ -304,7 +375,17 @@ public class DeliveryScoreManager : MonoBehaviour
 
         if (tutorialLockout)
         {
-            SetAllDeliveryRingsActive(false);
+            if (showDeliveryRingsDuringTutorial &&
+                buildingsInitialized &&
+                activeTargets.Count > 0)
+            {
+                UpdateAllDeliveryRings(null);
+            }
+            else
+            {
+                SetAllDeliveryRingsActive(false);
+            }
+
             ClearProgressStatusOnly();
             return;
         }
@@ -415,7 +496,15 @@ public class DeliveryScoreManager : MonoBehaviour
 
         if (tutorialLockout)
         {
-            SetAllDeliveryRingsActive(false);
+            if (showDeliveryRingsDuringTutorial)
+            {
+                RefreshDeliveryRings();
+            }
+            else
+            {
+                SetAllDeliveryRingsActive(false);
+            }
+
             ClearProgressStatusOnly();
         }
         else
@@ -428,11 +517,6 @@ public class DeliveryScoreManager : MonoBehaviour
     {
         if (drone != null)
         {
-            if (!hasDroneStartPos)
-            {
-                droneStartPos = drone.position;
-                hasDroneStartPos = true;
-            }
             return;
         }
 
@@ -442,11 +526,81 @@ public class DeliveryScoreManager : MonoBehaviour
             ArcGISLocationComponent locationComponent = droneObj.GetComponentInChildren<ArcGISLocationComponent>(true);
             drone = locationComponent != null ? locationComponent.transform : droneObj.transform;
 
-            if (drone != null && !hasDroneStartPos)
+        }
+    }
+
+    void CaptureDroneHomePosition()
+    {
+        if (!hasDroneStartPos && drone != null)
+        {
+            droneStartPos = drone.position;
+            hasDroneStartPos = true;
+        }
+
+        if (!hasGeographicHomePosition && GameManager.hasHomeLocation)
+        {
+            homeLatitude = GameManager.homeLat;
+            homeLongitude = GameManager.homeLon;
+            hasGeographicHomePosition = IsValidGeographicPosition(
+                homeLatitude,
+                homeLongitude
+            );
+        }
+
+        if (!hasGeographicHomePosition && drone != null)
+        {
+            ArcGISLocationComponent droneLocation =
+                drone.GetComponent<ArcGISLocationComponent>();
+
+            if (droneLocation != null && droneLocation.Position != null)
             {
-                droneStartPos = drone.position;
-                hasDroneStartPos = true;
+                homeLongitude = droneLocation.Position.X;
+                homeLatitude = droneLocation.Position.Y;
+                hasGeographicHomePosition = IsValidGeographicPosition(
+                    homeLatitude,
+                    homeLongitude
+                );
             }
+        }
+
+        if (!hasUniverseHomePosition && drone != null)
+        {
+            HPTransform droneHighPrecisionTransform =
+                drone.GetComponent<HPTransform>();
+
+            if (droneHighPrecisionTransform != null)
+            {
+                var universePosition =
+                    droneHighPrecisionTransform.UniversePosition;
+
+                if (IsFinite(universePosition.x) &&
+                    IsFinite(universePosition.y) &&
+                    IsFinite(universePosition.z))
+                {
+                    homeUniverseX = universePosition.x;
+                    homeUniverseY = universePosition.y;
+                    homeUniverseZ = universePosition.z;
+                    hasUniverseHomePosition = true;
+                }
+            }
+        }
+
+        if (!hasLoggedDeliveryHome && hasGeographicHomePosition)
+        {
+            Debug.Log(
+                $"Delivery target home captured at GPS " +
+                $"({homeLatitude:F6}, {homeLongitude:F6}). " +
+                $"Selection radius: {targetSpawnRadiusFromDroneStart:0.#}m."
+            );
+            hasLoggedDeliveryHome = true;
+        }
+        else if (!hasLoggedDeliveryHome && hasDroneStartPos)
+        {
+            Debug.Log(
+                $"Delivery target home captured at Unity position {droneStartPos}. " +
+                $"Selection radius: {targetSpawnRadiusFromDroneStart:0.#}m."
+            );
+            hasLoggedDeliveryHome = true;
         }
     }
 
@@ -573,22 +727,58 @@ public class DeliveryScoreManager : MonoBehaviour
         List<SpawnedBuildingTarget> candidates =
             new List<SpawnedBuildingTarget>(cachedBuildings);
         candidates.RemoveAll(target => !IsTargetInAllowedHouseSet(target));
+        List<SpawnedBuildingTarget> eligibleCandidates =
+            new List<SpawnedBuildingTarget>(candidates);
+        int allowedCandidateCount = candidates.Count;
+        bool usedNearestFallback = false;
 
-        if (hasDroneStartPos && maxTargetDistanceFromDroneStart > 0f)
+        if (HasTargetDistanceOrigin() && targetSpawnRadiusFromDroneStart > 0f)
         {
-            float maxDistance = Mathf.Max(0f, maxTargetDistanceFromDroneStart);
+            float maxDistance = Mathf.Max(0f, targetSpawnRadiusFromDroneStart);
             candidates.RemoveAll(target =>
                 target == null ||
-                Vector2.Distance(
-                    new Vector2(target.bounds.center.x, target.bounds.center.z),
-                    new Vector2(droneStartPos.x, droneStartPos.z)
-                ) > maxDistance);
+                GetDistanceFromDroneStart(target) > maxDistance);
+        }
+
+        if (candidates.Count == 0 &&
+            eligibleCandidates.Count > 0 &&
+            fallbackToNearestTargetsWhenRadiusEmpty)
+        {
+            candidates = eligibleCandidates;
+            usedNearestFallback = true;
+
+            if (!hasLoggedNoDeliveryCandidates)
+            {
+                Debug.LogWarning(
+                    $"ArcGIS reported no delivery houses inside " +
+                    $"{targetSpawnRadiusFromDroneStart:0.#}m. Using the closest " +
+                    "eligible houses so delivery targets remain available."
+                );
+                hasLoggedNoDeliveryCandidates = true;
+            }
         }
 
         if (candidates.Count == 0)
         {
-            candidates = new List<SpawnedBuildingTarget>(cachedBuildings);
-            candidates.RemoveAll(target => !IsTargetInAllowedHouseSet(target));
+            if (!hasLoggedNoDeliveryCandidates)
+            {
+                string reason = allowedCandidateCount == 0
+                    ? "No generated houses matched the allowed house-set filter."
+                    : $"No delivery houses were found within " +
+                      $"{targetSpawnRadiusFromDroneStart:0.#}m of the drone home.";
+
+                Debug.LogWarning(
+                    $"{reason} Increase Target Spawn Radius From Drone Start " +
+                    "in the Inspector if a wider level area is desired."
+                );
+                hasLoggedNoDeliveryCandidates = true;
+            }
+            return;
+        }
+
+        if (!usedNearestFallback)
+        {
+            hasLoggedNoDeliveryCandidates = false;
         }
 
         candidates.Sort((a, b) =>
@@ -601,8 +791,9 @@ public class DeliveryScoreManager : MonoBehaviour
         while (candidates.Count > 0 &&
                activeTargets.Count < amount)
         {
-            int pickWindow = Mathf.Min(candidates.Count, Mathf.Max(1, amount));
-            int index = UnityEngine.Random.Range(0, pickWindow);
+            int index = preferNearestTargetsToDroneHome
+                ? 0
+                : UnityEngine.Random.Range(0, candidates.Count);
             activeTargets.Add(candidates[index]);
             candidates.RemoveAt(index);
         }
@@ -612,7 +803,12 @@ public class DeliveryScoreManager : MonoBehaviour
         RefreshDeliveryRings();
         TargetsRemainingChanged?.Invoke(RemainingTargets);
 
-        Debug.Log($"Selected {totalTargets} delivery buildings.");
+        string selectionDescription = usedNearestFallback
+            ? "using the nearest-house fallback"
+            : $"within {targetSpawnRadiusFromDroneStart:0.#}m of the drone home";
+        Debug.Log(
+            $"Selected {totalTargets} delivery buildings {selectionDescription}."
+        );
 
         if (verboseDebugLogs)
         {
@@ -630,6 +826,16 @@ public class DeliveryScoreManager : MonoBehaviour
             return float.MaxValue;
         }
 
+        if (TryGetUniverseDistanceFromHome(target, out float universeDistance))
+        {
+            return universeDistance;
+        }
+
+        if (TryGetGeographicDistanceFromHome(target, out float geographicDistance))
+        {
+            return geographicDistance;
+        }
+
         Vector3 origin =
             hasDroneStartPos
                 ? droneStartPos
@@ -637,6 +843,129 @@ public class DeliveryScoreManager : MonoBehaviour
         Vector2 targetPos = new Vector2(target.bounds.center.x, target.bounds.center.z);
         Vector2 originPos = new Vector2(origin.x, origin.z);
         return Vector2.Distance(originPos, targetPos);
+    }
+
+    bool HasTargetDistanceOrigin()
+    {
+        return hasUniverseHomePosition ||
+               hasGeographicHomePosition ||
+               hasDroneStartPos ||
+               drone != null;
+    }
+
+    bool TryGetUniverseDistanceFromHome(
+        SpawnedBuildingTarget target,
+        out float distanceMeters)
+    {
+        distanceMeters = float.MaxValue;
+
+        if (!hasUniverseHomePosition || target == null || target.root == null)
+        {
+            return false;
+        }
+
+        HPTransform targetHighPrecisionTransform =
+            target.root.GetComponent<HPTransform>();
+
+        if (targetHighPrecisionTransform == null)
+        {
+            return false;
+        }
+
+        var targetUniversePosition =
+            targetHighPrecisionTransform.UniversePosition;
+        double deltaX = targetUniversePosition.x - homeUniverseX;
+        double deltaY = targetUniversePosition.y - homeUniverseY;
+        double deltaZ = targetUniversePosition.z - homeUniverseZ;
+        double squaredDistance =
+            deltaX * deltaX +
+            deltaY * deltaY +
+            deltaZ * deltaZ;
+
+        if (!IsFinite(squaredDistance) || squaredDistance < 0d)
+        {
+            return false;
+        }
+
+        distanceMeters = (float)Math.Sqrt(squaredDistance);
+        return true;
+    }
+
+    bool TryGetGeographicDistanceFromHome(
+        SpawnedBuildingTarget target,
+        out float distanceMeters)
+    {
+        distanceMeters = float.MaxValue;
+
+        if (!hasGeographicHomePosition || target == null || target.root == null)
+        {
+            return false;
+        }
+
+        ArcGISLocationComponent targetLocation =
+            target.root.GetComponent<ArcGISLocationComponent>();
+
+        if (targetLocation == null || targetLocation.Position == null)
+        {
+            return false;
+        }
+
+        double targetLongitude = targetLocation.Position.X;
+        double targetLatitude = targetLocation.Position.Y;
+        if (!IsValidGeographicPosition(targetLatitude, targetLongitude))
+        {
+            return false;
+        }
+
+        distanceMeters = (float)CalculateGeographicDistanceMeters(
+            homeLatitude,
+            homeLongitude,
+            targetLatitude,
+            targetLongitude
+        );
+        return true;
+    }
+
+    static bool IsValidGeographicPosition(double latitude, double longitude)
+    {
+        return !double.IsNaN(latitude) &&
+               !double.IsInfinity(latitude) &&
+               !double.IsNaN(longitude) &&
+               !double.IsInfinity(longitude) &&
+               latitude >= -90d && latitude <= 90d &&
+               longitude >= -180d && longitude <= 180d;
+    }
+
+    static bool IsFinite(double value)
+    {
+        return !double.IsNaN(value) && !double.IsInfinity(value);
+    }
+
+    static double CalculateGeographicDistanceMeters(
+        double latitudeA,
+        double longitudeA,
+        double latitudeB,
+        double longitudeB)
+    {
+        const double EarthRadiusMeters = 6371000d;
+        const double DegreesToRadians = Math.PI / 180d;
+
+        double latitudeARadians = latitudeA * DegreesToRadians;
+        double latitudeBRadians = latitudeB * DegreesToRadians;
+        double latitudeDelta = (latitudeB - latitudeA) * DegreesToRadians;
+        double longitudeDelta = (longitudeB - longitudeA) * DegreesToRadians;
+        double sinLatitude = Math.Sin(latitudeDelta * 0.5d);
+        double sinLongitude = Math.Sin(longitudeDelta * 0.5d);
+        double haversine =
+            sinLatitude * sinLatitude +
+            Math.Cos(latitudeARadians) * Math.Cos(latitudeBRadians) *
+            sinLongitude * sinLongitude;
+        haversine = Math.Max(0d, Math.Min(1d, haversine));
+
+        return EarthRadiusMeters * 2d * Math.Atan2(
+            Math.Sqrt(haversine),
+            Math.Sqrt(1d - haversine)
+        );
     }
     Transform GetSpawnedBuildingRoot(Renderer renderer)
     {
@@ -1257,6 +1586,8 @@ public class DeliveryScoreManager : MonoBehaviour
             chimney.transform.position = roofPosition;
         }
 
+        chimney.transform.SetParent(target.root, true);
+
         return chimney;
     }
 
@@ -1271,6 +1602,18 @@ public class DeliveryScoreManager : MonoBehaviour
         float inset = Mathf.Max(0f, chimneyRoofEdgeInset);
         float usableHalfX = Mathf.Max(0f, roofBounds.extents.x - inset);
         float usableHalfZ = Mathf.Max(0f, roofBounds.extents.z - inset);
+
+        if (useRoofRaycastForChimney &&
+            preferCornerChimneyPlacement &&
+            TryGetCornerBiasedChimneyRoofPosition(
+                target,
+                roofBounds,
+                usableHalfX,
+                usableHalfZ,
+                out Vector3 cornerPosition))
+        {
+            return cornerPosition;
+        }
 
         // With raycast validation enabled, a candidate is accepted only when
         // the chimney center and its four corners all land on this building.
@@ -1349,6 +1692,76 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         return target.roofTarget;
+    }
+
+    bool TryGetCornerBiasedChimneyRoofPosition(
+        SpawnedBuildingTarget target,
+        Bounds roofBounds,
+        float usableHalfX,
+        float usableHalfZ,
+        out Vector3 position)
+    {
+        position = Vector3.zero;
+
+        if (target == null || target.root == null ||
+            usableHalfX <= 0f || usableHalfZ <= 0f)
+        {
+            return false;
+        }
+
+        float bias = Mathf.Clamp01(chimneyCornerBias);
+        float cornerInsetScale = Mathf.Lerp(0.30f, 0.08f, bias);
+        float cornerOffsetX = Mathf.Max(
+            0.05f,
+            usableHalfX * (1f - cornerInsetScale)
+        );
+        float cornerOffsetZ = Mathf.Max(
+            0.05f,
+            usableHalfZ * (1f - cornerInsetScale)
+        );
+        float jitterScale = Mathf.Lerp(0.18f, 0.04f, bias);
+        int attemptsPerCorner = Mathf.Max(1, chimneyPlacementAttempts / 4);
+
+        Vector2[] cornerSigns =
+        {
+            new Vector2(-1f, -1f),
+            new Vector2(-1f, 1f),
+            new Vector2(1f, -1f),
+            new Vector2(1f, 1f)
+        };
+
+        for (int cornerIndex = 0; cornerIndex < cornerSigns.Length; cornerIndex++)
+        {
+            Vector2 sign = cornerSigns[cornerIndex];
+
+            for (int attempt = 0; attempt < attemptsPerCorner; attempt++)
+            {
+                float candidateX = roofBounds.center.x +
+                    sign.x * cornerOffsetX +
+                    UnityEngine.Random.Range(
+                        -usableHalfX * jitterScale,
+                        usableHalfX * jitterScale
+                    );
+                float candidateZ = roofBounds.center.z +
+                    sign.y * cornerOffsetZ +
+                    UnityEngine.Random.Range(
+                        -usableHalfZ * jitterScale,
+                        usableHalfZ * jitterScale
+                    );
+
+                if (TryValidateChimneyRoofFootprint(
+                    target,
+                    candidateX,
+                    candidateZ,
+                    out float roofY))
+                {
+                    position = new Vector3(candidateX, roofY, candidateZ);
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     bool TryValidateChimneyRoofFootprint(
