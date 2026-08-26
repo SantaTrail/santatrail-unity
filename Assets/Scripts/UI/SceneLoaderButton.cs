@@ -13,6 +13,8 @@ public class SceneLoaderButton : MonoBehaviour
             return;
         }
 
-        SceneManager.LoadScene(sceneName);
+        // LV1 owns its LoadingScreenUI and shows it while the
+        // level's map and mission data finish initializing.
+        SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Single);
     }
 }

@@ -28,8 +28,14 @@ public class MissionGenerator : MonoBehaviour
     {
         UnityEngine.Debug.Log("MissionGenerator: generating mission...");
 
-        string planPath = Path.Combine(Application.dataPath, "auto_mission.plan");
-        string pythonScriptPath = Path.Combine(Application.dataPath, "Scripts/generate_mission.py");
+        string missionDirectory = Path.Combine(
+            Application.persistentDataPath,
+            "Mission"
+        );
+        Directory.CreateDirectory(missionDirectory);
+
+        string planPath = Path.Combine(missionDirectory, "auto_mission.plan");
+        string pythonScriptPath = ResolveMissionScriptPath();
 
         if (!File.Exists(pythonScriptPath))
         {
@@ -55,9 +61,10 @@ public class MissionGenerator : MonoBehaviour
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "/usr/bin/python3",
-                Arguments = $"\"{pythonScriptPath}\"",
-                WorkingDirectory = Application.dataPath,
+                FileName = ResolvePythonExecutable(),
+                Arguments =
+                    $"\"{pythonScriptPath}\" --output \"{planPath}\"",
+                WorkingDirectory = missionDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -105,5 +112,62 @@ public class MissionGenerator : MonoBehaviour
         {
             process.Dispose();
         }
+    }
+
+    private static string ResolveMissionScriptPath()
+    {
+        string packagedPath = Path.Combine(
+            Application.streamingAssetsPath,
+            "Mission",
+            "generate_mission.py"
+        );
+        if (File.Exists(packagedPath))
+        {
+            return packagedPath;
+        }
+
+#if UNITY_EDITOR
+        string editorPath = Path.Combine(
+            Application.dataPath,
+            "Scripts",
+            "generate_mission.py"
+        );
+        if (File.Exists(editorPath))
+        {
+            return editorPath;
+        }
+#endif
+
+        return packagedPath;
+    }
+
+    private static string ResolvePythonExecutable()
+    {
+        string environmentPath = (
+            System.Environment.GetEnvironmentVariable(
+                "SANTATRAIL_PYTHON"
+            ) ?? ""
+        ).Trim();
+        if (!string.IsNullOrEmpty(environmentPath))
+        {
+            return environmentPath;
+        }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        string packagedPath = Path.Combine(
+            Application.streamingAssetsPath,
+            "Python",
+            "python.exe"
+        );
+        return File.Exists(packagedPath) ? packagedPath : "python";
+#else
+        string packagedPath = Path.Combine(
+            Application.streamingAssetsPath,
+            "Python",
+            "bin",
+            "python3"
+        );
+        return File.Exists(packagedPath) ? packagedPath : "python3";
+#endif
     }
 }

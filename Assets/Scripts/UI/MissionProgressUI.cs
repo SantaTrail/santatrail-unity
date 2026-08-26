@@ -30,7 +30,7 @@ public class MissionProgressUI : MonoBehaviour
 
         RefreshUI();
 
-        return currentDelivery > totalDeliveries;
+        return currentDelivery >= totalDeliveries;
     }
 
     void RefreshUI()

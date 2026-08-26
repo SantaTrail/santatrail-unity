@@ -1304,7 +1304,9 @@ MonoBehaviour:
   deliveryStatusText: {fileID: 0}
   targetBuildingCount: 5
   allowedHouseSetNames: []
-  maxTargetDistanceFromDroneStart: 350
+  targetSpawnRadiusFromDroneStart: 350
+  preferNearestTargetsToDroneHome: 1
+  fallbackToNearestTargetsWhenRadiusEmpty: 1
   buildingScanRetrySeconds: 1
   buildingScanTimeoutSeconds: 60
   hoverSecondsRequired: 1.5
@@ -1332,6 +1334,8 @@ MonoBehaviour:
   chimneyDropPointName: PresentDropPoint
   randomizeChimneyPosition: 1
   chimneyRandomPositionRange: 0.25
+  preferCornerChimneyPlacement: 1
+  chimneyCornerBias: 0.8
   chimneyRoofEdgeInset: 0.6
   chimneyRoofSink: 0.08
   useRoofRaycastForChimney: 1
@@ -1382,6 +1386,7 @@ MonoBehaviour:
   hideDeliveredBuildingDelay: 0.2
   level1RequiredDeliveries: 5
   tutorialLockout: 0
+  showDeliveryRingsDuringTutorial: 1
   score: 0
 --- !u!114 &296600229
 MonoBehaviour:
@@ -2881,7 +2886,7 @@ Transform:
   m_GameObject: {fileID: 938647755}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1, z: -10}
+  m_LocalPosition: {x: 0, y: 1, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -3092,6 +3097,7 @@ MonoBehaviour:
   totalDeliveries: 2
   progressText: {fileID: 1659042341}
   santaLetterGameManager: {fileID: 992171046}
+  nextSceneName: PreviewLV
 --- !u!114 &992171048
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4040,6 +4046,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ef938a251c63b448881b036db00f1678, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
+  musicVolume: 0.2
+  playAutomatically: 1
 --- !u!82 &1267000794
 AudioSource:
   m_ObjectHideFlags: 0

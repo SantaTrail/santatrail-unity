@@ -1,6 +1,8 @@
 using UnityEngine;
 using Esri.ArcGISMapsSDK.Components;
+using Esri.GameEngine;
 using Esri.GameEngine.Geometry;
+using Esri.GameEngine.MapView;
 using System.Collections;
 
 public class ArcGISConverter : MonoBehaviour
@@ -11,6 +13,7 @@ public class ArcGISConverter : MonoBehaviour
 
     private bool isReady = false;
     private bool hasLoggedReady = false;
+    private float nextMapRetryAt = 0f;
 
     void Awake()
     {
@@ -24,9 +27,7 @@ public class ArcGISConverter : MonoBehaviour
 
         Debug.Log("🧭 ArcGISConverter initialized");
         LogArcGISCameraState("Awake");
-        
 
-        // 🔥 Start readiness watcher
         StartCoroutine(WaitForArcGISReady());
     }
 
@@ -36,6 +37,8 @@ public class ArcGISConverter : MonoBehaviour
         float timer = 0f;
         const float timeout = 90f;
         float nextStateLogAt = 2f;
+
+        EnsureMapIsLoading(0f);
 
         while (timer < timeout)
         {
@@ -47,13 +50,17 @@ public class ArcGISConverter : MonoBehaviour
                 yield break;
             }
 
-            if (arcGISMap.View != null && CanConvertProbePoint())
+            if (arcGISMap.View != null &&
+                CanConvertProbePoint() &&
+                IsMapContentLoaded() &&
+                IsMapDrawComplete())
             {
                 isReady = true;
 
                 if (!hasLoggedReady)
                 {
                     Debug.Log("✅ ArcGIS FULLY READY");
+                    LogRenderCameraState();
                     hasLoggedReady = true;
                 }
 
@@ -62,16 +69,18 @@ public class ArcGISConverter : MonoBehaviour
 
             if (timer >= nextStateLogAt)
             {
+                EnsureMapIsLoading(timer);
                 string viewState = arcGISMap.View == null ? "NULL" : "OK";
                 string srState = (arcGISMap.View != null && arcGISMap.View.SpatialReference != null) ? "OK" : "NULL";
                 bool probe = CanConvertProbePoint();
                 string probeErrorPart = string.IsNullOrEmpty(lastProbeError) ? "" : $" | ProbeError={lastProbeError}";
-                Debug.LogWarning($"⚠️ ArcGIS still loading... t={timer:0.0}s | View={viewState} | SpatialReference={srState} | ProbeConvert={(probe ? "OK" : "FAIL")}{probeErrorPart}");
+                Debug.LogWarning($"⚠️ ArcGIS still loading... t={timer:0.0}s | View={viewState} | SpatialReference={srState} | {DescribeMapLoadState()} | ProbeConvert={(probe ? "OK" : "FAIL")}{probeErrorPart}");
                 LogArcGISCameraState($"t={timer:0.0}s");
                 nextStateLogAt += 5f;
             }
 
-            yield return new WaitForSeconds(0.5f);
+            // Map streaming must continue while menus or tutorial UI affect time scale.
+            yield return new WaitForSecondsRealtime(0.5f);
         }
 Debug.Log($"MapComponent = {arcGISMap != null}");
 Debug.Log($"View = {arcGISMap?.View != null}");
@@ -80,7 +89,82 @@ if (arcGISMap?.View != null)
 {
     Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
 }
-        Debug.LogError("❌ ArcGIS readiness timeout (90s). Check API key/authentication and ArcGIS Map settings.");
+        Debug.LogError($"❌ ArcGIS readiness timeout (90s). {DescribeMapLoadState()}");
+    }
+
+    void EnsureMapIsLoading(float timer)
+    {
+        var map = arcGISMap?.View?.Map;
+        if (map == null || timer < nextMapRetryAt)
+        {
+            return;
+        }
+
+        if (map.LoadStatus == ArcGISLoadStatus.NotLoaded)
+        {
+            map.Load();
+            nextMapRetryAt = timer + 5f;
+        }
+        else if (map.LoadStatus == ArcGISLoadStatus.FailedToLoad)
+        {
+            string error = map.LoadError?.Message ?? "unknown ArcGIS load error";
+            Debug.LogWarning($"⚠️ Retrying failed ArcGIS map load: {error}");
+            map.RetryLoad();
+            nextMapRetryAt = timer + 10f;
+        }
+    }
+
+    bool IsMapContentLoaded()
+    {
+        var map = arcGISMap?.View?.Map;
+        if (map == null || map.LoadStatus != ArcGISLoadStatus.Loaded)
+        {
+            return false;
+        }
+
+        var basemap = map.Basemap;
+        return basemap == null ||
+               basemap.LoadStatus == ArcGISLoadStatus.Loaded;
+    }
+
+    bool IsMapDrawComplete()
+    {
+        // A loaded map only means its definition is available. The player should
+        // not enter LV1 until ArcGIS has finished drawing the current basemap.
+        return arcGISMap?.View != null &&
+               arcGISMap.View.DrawStatus == ArcGISDrawStatus.Completed;
+    }
+
+    string DescribeMapLoadState()
+    {
+        var map = arcGISMap?.View?.Map;
+        if (map == null)
+        {
+            return "Map=NULL";
+        }
+
+        string state = $"Map={map.LoadStatus}";
+        if (map.LoadError != null)
+        {
+            state += $" ({map.LoadError.Message})";
+        }
+
+        var basemap = map.Basemap;
+        if (basemap != null)
+        {
+            state += $" | Basemap={basemap.LoadStatus}";
+            if (basemap.LoadError != null)
+            {
+                state += $" ({basemap.LoadError.Message})";
+            }
+        }
+
+        if (arcGISMap?.View != null)
+        {
+            state += $" | Draw={arcGISMap.View.DrawStatus}";
+        }
+
+        return state;
     }
 
     public bool IsReady()
@@ -90,13 +174,6 @@ if (arcGISMap?.View != null)
 
     bool CanConvertProbePoint()
     {
-        Debug.Log(
-    $"Probe GPS: lat={GameManager.homeLat}, " +
-    $"lon={GameManager.homeLon}, " +
-    $"alt={GameManager.homeAlt}"
-);
-Debug.Log($"ArcGIS View = {arcGISMap.View}");
-Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
         if (arcGISMap == null || arcGISMap.View == null)
         {
             lastProbeError = "View is null";
@@ -149,11 +226,45 @@ Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
         for (int i = 0; i < arcCams.Length; i++)
         {
             if (i > 0) names += ", ";
-            names += arcCams[i].name;
+            Camera unityCamera = arcCams[i].GetComponent<Camera>();
+            bool cameraEnabled = unityCamera != null && unityCamera.enabled;
+            names += $"{arcCams[i].name} (ArcGIS={arcCams[i].enabled}, Camera={cameraEnabled}, Active={arcCams[i].gameObject.activeInHierarchy})";
         }
 
         Debug.Log($"✅ ArcGIS camera check ({phase}): Found {arcCams.Length} ArcGISCameraComponent(s): {names} | MainCamera={mainCam}");
         hasLoggedCameraState = true;
+    }
+
+    void LogRenderCameraState()
+    {
+        if (arcGISMap?.View == null)
+        {
+            return;
+        }
+
+        ArcGISCameraComponent[] cameras = FindObjectsByType<ArcGISCameraComponent>(
+            FindObjectsInactive.Include,
+            FindObjectsSortMode.None
+        );
+
+        for (int i = 0; i < cameras.Length; i++)
+        {
+            ArcGISCameraComponent camera = cameras[i];
+            if (camera == null || !camera.enabled)
+            {
+                continue;
+            }
+
+            Debug.Log(
+                $"🗺 ArcGIS render camera: {camera.name} | " +
+                $"World={camera.transform.position} | " +
+                $"Local={camera.transform.localPosition} | " +
+                $"ViewGeo={arcGISMap.View.Camera.Location}"
+            );
+            return;
+        }
+
+        Debug.LogWarning("⚠️ ArcGIS is ready, but no ArcGIS camera is enabled.");
     }
 
     public Vector3 GPSToUnity(double lat, double lon, double alt)

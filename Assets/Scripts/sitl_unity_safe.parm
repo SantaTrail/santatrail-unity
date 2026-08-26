@@ -16,3 +16,5 @@ FLTMODE_CH 0
 RC7_OPTION 0
 EK3_IMU_MASK 1
 EK3_PRIMARY 0
+# Unity uses SERIAL1 (UDP 14551); stream the position it needs to mirror QGC.
+SR1_POSITION 10

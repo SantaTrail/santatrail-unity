@@ -13,13 +13,29 @@ public class DeliveryManager : MonoBehaviour
     [Header("References")]
     public SantaLetterGameManager santaLetterGameManager;
 
+    [Header("Scene Flow")]
+    [SerializeField] private string nextSceneName = "PreviewLV";
+
     private int completedDeliveries = 0;
+
+    private void Awake()
+    {
+        if (GameManager.hasActiveDeliveryCount)
+        {
+            totalDeliveries = Mathf.Max(1, GameManager.activeDeliveryCount);
+        }
+    }
 
     public void CompleteDelivery()
     {
         completedDeliveries++;
 
         UpdateProgress();
+
+        if (santaLetterGameManager != null && santaLetterGameManager.missionUI != null)
+        {
+            santaLetterGameManager.missionUI.CompleteDelivery();
+        }
 
         if (completedDeliveries >= totalDeliveries)
         {
@@ -44,6 +60,12 @@ public class DeliveryManager : MonoBehaviour
     {
         Debug.Log("Santa Delivery Minigame Complete!");
 
-        SceneManager.LoadScene("PreviewLV");
+        if (string.IsNullOrWhiteSpace(nextSceneName))
+        {
+            Debug.LogError("DeliveryManager: nextSceneName is empty.");
+            return;
+        }
+
+        SceneManager.LoadScene(nextSceneName);
     }
 }

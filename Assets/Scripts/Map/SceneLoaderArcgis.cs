@@ -36,8 +36,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] double mapOriginLongitude;
     [SerializeField] double mapOriginLatitude;
     [SerializeField] double mapOriginAltitude;
+    [Tooltip("Restrict ArcGIS streaming and generated houses to a circular playable area around the map origin.")]
     [SerializeField] bool limitMapExtent = false;
-    [SerializeField] double mapExtentSizeMeters = 1000f;
+    [Min(1f)]
+    [Tooltip("Radius of the playable ArcGIS map area in metres.")]
+    [SerializeField] double mapExtentSizeMeters = 500f;
     [Header("ArcGIS")]
     [SerializeField] ArcGISConverter arcGISConverter;
 
@@ -46,6 +49,16 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] LoadingScreenUI loadingScreen;
     [Min(0f)]
     [SerializeField] float minimumLoadingScreenSeconds = 1.25f;
+    [Tooltip("Keep loading visible until ArcGIS can convert geographic positions.")]
+    [SerializeField] bool waitForArcGISBeforeHidingLoadingScreen = true;
+    [Tooltip("Keep loading visible until delivery targets are selected from generated houses.")]
+    [SerializeField] bool waitForDeliveryTargetsBeforeHidingLoadingScreen = true;
+    [Min(1f)]
+    [Tooltip("Maximum final wait for ArcGIS and delivery systems after object generation.")]
+    [SerializeField] float finalLevelReadyTimeoutSeconds = 90f;
+    [Range(1, 10)]
+    [Tooltip("Extra completed frames rendered before the loading overlay fades out.")]
+    [SerializeField] int finalRenderFrameCount = 3;
 
     float loadingScreenShownAt;
     [Header("Fallback")]
@@ -61,6 +74,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] bool hideOsmBuildingLayer = true;
     [SerializeField] bool logLayerVisibilityChanges = true;
     [SerializeField] float buildingYawCorrectionDegrees = 0f;
+    [Header("Placement Safety")]
+    [Tooltip("Validates OSM building footprints against roads, water, and other generated buildings.")]
+    [SerializeField] OsmPlacementValidator placementValidator;
 
     public enum BuildingGenerationMode
     {
@@ -70,7 +86,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     }
 
     [Header("OSM Building Generation")]
-    [Tooltip("Complete Prefab keeps the old stretched-house system. Modular Footprint builds every house from wall components. Hybrid uses components for irregular footprints and complete prefabs for simple rectangles.")]
+    [Tooltip("Complete Prefab keeps the old stretched-house system. Modular Footprint builds every house from wall components. Hybrid now follows the same wall-based path so every OSM house gets 3D wall geometry.")]
     [SerializeField] BuildingGenerationMode buildingGenerationMode =
         BuildingGenerationMode.ModularFootprint;
 
@@ -81,7 +97,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Range(0.50f, 1f)]
     [SerializeField] float modularFootprintFillThreshold = 0.92f;
 
-    [Tooltip("Keep Building Replacement Rules as complete special prefabs even when Modular Footprint mode is selected.")]
+    [Tooltip("Legacy compatibility flag kept in the scene data. OSM houses now always use the modular wall generator in non-CompletePrefab modes.")]
     [SerializeField] bool replacementRulesForceCompletePrefabs = true;
 
     [Tooltip("Optional world Y-axis correction for modular buildings. X and Z rotation are always kept at 0.")]
@@ -90,15 +106,13 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Tooltip("Small world-space height adjustment for modular houses after GPS conversion. Increase this if walls are slightly below the map surface.")]
     [SerializeField] float modularBuildingGroundOffset = 0.05f;
 
-    [Range(0.80f, 2.00f)]
+    [Range(1f, 1.5f)]
     [Tooltip(
-        "Final X/Z-only scale applied after the modular house has been " +
-        "generated. This changes the visible footprint without increasing " +
-        "the number of wall modules, roof vertices, or colliders. " +
-        "Y remains unchanged. A value around 1.55 to 1.65 can be used " +
-        "when 1.50 is still slightly smaller than the map footprint."
+        "Uniform X/Z expansion for walls built from an OSM footprint. " +
+        "1 matches the source exactly; 1.3 makes the visible house fill " +
+        "the wider ArcGIS building shadow."
     )]
-    [SerializeField] float modularFootprintScale = 1.08f;
+    [SerializeField] float osmWallFootprintScale = 1.3f;
 
     [System.Serializable]
     public class BuildingOrientationRule
@@ -172,7 +186,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     float waterHeight = -1f;
 
     [Header("Python Script")]
-    public string pythonPath = "/Users/notebook/.pyenv/versions/3.10.18/bin/python3";
+    [Tooltip(
+        "Optional Python executable override. Leave empty to use the " +
+        "runtime bundled in StreamingAssets/Python or python3 from PATH."
+    )]
+    public string pythonPath = "";
 
     [Header("Expanded OSM Building Query")]
     [Tooltip(
@@ -192,7 +210,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         "OSM query radius in metres. Keep this slightly larger than the " +
         "ArcGIS map extent so edge buildings are not missed."
     )]
-    [SerializeField] double osmQueryRadiusMeters = 220.0;
+    [SerializeField] double osmQueryRadiusMeters = 500.0;
 
     string scriptPath;
     string outputPath;
@@ -202,6 +220,63 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     volatile int pythonProcessExitCode = int.MinValue;
     [Header("Prefabs")]
     public GameObject treePrefab;
+    [Tooltip("Optional tree palette used for environment detail. If empty, Tree Prefab is used.")]
+    [SerializeField] GameObject[] environmentTreePrefabs;
+    [Header("Environment Detail")]
+    [SerializeField] bool spawnEnvironmentDetail = true;
+    [Header("Environment Content")]
+    [Tooltip("Allow tree props in this level.")]
+    [SerializeField] bool spawnEnvironmentTrees = true;
+    [Tooltip("Allow bush props in this level.")]
+    [SerializeField] bool spawnEnvironmentBushes = true;
+    [Tooltip("Allow decorative field patches in this level.")]
+    [SerializeField] bool spawnFieldPatches = true;
+    [SerializeField] bool spawnBackgroundTrees = false;
+    [Min(0)]
+    [SerializeField] int environmentTreesPerBuildingMin = 0;
+    [Min(0)]
+    [SerializeField] int environmentTreesPerBuildingMax = 1;
+    [Min(0)]
+    [SerializeField] int environmentBackgroundTreeCount = 0;
+    [Min(0.1f)]
+    [SerializeField] float environmentTreeDistanceMultiplier = 1.2f;
+    [Min(0.1f)]
+    [SerializeField] float environmentTreeScaleMin = 0.35f;
+    [Min(0.1f)]
+    [SerializeField] float environmentTreeScaleMax = 0.75f;
+    [Tooltip("Maximum rendered tree height in metres after prefab scaling.")]
+    [Min(0.5f)]
+    [SerializeField] float environmentTreeMaximumHeight = 4.5f;
+    [Tooltip("Chance that a building in a field-style level receives one nearby tree.")]
+    [Range(0f, 1f)]
+    [SerializeField] float fieldTreeChancePerBuilding = 0.18f;
+    [SerializeField] bool spawnStreetLights = true;
+    [Header("Roadside Street Lights")]
+    [Tooltip("Place lights from real OSM road centerlines instead of randomly around houses.")]
+    [SerializeField] bool spawnStreetLightsAlongRoads = true;
+    [Min(5f)]
+    [SerializeField] float roadsideStreetLightSpacingMeters = 32f;
+    [Min(0.5f)]
+    [SerializeField] float roadsideStreetLightOffsetMeters = 4f;
+    [Min(0)]
+    [SerializeField] int roadsideStreetLightMaximumCount = 40;
+    [SerializeField] bool roadsideStreetLightsOnBothSides = true;
+    [Min(0)]
+    [SerializeField] int environmentBushesPerBuildingMin = 2;
+    [Min(0)]
+    [SerializeField] int environmentBushesPerBuildingMax = 5;
+    [Min(0.1f)]
+    [SerializeField] float environmentBushScaleMin = 0.55f;
+    [Min(0.1f)]
+    [SerializeField] float environmentBushScaleMax = 1.05f;
+    [Min(0)]
+    [SerializeField] int fieldPatchCountMin = 8;
+    [Min(0)]
+    [SerializeField] int fieldPatchCountMax = 18;
+    [Min(0.1f)]
+    [SerializeField] float fieldPatchScaleMin = 0.35f;
+    [Min(0.1f)]
+    [SerializeField] float fieldPatchScaleMax = 1.15f;
     public GameObject buildingPrefab;
     public GameObject[] randomHousePrefabs;
     [Header("Village Buildings")]
@@ -209,6 +284,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     public GameObject[] mediumHousePrefabs;
     public GameObject[] largeBuildingPrefabs;
     [SerializeField] bool spawnVisibleVillageClusterOnly = false;
+    [Tooltip(
+        "Creates the nearby modular fallback village only when OSM returns no " +
+        "buildings or every OSM footprint is rejected. This keeps delivery " +
+        "targets available without weakening normal road, water, or overlap checks."
+    )]
+    [SerializeField] bool spawnFallbackVillageWhenNoOsmBuildings = true;
     [SerializeField] float smallBuildingAreaMax = 120f;
     [SerializeField] float mediumBuildingAreaMax = 900f;
     [System.Serializable]
@@ -223,6 +304,19 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Header("Building Replacements")]
     [SerializeField] BuildingReplacementRule[] buildingReplacements;
 
+    [Header("House LOD")]
+    [Tooltip("Enable a cheap far-distance proxy for every spawned house so the level can contain more buildings without rendering all of them at once.")]
+    [SerializeField] bool enableHouseSimpleLod = true;
+    [Min(0f)]
+    [Tooltip("When the viewer is closer than this distance, the detailed house geometry is shown.")]
+    [SerializeField] float houseSimpleLodDetailDistance = 600f;
+    [Min(0f)]
+    [Tooltip("When the viewer is farther than this distance, the house swaps to a simple proxy cube.")]
+    [SerializeField] float houseSimpleLodCullDistance = 900f;
+    [Min(0.05f)]
+    [Tooltip("How often each house checks the viewer distance.")]
+    [SerializeField] float houseSimpleLodRefreshSeconds = 0.5f;
+
     struct GeoCoordinate
     {
         public double latitude;
@@ -235,6 +329,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
     }
 
+    struct RoadsideStreetLightPlacement
+    {
+        public double latitude;
+        public double longitude;
+        public float heading;
+        public double distanceFromMapCenter;
+        public int seed;
+    }
+
     Terrain terrain;
     bool fallbackOriginSet;
     double fallbackOriginLat;
@@ -243,8 +346,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     Transform generatedBuildingsRoot;
     Transform droneTransform;
     int visibleBuildingCounter;
+    Transform generatedEnvironmentRoot;
 
-    #if false
+    // The current level bootstrap lives in SceneLoaderArcgis.Bootstrap.cs.
+    // Keep this retired implementation out of the compiled partial class so
+    // Unity invokes only the loader that waits for ArcGIS before hiding UI.
+#if false
     void Awake()
     {
         TryResolveArcGISConverter();
@@ -492,6 +599,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             loadingScreen.SetProgress(0.02f);
         }
 
+        // This runs after LV1 has activated and its map home was set in Awake.
+        AutoArduPilotOnPlay.RequestLaunchForScene(gameObject.scene.name);
+
         string projectRoot = Application.dataPath + "/../";
         string backendPath = ResolveBackendPath(projectRoot);
 
@@ -594,6 +704,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         bool jsonReady = false;
         bool arcgisReady = false;
+        bool pythonExitWarningLogged = false;
 
         while (timer < timeout)
         {
@@ -604,27 +715,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 TryResolveArcGISConverter();
             }
 
-            if (pythonProcessCompleted &&
-                pythonProcessExitCode != 0)
-            {
-                Debug.LogError(
-                    "❌ Python level generation failed with exit code " +
-                    pythonProcessExitCode
-                );
-
-                if (loadingScreen != null)
-                {
-                    loadingScreen.ShowError(
-                        "Python level generation failed. Check the Console."
-                    );
-                }
-
-                yield break;
-            }
-
             if (!jsonReady &&
-                pythonProcessCompleted &&
-                pythonProcessExitCode == 0 &&
                 File.Exists(outputPath))
             {
                 try
@@ -643,6 +734,38 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     Debug.LogWarning(
                         "⚠️ JSON read error: " + e.Message
                     );
+                }
+            }
+
+            if (pythonProcessCompleted &&
+                pythonProcessExitCode != 0)
+            {
+                if (pythonProcessExitCode == 143)
+                {
+                    if (!pythonExitWarningLogged)
+                    {
+                        Debug.LogWarning(
+                            "⚠️ Python exited with code 143. " +
+                            "Waiting for output.json to finish loading if it was written before shutdown."
+                        );
+                        pythonExitWarningLogged = true;
+                    }
+                }
+                else
+                {
+                    Debug.LogError(
+                        "❌ Python level generation failed with exit code " +
+                        pythonProcessExitCode
+                    );
+
+                    if (loadingScreen != null)
+                    {
+                        loadingScreen.ShowError(
+                            "Python level generation failed. Check the Console."
+                        );
+                    }
+
+                    yield break;
                 }
             }
 
@@ -1081,10 +1204,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
             float ground = terrain.SampleHeight(pos);
 
-            pos.y = ground + 50f;
+            // Initial placement is grounded. Flight altitude comes from MAVLink
+            // only after the vehicle has actually taken off.
+            pos.y = ground;
             droneTransform.position = pos;
 
-            Debug.Log("🚁 Drone safely placed above terrain");
+            Debug.Log("🚁 Drone placed on terrain");
         }
     }
 
@@ -1123,9 +1248,18 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     // =========================
     void GenerateScene(Result result)
     {
+        ClearGeneratedContent();
+
+        // Roadside props use the same OSM road data in both terrain modes.
+        // Keep this separate from terrain generation so the setting is reliable
+        // when a level switches between ArcGIS and Unity terrain.
+        SpawnStreetLightsAlongRoads(result);
+
         if (useArcGISTerrainOnly)
         {
             SpawnVillageBuildings(result);
+            SpawnEnvironmentDetail(result);
+            SpawnFieldDetail(result);
 
             Debug.Log("🌍 ArcGIS-only mode: skipped Unity terrain trees/water");
             return;
@@ -1153,13 +1287,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         SpawnTrees(treeCount);
 
         SpawnVillageBuildings(result);
+        SpawnEnvironmentDetail(result);
+        SpawnFieldDetail(result);
 
         Debug.Log($"🌳 Trees: {treeCount} | 🏙 Buildings: {(build > 10 ? "YES" : "NO")}");
     }
 
     void SpawnTrees(int count)
     {
-        if (treePrefab == null || terrain == null) return;
+        if (!spawnEnvironmentTrees || treePrefab == null || terrain == null) return;
 
         int spawned = 0;
         int attempts = 0;
@@ -1198,6 +1334,863 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         Debug.Log($"🌳 Spawned {spawned} trees (safe)");
     }
 
+    void SpawnEnvironmentDetail(Result result)
+    {
+        if (!spawnEnvironmentDetail || !spawnEnvironmentTrees || result == null)
+        {
+            return;
+        }
+
+        float vegetationDensity =
+            result.features != null
+                ? result.features.vegetation_density
+                : 0f;
+
+        int backgroundCount = 0;
+
+        if (spawnBackgroundTrees)
+        {
+            backgroundCount =
+                environmentBackgroundTreeCount +
+                Mathf.RoundToInt(vegetationDensity * 0.08f);
+
+            if (result.scene == "forest")
+            {
+                backgroundCount += 10;
+            }
+            else if (result.scene == "plain")
+            {
+                backgroundCount = Mathf.Min(backgroundCount, 2);
+            }
+            else if (result.scene == "urban")
+            {
+                backgroundCount = Mathf.Max(0, backgroundCount - 8);
+            }
+
+            backgroundCount = Mathf.Clamp(backgroundCount, 0, 24);
+        }
+
+        Vector3 anchorCenter;
+        Vector3 anchorForward;
+
+        if (!TryGetVisibleVillageAnchor(result, out anchorCenter, out anchorForward))
+        {
+            Transform fallbackAnchor =
+                droneTransform != null
+                    ? droneTransform
+                    : droneCamera != null
+                        ? droneCamera.transform
+                        : Camera.main != null
+                            ? Camera.main.transform
+                            : null;
+
+            anchorCenter =
+                fallbackAnchor != null
+                    ? fallbackAnchor.position
+                    : Vector3.zero;
+            anchorForward =
+                fallbackAnchor != null
+                    ? fallbackAnchor.forward
+                    : Vector3.forward;
+        }
+
+        anchorForward.y = 0f;
+        if (anchorForward.sqrMagnitude < 0.0001f)
+        {
+            anchorForward = Vector3.forward;
+        }
+        anchorForward.Normalize();
+
+        Vector3 anchorRight = Vector3.Cross(Vector3.up, anchorForward).normalized;
+        float minRadius = Mathf.Clamp(buildingSpawnRadius * 0.30f, 12f, 45f);
+        float maxRadius = Mathf.Clamp(buildingSpawnRadius * 0.80f, minRadius + 10f, 120f);
+
+        Transform environmentRoot = GetGeneratedEnvironmentRoot();
+
+        for (int i = 0; i < backgroundCount; i++)
+        {
+            float angle =
+                (i * 137.5f +
+                 UnityEngine.Random.Range(-15f, 15f)) *
+                Mathf.Deg2Rad;
+
+            float radius =
+                UnityEngine.Random.Range(minRadius, maxRadius);
+
+            Vector3 offset =
+                (anchorRight * Mathf.Cos(angle) +
+                 anchorForward * Mathf.Sin(angle)) *
+                radius;
+
+            Vector3 worldPosition = anchorCenter + offset;
+            worldPosition.y = anchorCenter.y;
+
+            SpawnEnvironmentTree(
+                worldPosition,
+                i * 7919 + 17,
+                vegetationDensity,
+                result.scene,
+                environmentRoot
+            );
+        }
+    }
+
+    void SpawnEnvironmentDetailAroundBuilding(
+        Vector3 buildingCenter,
+        float width,
+        float depth,
+        float area,
+        int buildingIndex,
+        string sceneName)
+    {
+        if (!spawnEnvironmentDetail)
+        {
+            return;
+        }
+
+        // Keep props under a neutral root so they do not inherit a house's
+        // footprint scale or delayed ArcGIS rotation.
+        Transform detailParent = GetGeneratedEnvironmentRoot();
+
+        int treeCount =
+            UnityEngine.Random.Range(
+                environmentTreesPerBuildingMin,
+                environmentTreesPerBuildingMax + 1
+            );
+
+        int bushCount =
+            UnityEngine.Random.Range(
+                environmentBushesPerBuildingMin,
+                environmentBushesPerBuildingMax + 1
+            );
+
+        if (sceneName == "forest")
+        {
+            treeCount += 1;
+            bushCount += 1;
+        }
+        else if (sceneName == "urban")
+        {
+            treeCount = Mathf.Max(0, treeCount - 1);
+            bushCount = Mathf.Max(1, bushCount - 1);
+        }
+        else
+        {
+            // LV1 uses a field-like map area, so most houses should not add a tree.
+            treeCount = UnityEngine.Random.value <= fieldTreeChancePerBuilding
+                ? 1
+                : 0;
+            bushCount = Mathf.Clamp(bushCount, 2, 4);
+        }
+
+        treeCount = Mathf.Clamp(treeCount, 0, 1);
+        bushCount = Mathf.Clamp(bushCount, 0, 4);
+
+        if (!spawnEnvironmentTrees)
+        {
+            treeCount = 0;
+        }
+
+        if (!spawnEnvironmentBushes)
+        {
+            bushCount = 0;
+        }
+
+        float baseRadius =
+            Mathf.Max(width, depth) * environmentTreeDistanceMultiplier +
+            1.5f;
+        float maxRadius = baseRadius + Mathf.Clamp(area / 140f, 1.5f, 6f);
+
+        for (int i = 0; i < treeCount; i++)
+        {
+            float angle =
+                UnityEngine.Random.Range(0f, 360f) *
+                Mathf.Deg2Rad;
+
+            float radius =
+                UnityEngine.Random.Range(baseRadius, maxRadius);
+
+            Vector3 offset = new Vector3(
+                Mathf.Cos(angle),
+                0f,
+                Mathf.Sin(angle)
+            ) * radius;
+
+            Vector3 worldPosition = buildingCenter + offset;
+            worldPosition.y = buildingCenter.y;
+
+            SpawnEnvironmentTree(
+                worldPosition,
+                buildingIndex * 104729 + i * 97,
+                0f,
+                sceneName,
+                detailParent
+            );
+        }
+
+        float houseHalfWidth = Mathf.Max(width * 0.5f, 1.5f);
+        float houseHalfDepth = Mathf.Max(depth * 0.5f, 1.5f);
+        float edgeMargin = Mathf.Clamp(
+            Mathf.Max(width, depth) * 0.18f,
+            1.2f,
+            4.5f
+        );
+
+        float bushClusterRadius = Mathf.Sqrt(
+            houseHalfWidth * houseHalfWidth +
+            houseHalfDepth * houseHalfDepth
+        ) + edgeMargin;
+        float bushClusterHeading = UnityEngine.Random.Range(0f, 360f);
+        for (int i = 0; i < bushCount; i++)
+        {
+            // Split the bushes into one or two loose clumps instead of putting
+            // one at every building corner.
+            float clusterSide = (i % 2) * 180f;
+            float heading = bushClusterHeading + clusterSide +
+                UnityEngine.Random.Range(-28f, 28f);
+            Vector3 outward = Quaternion.Euler(0f, heading, 0f) * Vector3.forward;
+            Vector3 sideways = new Vector3(outward.z, 0f, -outward.x);
+            float radialJitter = UnityEngine.Random.Range(-0.35f, 1.8f);
+            float sideJitter = UnityEngine.Random.Range(-1.8f, 1.8f);
+
+            Vector3 worldPosition = buildingCenter +
+                outward * (bushClusterRadius + radialJitter) +
+                sideways * sideJitter;
+            worldPosition.y = buildingCenter.y + 0.05f;
+
+            SpawnEnvironmentBush(
+                worldPosition,
+                buildingIndex * 65537 + i * 131,
+                sceneName,
+                detailParent
+            );
+        }
+
+    }
+
+    void SpawnFieldDetail(Result result)
+    {
+        if (!spawnEnvironmentDetail ||
+            !spawnFieldPatches ||
+            result == null ||
+            result.buildings == null)
+        {
+            return;
+        }
+
+        List<Vector3> buildingCenters = new List<Vector3>();
+
+        for (int i = 0; i < result.buildings.Length; i++)
+        {
+            var building = result.buildings[i];
+            if (building == null || building.points == null || building.points.Length < 3)
+            {
+                continue;
+            }
+
+            double latSum = 0.0;
+            double lonSum = 0.0;
+
+            for (int p = 0; p < building.points.Length; p++)
+            {
+                latSum += building.points[p].lat;
+                lonSum += building.points[p].lon;
+            }
+
+            double centerLat = latSum / building.points.Length;
+            double centerLon = lonSum / building.points.Length;
+
+            if (TryConvertGPS(centerLat, centerLon, 0, out Vector3 worldCenter))
+            {
+                buildingCenters.Add(worldCenter);
+            }
+        }
+
+        if (buildingCenters.Count == 0)
+        {
+            return;
+        }
+
+        Vector3 min = buildingCenters[0];
+        Vector3 max = buildingCenters[0];
+
+        for (int i = 1; i < buildingCenters.Count; i++)
+        {
+            Vector3 point = buildingCenters[i];
+            min.x = Mathf.Min(min.x, point.x);
+            min.z = Mathf.Min(min.z, point.z);
+            max.x = Mathf.Max(max.x, point.x);
+            max.z = Mathf.Max(max.z, point.z);
+        }
+
+        Vector3 spread = max - min;
+        float padding = Mathf.Clamp(
+            Mathf.Max(spread.x, spread.z) * 0.15f,
+            8f,
+            30f
+        );
+
+        min.x -= padding;
+        min.z -= padding;
+        max.x += padding;
+        max.z += padding;
+
+        Transform root = GetGeneratedEnvironmentRoot();
+        int detailCount = UnityEngine.Random.Range(
+            fieldPatchCountMin,
+            fieldPatchCountMax + 1
+        );
+        detailCount = Mathf.Clamp(detailCount, 4, 14);
+
+        for (int i = 0; i < detailCount; i++)
+        {
+            Vector3 position = new Vector3(
+                UnityEngine.Random.Range(min.x, max.x),
+                buildingCenters[UnityEngine.Random.Range(0, buildingCenters.Count)].y,
+                UnityEngine.Random.Range(min.z, max.z)
+            );
+
+            SpawnFieldPatch(
+                position,
+                9000 + i * 37,
+                result.scene,
+                root
+            );
+        }
+    }
+
+    void SpawnEnvironmentTree(
+        Vector3 worldPosition,
+        int seed,
+        float vegetationDensity,
+        string sceneName,
+        Transform parent)
+    {
+        if (!spawnEnvironmentTrees)
+        {
+            return;
+        }
+
+        GameObject prefab = GetEnvironmentTreePrefab(seed);
+
+        if (prefab == null)
+        {
+            return;
+        }
+
+        float scale = UnityEngine.Random.Range(
+            environmentTreeScaleMin,
+            environmentTreeScaleMax
+        );
+
+        if (sceneName == "forest")
+        {
+            scale *= 1.15f;
+        }
+        else if (sceneName == "urban")
+        {
+            scale *= 0.85f;
+        }
+        else
+        {
+            scale *= 0.65f;
+        }
+
+        scale *= Mathf.Lerp(0.90f, 1.15f, Mathf.Clamp01(vegetationDensity / 100f));
+
+        GameObject tree = Instantiate(
+            prefab,
+            worldPosition,
+            Quaternion.Euler(
+                0f,
+                UnityEngine.Random.Range(0f, 360f),
+                0f
+            )
+        );
+
+        tree.name = $"{prefab.name}_EnvDetail";
+        tree.transform.localScale *= scale;
+
+        if (parent != null)
+        {
+            tree.transform.SetParent(parent, true);
+        }
+
+        ClampEnvironmentTreeHeight(tree, sceneName);
+    }
+
+    void ClampEnvironmentTreeHeight(GameObject tree, string sceneName)
+    {
+        Renderer[] renderers = tree.GetComponentsInChildren<Renderer>(true);
+        Bounds bounds = default;
+        bool hasBounds = false;
+
+        foreach (Renderer renderer in renderers)
+        {
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            if (!hasBounds)
+            {
+                bounds = renderer.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        if (!hasBounds || bounds.size.y <= 0.01f)
+        {
+            return;
+        }
+
+        float maximumHeight = environmentTreeMaximumHeight;
+        if (sceneName == "forest")
+        {
+            maximumHeight *= 1.5f;
+        }
+
+        if (bounds.size.y > maximumHeight)
+        {
+            tree.transform.localScale *= maximumHeight / bounds.size.y;
+        }
+    }
+
+    void SpawnEnvironmentBush(
+        Vector3 worldPosition,
+        int seed,
+        string sceneName,
+        Transform parent)
+    {
+        if (!spawnEnvironmentBushes)
+        {
+            return;
+        }
+
+        GameObject bush = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        bush.name = $"Bush_{seed}";
+        bush.transform.position = worldPosition;
+        bush.transform.rotation = Quaternion.Euler(
+            0f,
+            (seed % 360 + 360) % 360,
+            0f
+        );
+        bush.transform.localScale = new Vector3(
+            UnityEngine.Random.Range(environmentBushScaleMin, environmentBushScaleMax) * 1.15f,
+            UnityEngine.Random.Range(environmentBushScaleMin * 0.35f, environmentBushScaleMax * 0.55f),
+            UnityEngine.Random.Range(environmentBushScaleMin, environmentBushScaleMax) * 1.15f
+        );
+
+        if (sceneName != "forest")
+        {
+            bush.transform.localScale *= 0.9f;
+        }
+
+        if (terrain != null)
+        {
+            Vector3 groundedPosition = bush.transform.position;
+            groundedPosition.y = terrain.SampleHeight(groundedPosition);
+            bush.transform.position = groundedPosition;
+        }
+
+        Collider collider = bush.GetComponent<Collider>();
+        if (collider != null)
+        {
+            Destroy(collider);
+        }
+
+        Renderer renderer = bush.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null)
+            {
+                shader = Shader.Find("Standard");
+            }
+
+            if (shader != null)
+            {
+                Material material = new Material(shader);
+                material.color =
+                    sceneName == "forest"
+                        ? new Color(0.16f, 0.35f, 0.12f, 1f)
+                        : new Color(0.22f, 0.38f, 0.15f, 1f);
+                renderer.sharedMaterial = material;
+            }
+        }
+
+        if (parent != null)
+        {
+            bush.transform.SetParent(parent, true);
+        }
+    }
+
+    void SpawnFieldPatch(
+        Vector3 worldPosition,
+        int seed,
+        string sceneName,
+        Transform parent)
+    {
+        GameObject patch = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        patch.name = $"FieldPatch_{seed}";
+        patch.transform.position = worldPosition;
+        patch.transform.rotation = Quaternion.Euler(
+            0f,
+            (seed % 360 + 360) % 360,
+            0f
+        );
+
+        float xScale = UnityEngine.Random.Range(fieldPatchScaleMin, fieldPatchScaleMax);
+        float zScale = UnityEngine.Random.Range(fieldPatchScaleMin, fieldPatchScaleMax);
+        float yScale = UnityEngine.Random.Range(0.03f, 0.08f);
+        patch.transform.localScale = new Vector3(xScale, yScale, zScale);
+
+        Collider collider = patch.GetComponent<Collider>();
+        if (collider != null)
+        {
+            Destroy(collider);
+        }
+
+        Renderer renderer = patch.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null)
+            {
+                shader = Shader.Find("Standard");
+            }
+
+            if (shader != null)
+            {
+                Material material = new Material(shader);
+                material.color =
+                    sceneName == "forest"
+                        ? new Color(0.34f, 0.50f, 0.18f, 1f)
+                        : new Color(0.42f, 0.58f, 0.22f, 1f);
+                renderer.sharedMaterial = material;
+            }
+        }
+
+        if (parent != null)
+        {
+            patch.transform.SetParent(parent, true);
+        }
+    }
+
+    void SpawnStreetLightsAlongRoads(Result result)
+    {
+        if (!spawnStreetLights || !spawnStreetLightsAlongRoads)
+        {
+            return;
+        }
+
+        if (roadsideStreetLightMaximumCount <= 0)
+        {
+            Debug.LogWarning("🏮 Roadside street lights skipped: maximum count is 0.");
+            return;
+        }
+
+        if (result == null || result.roads == null || result.roads.Length == 0)
+        {
+            Debug.LogWarning(
+                "🏮 Roadside street lights skipped: OSM returned no road centerlines."
+            );
+            return;
+        }
+
+        float spacing = Mathf.Max(5f, roadsideStreetLightSpacingMeters);
+        float roadsideOffset = Mathf.Max(0.5f, roadsideStreetLightOffsetMeters);
+        List<RoadsideStreetLightPlacement> placements =
+            new List<RoadsideStreetLightPlacement>();
+        HashSet<string> occupiedLocations = new HashSet<string>();
+
+        for (int roadIndex = 0; roadIndex < result.roads.Length; roadIndex++)
+        {
+            Road road = result.roads[roadIndex];
+            if (road == null ||
+                road.points == null ||
+                road.points.Length < 2 ||
+                !IsSupportedStreetLightRoad(road.highway))
+            {
+                continue;
+            }
+
+            double distanceToNextLight = spacing * 0.5;
+
+            for (int pointIndex = 0; pointIndex < road.points.Length - 1; pointIndex++)
+            {
+                GPSPoint start = road.points[pointIndex];
+                GPSPoint end = road.points[pointIndex + 1];
+                if (!IsValidRoadPoint(start) || !IsValidRoadPoint(end))
+                {
+                    continue;
+                }
+
+                double averageLatitude = (start.lat + end.lat) * 0.5;
+                const double metersPerDegreeLatitude = 111320.0;
+                double metersPerDegreeLongitude =
+                    metersPerDegreeLatitude *
+                    System.Math.Cos(averageLatitude * System.Math.PI / 180.0);
+                double eastMeters =
+                    (end.lon - start.lon) * metersPerDegreeLongitude;
+                double northMeters =
+                    (end.lat - start.lat) * metersPerDegreeLatitude;
+                double segmentLength = System.Math.Sqrt(
+                    eastMeters * eastMeters + northMeters * northMeters
+                );
+
+                if (segmentLength < 0.5 ||
+                    System.Math.Abs(metersPerDegreeLongitude) < 0.000001)
+                {
+                    continue;
+                }
+
+                double rightEast = northMeters / segmentLength;
+                double rightNorth = -eastMeters / segmentLength;
+
+                while (distanceToNextLight <= segmentLength)
+                {
+                    double t = distanceToNextLight / segmentLength;
+                    double centerLatitude =
+                        start.lat + (end.lat - start.lat) * t;
+                    double centerLongitude =
+                        start.lon + (end.lon - start.lon) * t;
+                    int sideCount = roadsideStreetLightsOnBothSides ? 2 : 1;
+
+                    for (int sideIndex = 0; sideIndex < sideCount; sideIndex++)
+                    {
+                        // Use one fixed side when requested. Alternating by
+                        // OSM way index can put lights on both sides of the
+                        // same physical street because one street is often
+                        // split into many way segments.
+                        int side = roadsideStreetLightsOnBothSides
+                            ? (sideIndex == 0 ? -1 : 1)
+                            : -1;
+                        double offsetEast = rightEast * roadsideOffset * side;
+                        double offsetNorth = rightNorth * roadsideOffset * side;
+                        double latitude =
+                            centerLatitude + offsetNorth / metersPerDegreeLatitude;
+                        double longitude =
+                            centerLongitude + offsetEast / metersPerDegreeLongitude;
+
+                        if (!IsInsideConfiguredMapExtent(
+                                latitude,
+                                longitude,
+                                out double distanceFromMapCenter))
+                        {
+                            continue;
+                        }
+
+                        string locationKey =
+                            $"{System.Math.Round(latitude, 5):F5}:" +
+                            $"{System.Math.Round(longitude, 5):F5}";
+                        if (!occupiedLocations.Add(locationKey))
+                        {
+                            continue;
+                        }
+
+                        double towardRoadEast = -rightEast * side;
+                        double towardRoadNorth = -rightNorth * side;
+                        float heading = NormalizeHeadingDegrees((float)(
+                            System.Math.Atan2(towardRoadEast, towardRoadNorth) *
+                            180.0 / System.Math.PI
+                        ));
+
+                        placements.Add(new RoadsideStreetLightPlacement
+                        {
+                            latitude = latitude,
+                            longitude = longitude,
+                            heading = heading,
+                            distanceFromMapCenter = distanceFromMapCenter,
+                            seed = roadIndex * 100000 + pointIndex * 100 + sideIndex
+                        });
+                    }
+
+                    distanceToNextLight += spacing;
+                }
+
+                distanceToNextLight -= segmentLength;
+            }
+        }
+
+        placements.Sort((a, b) =>
+            a.distanceFromMapCenter.CompareTo(b.distanceFromMapCenter));
+
+        int spawnCount = Mathf.Min(
+            roadsideStreetLightMaximumCount,
+            placements.Count
+        );
+
+        if (spawnCount == 0)
+        {
+            Debug.LogWarning(
+                $"🏮 Roadside street lights skipped: {result.roads.Length} OSM roads " +
+                "were returned, but none produced valid placements inside the map extent."
+            );
+            return;
+        }
+
+        Transform environmentRoot = GetGeneratedEnvironmentRoot();
+
+        for (int i = 0; i < spawnCount; i++)
+        {
+            RoadsideStreetLightPlacement placement = placements[i];
+            SpawnArcGISStreetLight(
+                placement.latitude,
+                placement.longitude,
+                placement.heading,
+                placement.seed,
+                result.scene,
+                environmentRoot
+            );
+        }
+
+        Debug.Log(
+            $"🏮 Spawned {spawnCount} roadside street lights from " +
+            $"{result.roads.Length} OSM roads."
+        );
+    }
+
+    bool IsSupportedStreetLightRoad(string highway)
+    {
+        switch ((highway ?? "").Trim().ToLowerInvariant())
+        {
+            case "motorway":
+            case "trunk":
+            case "primary":
+            case "secondary":
+            case "tertiary":
+            case "residential":
+            case "unclassified":
+            case "living_street":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool IsValidRoadPoint(GPSPoint point)
+    {
+        return point != null &&
+               !float.IsNaN(point.lat) &&
+               !float.IsInfinity(point.lat) &&
+               !float.IsNaN(point.lon) &&
+               !float.IsInfinity(point.lon);
+    }
+
+    void SpawnArcGISStreetLight(
+        double latitude,
+        double longitude,
+        float heading,
+        int seed,
+        string sceneName,
+        Transform parent)
+    {
+        GameObject lightRoot = new GameObject($"RoadStreetLight_{seed}");
+        if (parent != null)
+        {
+            lightRoot.transform.SetParent(parent, false);
+        }
+
+        ArcGISLocationComponent location =
+            lightRoot.AddComponent<ArcGISLocationComponent>();
+        location.SurfacePlacementMode = ArcGISSurfacePlacementMode.OnTheGround;
+        location.SurfacePlacementOffset = 0.05;
+        location.Position = new ArcGISPoint(
+            longitude,
+            latitude,
+            0,
+            ArcGISSpatialReference.WGS84()
+        );
+        location.Rotation = new ArcGISRotation(0, 0, 0);
+
+        GameObject uprightObject = new GameObject("UprightVisualRoot");
+        uprightObject.transform.SetParent(lightRoot.transform, false);
+        uprightObject.transform.localPosition = Vector3.zero;
+        uprightObject.transform.localRotation = Quaternion.identity;
+        uprightObject.transform.localScale = Vector3.one;
+
+        ArcGISUprightVisualRoot uprightController =
+            uprightObject.AddComponent<ArcGISUprightVisualRoot>();
+        uprightController.Configure(heading);
+
+        BuildStreetLightVisual(uprightObject, sceneName);
+    }
+
+    void BuildStreetLightVisual(GameObject lightRoot, string sceneName)
+    {
+        float poleHeight = sceneName == "forest" ? 5.5f : 7.5f;
+        float poleWidth = 0.30f;
+
+        GameObject pole = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        pole.name = "Pole";
+        pole.transform.SetParent(lightRoot.transform, false);
+        pole.transform.localPosition = new Vector3(0f, poleHeight * 0.5f, 0f);
+        pole.transform.localScale = new Vector3(poleWidth, poleHeight, poleWidth);
+
+        GameObject arm = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        arm.name = "LampArm";
+        arm.transform.SetParent(lightRoot.transform, false);
+        arm.transform.localPosition = new Vector3(0f, poleHeight - 0.2f, 0.65f);
+        arm.transform.localScale = new Vector3(0.20f, 0.20f, 1.30f);
+
+        GameObject lamp = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        lamp.name = "LampHead";
+        lamp.transform.SetParent(lightRoot.transform, false);
+        lamp.transform.localPosition = new Vector3(0f, poleHeight - 0.3f, 1.35f);
+        lamp.transform.localScale = new Vector3(0.65f, 0.25f, 0.65f);
+
+        foreach (Transform child in lightRoot.transform)
+        {
+            Collider collider = child.GetComponent<Collider>();
+            if (collider != null)
+            {
+                Destroy(collider);
+            }
+
+            Renderer renderer = child.GetComponent<Renderer>();
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null)
+            {
+                shader = Shader.Find("Standard");
+            }
+
+            if (shader != null)
+            {
+                Material material = new Material(shader);
+                material.color = child.name == "LampHead"
+                    ? new Color(1f, 0.92f, 0.28f, 1f)
+                    : new Color(0.10f, 0.10f, 0.12f, 1f);
+                renderer.sharedMaterial = material;
+            }
+        }
+    }
+
+    GameObject GetEnvironmentTreePrefab(int seed)
+    {
+        if (environmentTreePrefabs != null &&
+            environmentTreePrefabs.Length > 0)
+        {
+            int index = Mathf.Abs(seed) % environmentTreePrefabs.Length;
+            GameObject prefab = environmentTreePrefabs[index];
+            if (prefab != null)
+            {
+                return prefab;
+            }
+        }
+
+        return treePrefab;
+    }
+
     void SpawnVillageBuildings(Result result)
     {
         if (!spawnOsmBuildings)
@@ -1231,13 +2224,21 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         if (result.buildings.Length == 0)
         {
-            Debug.LogWarning("⚠️ Village spawn skipped because no OSM building footprints were returned. Using visible fallback cluster.");
-            SpawnVisibleVillageCluster(result);
+            Debug.LogWarning(
+                "⚠️ No OSM building footprints were returned."
+            );
+
+            SpawnFallbackVillageIfEnabled(
+                result,
+                "OSM returned no building footprints"
+            );
             return;
         }
 
         Debug.Log($"🏙 Spawning village buildings from {result.buildings.Length} OSM footprints");
         int spawned = 0;
+        ResolveOsmPlacementValidator();
+        placementValidator.ResetPlacements();
 
         for (int i = 0; i < result.buildings.Length; i++)
         {
@@ -1454,15 +2455,32 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 }
             }
 
-            bool hasReplacementPrefab =
-                HasBuildingReplacementPrefab(i);
-
             bool useModularHouse = ShouldGenerateModularHouse(
+                i,
                 geographicPoints,
                 width,
-                depth,
-                hasReplacementPrefab
+                depth
             );
+
+            // Use one uniform map-shadow correction for all modular houses,
+            // never a different collision-driven scale for each building.
+            float requestedFootprintScale = useModularHouse
+                ? Mathf.Clamp(osmWallFootprintScale, 1f, 1.5f)
+                : 1f;
+
+            if (!placementValidator.CanPlaceBuilding(
+                    footprintPoints,
+                    building.points,
+                    result,
+                    requestedFootprintScale,
+                    out float placementFootprintScale,
+                    out string placementRejection))
+            {
+                Debug.LogWarning(
+                    $"⚠️ Skipping building {i}: {placementRejection}."
+                );
+                continue;
+            }
 
             GameObject prefabToUse = useModularHouse
                 ? null
@@ -1503,9 +2521,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 // stays attached to the map and can still be found by the
                 // delivery system. The visible geometry is generated below a
                 // separate child that cancels the ArcGIS X/Z tilt safely.
-                if (mapRoot != null)
+                Transform modularBuildingContainer = GetGeneratedBuildingsRoot();
+                if (modularBuildingContainer != null)
                 {
-                    buildingRoot.transform.SetParent(mapRoot, false);
+                    buildingRoot.transform.SetParent(modularBuildingContainer, false);
                 }
 
                 ArcGISLocationComponent modularLocation =
@@ -1545,35 +2564,6 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 );
                 uprightController.Configure(modularVisualYaw);
 
-                // Keep generation at the real OSM size. Apply any visual
-                // matching correction afterward on this dedicated child.
-                // This prevents a large scale value from creating additional
-                // modules, roof triangles, and colliders.
-                GameObject footprintScaleObject = new GameObject(
-                    "ModularFootprintScaleRoot"
-                );
-                footprintScaleObject.transform.SetParent(
-                    uprightObject.transform,
-                    false
-                );
-                footprintScaleObject.transform.localPosition = Vector3.zero;
-                footprintScaleObject.transform.localRotation =
-                    Quaternion.identity;
-
-                float safeModularFootprintScale =
-                    Mathf.Clamp(
-                        modularFootprintScale,
-                        0.80f,
-                        2.00f
-                    );
-
-                footprintScaleObject.transform.localScale =
-                    new Vector3(
-                        safeModularFootprintScale,
-                        1f,
-                        safeModularFootprintScale
-                    );
-
                 // Build the exact OSM polygon in east/north metres. Because the
                 // visual root uses a Y-only world rotation, counter-rotate the
                 // footprint by the same yaw so its final world outline remains
@@ -1585,9 +2575,13 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                         placementLongitude,
                         modularVisualYaw
                     );
+                localFootprint = ScaleFootprintInXZ(
+                    localFootprint,
+                    placementFootprintScale
+                );
 
                 bool generated = modularHouseGenerator.GenerateHouse(
-                    footprintScaleObject.transform,
+                    uprightObject.transform,
                     localFootprint,
                     i,
                     out Transform deliveryTarget
@@ -1609,6 +2603,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 }
 
                 modularHouse.model = buildingRoot.transform;
+                ConfigureHouseSimpleLod(buildingRoot);
 
                 Debug.Log(
                     $"🏗 Spawned ArcGIS-anchored upright modular house {buildingRoot.name} | " +
@@ -1616,19 +2611,33 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     $"Corners={localFootprint.Count} | " +
                     $"Rectangle W×L={width:F2}×{depth:F2}m | " +
                     $"VisualYaw={modularVisualYaw:F1}° | " +
-                    $"FootprintScale={safeModularFootprintScale:F2} | " +
+                    $"FootprintScale={placementFootprintScale:F2} | " +
                     $"DeliveryTarget={(deliveryTarget != null ? deliveryTarget.position.ToString() : "missing")}"
                 );
 
+                SpawnEnvironmentDetailAroundBuilding(
+                    center,
+                    width,
+                    depth,
+                    area,
+                    i,
+                    result.scene
+                );
+
+                placementValidator.RegisterBuildingFootprint(
+                    footprintPoints,
+                    placementFootprintScale
+                );
                 spawned++;
                 continue;
             }
 
             // Complete prefabs keep the ArcGISLocationComponent path because
             // their imported model-axis correction is handled separately.
-            if (mapRoot != null)
+            Transform buildingContainer = GetGeneratedBuildingsRoot();
+            if (buildingContainer != null)
             {
-                buildingRoot.transform.SetParent(mapRoot, false);
+                buildingRoot.transform.SetParent(buildingContainer, false);
             }
 
             ArcGISLocationComponent locationComponent =
@@ -1745,6 +2754,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             completeHouse.model = buildingModel.transform;
             completeHouse.styleName = prefabToUse.name;
             completeHouse.deliveryGroupName = prefabToUse.name;
+            ConfigureHouseSimpleLod(buildingRoot);
 
             ConfigureBuildingCollider(
                 buildingRoot,
@@ -1764,6 +2774,19 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 $"Scaler={footprintScalerObject.transform.localScale}"
             );
 
+            SpawnEnvironmentDetailAroundBuilding(
+                center,
+                width,
+                depth,
+                area,
+                i,
+                result.scene
+            );
+
+            placementValidator.RegisterBuildingFootprint(
+                footprintPoints,
+                placementFootprintScale
+            );
             spawned++;
             }
             catch (System.Exception e)
@@ -1774,12 +2797,47 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         if (spawned == 0)
         {
-            Debug.LogWarning("⚠️ No village buildings could be placed from OSM footprints. Using visible fallback cluster.");
-            SpawnVisibleVillageCluster(result);
+            Debug.LogWarning(
+                "⚠️ No village buildings could be placed from OSM footprints."
+            );
+
+            SpawnFallbackVillageIfEnabled(
+                result,
+                "every OSM footprint was rejected"
+            );
             return;
         }
 
         Debug.Log("🏙 Village buildings spawned: " + spawned);
+    }
+
+    void SpawnFallbackVillageIfEnabled(Result result, string reason)
+    {
+        if (!spawnFallbackVillageWhenNoOsmBuildings)
+        {
+            Debug.LogWarning(
+                "⚠️ Fallback village is disabled. The level has no delivery houses."
+            );
+            return;
+        }
+
+        Debug.LogWarning(
+            $"⚠️ Spawning fallback delivery village because {reason}."
+        );
+        SpawnVisibleVillageCluster(result);
+    }
+
+    void ResolveOsmPlacementValidator()
+    {
+        if (placementValidator == null)
+        {
+            placementValidator = GetComponent<OsmPlacementValidator>();
+        }
+
+        if (placementValidator == null)
+        {
+            placementValidator = gameObject.AddComponent<OsmPlacementValidator>();
+        }
     }
 
     void ResolveModularHouseGenerator()
@@ -1826,19 +2884,22 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     }
 
     bool ShouldGenerateModularHouse(
+        int buildingIndex,
         List<GeoCoordinate> geographicPoints,
         float fittedWidth,
-        float fittedDepth,
-        bool hasReplacementPrefab)
+        float fittedDepth)
     {
-        if (replacementRulesForceCompletePrefabs &&
-            hasReplacementPrefab)
+        if (buildingGenerationMode ==
+            BuildingGenerationMode.CompletePrefab)
         {
             return false;
         }
 
-        if (buildingGenerationMode ==
-            BuildingGenerationMode.CompletePrefab)
+        bool hasReplacementPrefab =
+            replacementRulesForceCompletePrefabs &&
+            HasBuildingReplacementPrefab(buildingIndex);
+
+        if (hasReplacementPrefab)
         {
             return false;
         }
@@ -2039,9 +3100,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 metersPerDegreeLatitude
             );
 
-            // Keep the polygon at its real geographic size here. Any visual
-            // map-matching correction is applied after generation on
-            // ModularFootprintScaleRoot.
+            // Convert the source OSM geometry first. A single uniform map-shadow
+            // correction is applied later, before the wall modules are created.
             Vector3 localPoint = removeRootHeading *
                 new Vector3(
                     eastMeters,
@@ -2069,6 +3129,44 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
 
         return localPoints;
+    }
+
+    List<Vector3> ScaleFootprintInXZ(
+        List<Vector3> footprint,
+        float scale)
+    {
+        if (footprint == null || footprint.Count == 0)
+        {
+            return footprint;
+        }
+
+        float safeScale = Mathf.Max(0.01f, scale);
+        if (Mathf.Approximately(safeScale, 1f))
+        {
+            return footprint;
+        }
+
+        Vector3 center = Vector3.zero;
+        for (int i = 0; i < footprint.Count; i++)
+        {
+            center += footprint[i];
+        }
+
+        center /= footprint.Count;
+        List<Vector3> scaledFootprint =
+            new List<Vector3>(footprint.Count);
+
+        for (int i = 0; i < footprint.Count; i++)
+        {
+            Vector3 point = footprint[i];
+            scaledFootprint.Add(new Vector3(
+                center.x + (point.x - center.x) * safeScale,
+                point.y,
+                center.z + (point.z - center.z) * safeScale
+            ));
+        }
+
+        return scaledFootprint;
     }
 
     void EnsureDeliveryTargetMarker(
@@ -2108,10 +3206,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     void SpawnVisibleVillageCluster(Result result)
     {
-        if ((smallHousePrefabs == null || smallHousePrefabs.Length == 0) &&
-            (mediumHousePrefabs == null || mediumHousePrefabs.Length == 0) &&
-            (largeBuildingPrefabs == null || largeBuildingPrefabs.Length == 0) &&
-            (randomHousePrefabs == null || randomHousePrefabs.Length == 0))
+        bool hasAnyVillagePrefab =
+            (smallHousePrefabs != null && smallHousePrefabs.Length > 0) ||
+            (mediumHousePrefabs != null && mediumHousePrefabs.Length > 0) ||
+            (largeBuildingPrefabs != null && largeBuildingPrefabs.Length > 0) ||
+            (randomHousePrefabs != null && randomHousePrefabs.Length > 0);
+
+        if (!hasAnyVillagePrefab &&
+            (modularHouseGenerator == null ||
+             buildingGenerationMode == BuildingGenerationMode.CompletePrefab))
         {
             Debug.LogWarning("⚠️ No village prefabs assigned for fallback cluster.");
             return;
@@ -2149,20 +3252,61 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         float radius = Mathf.Clamp(scale * 0.015f, 5f, 14f);
         float angleStep = 360f / Mathf.Max(1, count);
 
-        GameObject heroPrefab = GetGuaranteedVillagePrefab();
-        Vector3 heroWorldPosition =
-            center + forward * 4f + Vector3.down * 0.5f;
+        Transform clusterParent = GetGeneratedBuildingsRoot();
+        GameObject clusterRoot = new GameObject("VisibleVillageCluster");
+        if (clusterParent != null)
+        {
+            clusterRoot.transform.SetParent(clusterParent, false);
+        }
 
-        GameObject heroBuilding = CreateVisibleBuildingSpawn(
-            heroPrefab,
-            heroWorldPosition,
-            Quaternion.LookRotation(forward, Vector3.up),
-            1.5f
+        if (TryGetVisibleVillageGeoAnchor(result, out double anchorLatitude, out double anchorLongitude))
+        {
+            ArcGISLocationComponent clusterLocation =
+                clusterRoot.AddComponent<ArcGISLocationComponent>();
+            clusterLocation.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.OnTheGround;
+            clusterLocation.SurfacePlacementOffset = 0f;
+            clusterLocation.Position = new ArcGISPoint(
+                anchorLongitude,
+                anchorLatitude,
+                0,
+                ArcGISSpatialReference.WGS84()
+            );
+            clusterLocation.Rotation = new ArcGISRotation(0, 0, 0);
+        }
+        else
+        {
+            clusterRoot.transform.position = center;
+            clusterRoot.transform.rotation = Quaternion.identity;
+        }
+
+        ResolveModularHouseGenerator();
+        bool canBuildModularFallback =
+            modularHouseGenerator != null &&
+            buildingGenerationMode != BuildingGenerationMode.CompletePrefab;
+
+        if (!canBuildModularFallback)
+        {
+            Debug.LogWarning(
+                "⚠️ ModularHouseGenerator is unavailable for the fallback cluster. " +
+                "Using the older prefab fallback so the level still shows buildings."
+            );
+        }
+
+        Vector3 heroLocalPosition = forward * 4f + Vector3.down * 0.5f;
+        SpawnVisibleFallbackBuilding(
+            clusterRoot.transform,
+            heroLocalPosition,
+            forward,
+            radius * 1.05f,
+            radius * 0.85f,
+            1.5f,
+            count * 1000 + 1,
+            "Hero"
         );
-
         Debug.Log(
             $"🏠 Hero fallback delivery building spawned at " +
-            $"{heroBuilding.transform.position}"
+            $"{clusterRoot.transform.position + heroLocalPosition}"
         );
 
         for (int i = 0; i < count; i++)
@@ -2182,31 +3326,32 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                  forward * Mathf.Sin(angle * Mathf.Deg2Rad)) *
                 distance;
 
-            GameObject prefab =
-                PickBuildingPrefab(distance, distance);
-
-            Vector3 spawnWorldPosition =
-                center +
+            Vector3 spawnLocalPosition =
                 forward * 4f +
                 offset +
                 Vector3.down * 0.5f;
 
-            Quaternion rotation = Quaternion.Euler(
-                0f,
-                UnityEngine.Random.Range(0f, 360f),
-                0f
-            );
+            float footprintWidth = UnityEngine.Random.Range(4.5f, 9.5f);
+            float footprintDepth = UnityEngine.Random.Range(3.5f, 7.5f);
+            float scaleMultiplier = UnityEngine.Random.Range(0.95f, 1.25f);
+            float yaw = UnityEngine.Random.Range(0f, 360f);
+            Vector3 buildingForward =
+                Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
 
-            GameObject building = CreateVisibleBuildingSpawn(
-                prefab,
-                spawnWorldPosition,
-                rotation,
-                UnityEngine.Random.Range(0.95f, 1.45f)
+            SpawnVisibleFallbackBuilding(
+                clusterRoot.transform,
+                spawnLocalPosition,
+                buildingForward,
+                footprintWidth,
+                footprintDepth,
+                scaleMultiplier,
+                count * 1000 + i + 2,
+                $"Fallback_{i}"
             );
 
             Debug.Log(
                 $"🏠 Fallback delivery building spawned at " +
-                $"{building.transform.position}"
+                $"{clusterRoot.transform.position + spawnLocalPosition}"
             );
         }
 
@@ -2214,6 +3359,88 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             "🏙 Visible fallback village cluster spawned as fixed " +
             "delivery buildings."
         );
+    }
+
+    void SpawnVisibleFallbackBuilding(
+        Transform parent,
+        Vector3 localPosition,
+        Vector3 forward,
+        float footprintWidth,
+        float footprintDepth,
+        float scaleMultiplier,
+        int seed,
+        string label)
+    {
+        if (parent == null)
+        {
+            return;
+        }
+
+        GameObject buildingRoot = new GameObject(
+            $"VisibleBuilding_{label}_ArcGISBuilding_{seed}"
+        );
+        buildingRoot.transform.SetParent(parent, false);
+        buildingRoot.transform.localPosition = localPosition;
+
+        Vector3 flatForward = forward;
+        flatForward.y = 0f;
+        if (flatForward.sqrMagnitude < 0.0001f)
+        {
+            flatForward = Vector3.forward;
+        }
+        flatForward.Normalize();
+
+        buildingRoot.transform.localRotation = Quaternion.LookRotation(
+            flatForward,
+            Vector3.up
+        );
+        buildingRoot.transform.localScale = Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
+
+        if (modularHouseGenerator != null &&
+            buildingGenerationMode != BuildingGenerationMode.CompletePrefab)
+        {
+            List<Vector3> localFootprint = new List<Vector3>
+            {
+                new Vector3(-footprintWidth * 0.5f, 0f, -footprintDepth * 0.5f),
+                new Vector3( footprintWidth * 0.5f, 0f, -footprintDepth * 0.5f),
+                new Vector3( footprintWidth * 0.5f, 0f,  footprintDepth * 0.5f),
+                new Vector3(-footprintWidth * 0.5f, 0f,  footprintDepth * 0.5f)
+            };
+
+            if (!modularHouseGenerator.GenerateHouse(
+                    buildingRoot.transform,
+                    localFootprint,
+                    seed,
+                    out Transform deliveryTarget))
+            {
+                Debug.LogWarning(
+                    $"⚠️ Modular fallback house generation failed for {buildingRoot.name}."
+                );
+                Destroy(buildingRoot);
+                return;
+            }
+
+            House house = buildingRoot.GetComponent<House>();
+            if (house == null)
+            {
+                house = buildingRoot.AddComponent<House>();
+            }
+
+            house.model = buildingRoot.transform;
+            ConfigureHouseSimpleLod(buildingRoot);
+            return;
+        }
+
+        GameObject prefab = GetGuaranteedVillagePrefab();
+        GameObject visibleBuilding = CreateVisibleBuildingSpawn(
+            prefab,
+            Vector3.zero,
+            Quaternion.identity,
+            scaleMultiplier,
+            buildingRoot.transform
+        );
+
+        visibleBuilding.transform.localPosition = Vector3.zero;
     }
 
     bool TryGetVisibleVillageAnchor(Result result, out Vector3 center, out Vector3 forward)
@@ -2259,14 +3486,56 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         return true;
     }
 
+    bool TryGetVisibleVillageGeoAnchor(
+        Result result,
+        out double latitude,
+        out double longitude)
+    {
+        latitude = 0.0;
+        longitude = 0.0;
+
+        if (result == null || result.waypoints == null || result.waypoints.Length == 0)
+        {
+            return false;
+        }
+
+        double latSum = 0.0;
+        double lonSum = 0.0;
+        int validCount = 0;
+
+        for (int i = 0; i < result.waypoints.Length; i++)
+        {
+            GPSWaypoint wp = result.waypoints[i];
+            if (double.IsNaN(wp.lat) || double.IsNaN(wp.lon) ||
+                double.IsInfinity(wp.lat) || double.IsInfinity(wp.lon))
+            {
+                continue;
+            }
+
+            latSum += wp.lat;
+            lonSum += wp.lon;
+            validCount++;
+        }
+
+        if (validCount == 0)
+        {
+            return false;
+        }
+
+        latitude = latSum / validCount;
+        longitude = lonSum / validCount;
+        return true;
+    }
+
     GameObject CreateVisibleBuildingSpawn(
         GameObject prefab,
-        Vector3 worldPosition,
+        Vector3 localPosition,
         Quaternion worldRotation,
-        float scaleMultiplier)
+        float scaleMultiplier,
+        Transform parent)
     {
         Transform buildingContainer =
-            GetGeneratedBuildingsRoot();
+            parent != null ? parent : GetGeneratedBuildingsRoot();
 
         string prefabName =
             prefab != null
@@ -2278,21 +3547,28 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             $"{visibleBuildingCounter++}"
         );
 
-        root.transform.position = worldPosition;
-        root.transform.rotation = Quaternion.Euler(
-            0f,
-            worldRotation.eulerAngles.y,
-            0f
-        );
-        root.transform.localScale =
-            Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
-
         if (buildingContainer != null)
         {
-            root.transform.SetParent(
-                buildingContainer,
-                true
+            root.transform.SetParent(buildingContainer, false);
+            root.transform.localPosition = localPosition;
+            root.transform.localRotation = Quaternion.Euler(
+                0f,
+                worldRotation.eulerAngles.y,
+                0f
             );
+            root.transform.localScale =
+                Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
+        }
+        else
+        {
+            root.transform.position = localPosition;
+            root.transform.rotation = Quaternion.Euler(
+                0f,
+                worldRotation.eulerAngles.y,
+                0f
+            );
+            root.transform.localScale =
+                Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
         }
 
         GameObject visibleModel;
@@ -2358,6 +3634,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         rootHouse.model = visibleModel.transform;
         rootHouse.styleName = prefabName;
         rootHouse.deliveryGroupName = prefabName;
+        ConfigureHouseSimpleLod(root);
 
         ConfigureBuildingCollider(
             root,
@@ -3453,6 +4730,38 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
     }
 
+    void ConfigureHouseSimpleLod(GameObject buildingRoot)
+    {
+        if (!enableHouseSimpleLod || buildingRoot == null)
+        {
+            return;
+        }
+
+        HouseSimpleLOD houseLod =
+            buildingRoot.GetComponent<HouseSimpleLOD>();
+
+        if (houseLod == null)
+        {
+            houseLod = buildingRoot.AddComponent<HouseSimpleLOD>();
+        }
+
+        Transform viewerTransform =
+            droneCamera != null
+                ? droneCamera.transform
+                : droneTransform != null
+                    ? droneTransform
+                    : Camera.main != null
+                        ? Camera.main.transform
+                        : null;
+
+        houseLod.Configure(
+            viewerTransform,
+            houseSimpleLodDetailDistance,
+            houseSimpleLodCullDistance,
+            houseSimpleLodRefreshSeconds
+        );
+    }
+
     void PositionCamera()
     {
         Camera.main.transform.position = new Vector3(0, scale / 5, -scale / 2);
@@ -3461,6 +4770,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     void RunPython()
     {
+        string resolvedPythonPath = ResolvePythonExecutable();
         string customLocation = string.Format(
             CultureInfo.InvariantCulture,
             "{0},{1},{2},0",
@@ -3478,23 +4788,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             $"\"{scriptPath}\" " +
             $"--custom-location {customLocation}";
 
-        bool usingExpandedWrapper =
-            fetchMoreOsmBuildings &&
-            string.Equals(
-                Path.GetFileName(scriptPath),
-                expandedBuildingScriptName,
-                System.StringComparison.OrdinalIgnoreCase
-            );
-
-        if (usingExpandedWrapper)
-        {
-            arguments +=
-                $" --radius-meters {radiusArgument}";
-        }
+        arguments += $" --radius-meters {radiusArgument}";
 
         ProcessStartInfo psi = new ProcessStartInfo
         {
-            FileName = pythonPath,
+            FileName = resolvedPythonPath,
             Arguments = arguments,
             WorkingDirectory =
                 Path.GetDirectoryName(scriptPath),
@@ -3553,7 +4851,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         {
             Debug.Log(
                 "🐍 Starting Python: " +
-                pythonPath + " " + arguments
+                resolvedPythonPath + " " + arguments
             );
 
             pythonProcess.Start();
@@ -3570,6 +4868,68 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 exception.Message
             );
         }
+    }
+
+    string ResolvePythonExecutable()
+    {
+        string environmentPath = (
+            System.Environment.GetEnvironmentVariable(
+                "SANTATRAIL_PYTHON"
+            ) ?? ""
+        ).Trim();
+        if (!string.IsNullOrEmpty(environmentPath))
+        {
+            return environmentPath;
+        }
+
+        string configuredPath = (pythonPath ?? "").Trim();
+        if (!string.IsNullOrEmpty(configuredPath))
+        {
+            bool looksLikeFilePath =
+                configuredPath.Contains(Path.DirectorySeparatorChar.ToString()) ||
+                configuredPath.Contains(Path.AltDirectorySeparatorChar.ToString());
+
+            if (!looksLikeFilePath || File.Exists(configuredPath))
+            {
+                return configuredPath;
+            }
+
+            Debug.LogWarning(
+                "⚠️ Configured Python executable was not found: " +
+                configuredPath + ". Trying portable locations instead."
+            );
+        }
+
+        List<string> candidates = new List<string>();
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        candidates.Add(Path.Combine(
+            Application.streamingAssetsPath,
+            "Python",
+            "python.exe"
+        ));
+#else
+        candidates.Add(Path.Combine(
+            Application.streamingAssetsPath,
+            "Python",
+            "bin",
+            "python3"
+        ));
+#endif
+
+        foreach (string candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        return "python";
+#else
+        return "python3";
+#endif
     }
 
     bool TryConvertGPS(double lat, double lon, double alt, out Vector3 pos)
@@ -3615,10 +4975,6 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         float x = (float)((lon - fallbackOriginLon) * metersPerDegLon);
         float z = (float)((lat - fallbackOriginLat) * metersPerDegLat);
         float y = (float)alt;
-        Debug.Log($"fallbackOriginLat = {fallbackOriginLat}");
-        Debug.Log($"fallbackOriginLon = {fallbackOriginLon}");
-        Debug.Log($"Building lat = {lat}");
-        Debug.Log($"Building lon = {lon}");
         return new Vector3(x, y, z);
 
     }
@@ -3632,7 +4988,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         if (!TryConvertGPS(wp0.lat, wp0.lon, wp0.alt, out Vector3 pos))
             return;
 
-        pos.y += 50f;
+        // The first waypoint is the vehicle's resting position. Do not add a
+        // takeoff-height offset here; MAVLink telemetry supplies altitude once
+        // the pilot actually takes off.
         droneTransform.position = pos;
 
         Rigidbody rb = droneTransform.GetComponent<Rigidbody>();
@@ -3710,12 +5068,18 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     Transform GetGeneratedBuildingsRoot()
     {
+        Transform mapRoot = GetArcGISRoot();
+
         if (generatedBuildingsRoot != null)
         {
+            if (mapRoot != null && generatedBuildingsRoot.parent != mapRoot)
+            {
+                generatedBuildingsRoot.SetParent(mapRoot, false);
+            }
+
             return generatedBuildingsRoot;
         }
 
-        Transform mapRoot = GetArcGISRoot();
         Transform existing = null;
 
         if (mapRoot != null)
@@ -3752,15 +5116,81 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 existing.localScale = Vector3.one;
             }
         }
+        else if (mapRoot != null && existing.parent != mapRoot)
+        {
+            existing.SetParent(mapRoot, false);
+        }
 
         generatedBuildingsRoot = existing;
         return generatedBuildingsRoot;
     }
 
+    Transform GetGeneratedEnvironmentRoot()
+    {
+        Transform mapRoot = GetArcGISRoot();
+
+        if (generatedEnvironmentRoot != null)
+        {
+            if (mapRoot != null && generatedEnvironmentRoot.parent != mapRoot)
+            {
+                generatedEnvironmentRoot.SetParent(mapRoot, false);
+            }
+
+            return generatedEnvironmentRoot;
+        }
+
+        Transform existing = null;
+
+        if (mapRoot != null)
+        {
+            existing = mapRoot.Find("GeneratedEnvironment");
+        }
+
+        if (existing == null)
+        {
+            GameObject existingObject = GameObject.Find("GeneratedEnvironment");
+            if (existingObject != null)
+            {
+                existing = existingObject.transform;
+            }
+        }
+
+        if (existing == null)
+        {
+            GameObject container = new GameObject("GeneratedEnvironment");
+            existing = container.transform;
+
+            if (mapRoot != null)
+            {
+                existing.SetParent(mapRoot, false);
+            }
+            else
+            {
+                existing.position = Vector3.zero;
+                existing.rotation = Quaternion.identity;
+                existing.localScale = Vector3.one;
+            }
+        }
+        else if (mapRoot != null && existing.parent != mapRoot)
+        {
+            existing.SetParent(mapRoot, false);
+        }
+
+        generatedEnvironmentRoot = existing;
+        return generatedEnvironmentRoot;
+    }
+
     Transform GetGeneratedObjectsRoot()
     {
+        Transform mapRoot = GetArcGISRoot();
+
         if (generatedObjectsRoot != null)
         {
+            if (mapRoot != null && generatedObjectsRoot.parent != mapRoot)
+            {
+                generatedObjectsRoot.SetParent(mapRoot, false);
+            }
+
             return generatedObjectsRoot;
         }
 
@@ -3772,22 +5202,91 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             root.transform.rotation = Quaternion.identity;
             root.transform.localScale = Vector3.one;
         }
+        else if (mapRoot != null && root.transform.parent != mapRoot)
+        {
+            root.transform.SetParent(mapRoot, false);
+        }
 
         generatedObjectsRoot = root.transform;
         return generatedObjectsRoot;
     }
 
+    void ClearGeneratedContent()
+    {
+        Transform generatedBuildings = GetGeneratedBuildingsRoot();
+        ClearLegacyDirectGeneratedBuildings(
+            GetArcGISRoot(),
+            generatedBuildings
+        );
+        ClearGeneratedChildren(generatedBuildings);
+        ClearGeneratedChildren(GetGeneratedEnvironmentRoot());
+        ClearGeneratedChildren(GetGeneratedObjectsRoot());
+    }
+
+    static void ClearLegacyDirectGeneratedBuildings(
+        Transform mapRoot,
+        Transform generatedBuildingsRoot)
+    {
+        if (mapRoot == null)
+        {
+            return;
+        }
+
+        for (int i = mapRoot.childCount - 1; i >= 0; i--)
+        {
+            Transform child = mapRoot.GetChild(i);
+            if (child == null || child == generatedBuildingsRoot)
+            {
+                continue;
+            }
+
+            // Older versions spawned generated houses directly under ArcGISMap.
+            // Their naming is reserved for generated data, not manual level content.
+            if (child.name.StartsWith("ModularHouse_ArcGISBuilding_") ||
+                child.name.Contains("_ArcGISBuilding_"))
+            {
+                Object.Destroy(child.gameObject);
+            }
+        }
+    }
+
+    static void ClearGeneratedChildren(Transform root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        for (int i = root.childCount - 1; i >= 0; i--)
+        {
+            Transform child = root.GetChild(i);
+            if (child != null)
+            {
+                Object.Destroy(child.gameObject);
+            }
+        }
+    }
+
 
     void OnValidate()
     {
-        modularFootprintScale =
-            Mathf.Clamp(modularFootprintScale, 0.80f, 2.00f);
+        osmWallFootprintScale =
+            Mathf.Clamp(osmWallFootprintScale, 1f, 1.5f);
 
         mapExtentSizeMeters =
             System.Math.Max(1.0, mapExtentSizeMeters);
 
         buildingSpawnRadius =
             Mathf.Max(1f, buildingSpawnRadius);
+
+        roadsideStreetLightSpacingMeters =
+            Mathf.Max(5f, roadsideStreetLightSpacingMeters);
+
+        roadsideStreetLightOffsetMeters =
+            Mathf.Max(0.5f, roadsideStreetLightOffsetMeters);
+
+        roadsideStreetLightMaximumCount =
+            Mathf.Max(0, roadsideStreetLightMaximumCount);
 
         osmQueryRadiusMeters =
             System.Math.Max(

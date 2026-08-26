@@ -16,6 +16,9 @@ public class MinimapCameraFollow : MonoBehaviour
     [Tooltip("Use this when the top of your ArcGIS map is not Unity's forward direction.")]
     [SerializeField] private float northOffset = 0f;
 
+    private Vector3 lastValidPosition;
+    private bool hasLastValidPosition;
+
     private void Awake()
     {
         TryResolveDrone();
@@ -26,9 +29,22 @@ public class MinimapCameraFollow : MonoBehaviour
         TryResolveDrone();
     }
 
+    private void OnEnable()
+    {
+        // The camera may previously have been controlled by an ArcGIS/HP
+        // component. Always snap from the drone on the first follow frame.
+        hasLastValidPosition = false;
+        TryResolveDrone();
+    }
+
     private void LateUpdate()
     {
         if (!TryResolveDrone())
+        {
+            return;
+        }
+
+        if (!IsFinite(drone.position))
         {
             return;
         }
@@ -39,20 +55,43 @@ public class MinimapCameraFollow : MonoBehaviour
             drone.position.z
         );
 
+        if (!IsFinite(targetPosition))
+        {
+            return;
+        }
+
         // Smooth movement that behaves consistently at different frame rates.
         float smoothAmount = 1f - Mathf.Exp(-followSpeed * Time.deltaTime);
+        Vector3 currentPosition =
+            hasLastValidPosition && IsFinite(transform.position)
+                ? transform.position
+                : targetPosition;
 
-        transform.position = Vector3.Lerp(
-            transform.position,
+        Vector3 nextPosition = Vector3.Lerp(
+            currentPosition,
             targetPosition,
             smoothAmount
         );
+
+        if (!IsFinite(nextPosition))
+        {
+            nextPosition = targetPosition;
+        }
+
+        transform.position = nextPosition;
+        lastValidPosition = nextPosition;
+        hasLastValidPosition = true;
 
         float heading = northOffset;
 
         if (rotateWithDrone)
         {
             heading += drone.eulerAngles.y;
+        }
+
+        if (!IsFinite(heading))
+        {
+            return;
         }
 
         transform.rotation = Quaternion.Euler(90f, heading, 0f);
@@ -94,5 +133,18 @@ public class MinimapCameraFollow : MonoBehaviour
     public void SetDrone(Transform newDrone)
     {
         drone = newDrone;
+    }
+
+    private static bool IsFinite(Vector3 value)
+    {
+        return IsFinite(value.x) &&
+               IsFinite(value.y) &&
+               IsFinite(value.z);
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) &&
+               !float.IsInfinity(value);
     }
 }

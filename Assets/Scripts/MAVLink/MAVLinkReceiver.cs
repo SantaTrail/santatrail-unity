@@ -19,9 +19,21 @@ public class MAVLinkReceiver : MonoBehaviour
     public static MAVLinkReceiver Active { get; private set; }
 
     private UdpClient client;
-    private UdpClient commandClient;
     private IPEndPoint endPoint;
-    private IPEndPoint commandEndPoint;
+
+    [Header("MAVLink Connection")]
+    [Tooltip("Local UDP port receiving telemetry from ArduPilot SITL.")]
+    [SerializeField] int udpListenPort = 14551;
+
+    [Min(0.1f)]
+    [Tooltip("How often Unity retries the telemetry socket after a startup bind failure.")]
+    [SerializeField] float udpReconnectSeconds = 1f;
+
+    [Min(1f)]
+    [Tooltip("Rate Unity requests for GLOBAL_POSITION_INT telemetry from ArduPilot.")]
+    [SerializeField] float requestedPositionRateHz = 10f;
+
+    private float nextSocketOpenAttemptTime;
 
     private MAVLink.MavlinkParse parser;
     private MAVLink.MavlinkParse txParser;
@@ -33,6 +45,8 @@ public class MAVLinkReceiver : MonoBehaviour
     private bool hasAlignedToMapOrigin;
     private bool hasConfirmedHomeSync;
     private float lastHomeSyncRequestTime = -1000f;
+    private float lastPositionStreamRequestTime = -1000f;
+    private bool hasLoggedPositionStreamRequest;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -59,7 +73,7 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("Model heading correction. Start with 180 for the current drone asset; use 0 if the model faces backward.")]
     public float modelHeadingOffsetDegrees = 0.1f;
 
-    [Tooltip("The imported drone asset is upright at ArcGIS pitch 90 in this project.")]
+    [Tooltip("The imported drone mesh needs ArcGIS pitch 90 to keep its nose level before optional MAVLink attitude tilt.")]
     public float modelBasePitchDegrees = 90f;
 
     public float modelBaseRollDegrees = 0f;
@@ -258,30 +272,11 @@ public class MAVLinkReceiver : MonoBehaviour
 
         Active = this;
 
-        client = new UdpClient();
-
-        client.Client.SetSocketOption(
-            SocketOptionLevel.Socket,
-            SocketOptionName.ReuseAddress,
-            true
-        );
-
-        try
-        {
-            client.Client.Bind(new IPEndPoint(IPAddress.Any, 14551));
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"❌ MAVLink bind failed on UDP 14551: {e.Message}");
-            enabled = false;
-            return;
-        }
-
         parser = new MAVLink.MavlinkParse();
         txParser = new MAVLink.MavlinkParse();
         debugSb = new StringBuilder(512);
-        commandClient = new UdpClient();
-        commandEndPoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14550);
+
+        EnsureUdpSocketOpen();
 
         if (locationComponent == null)
         {
@@ -291,10 +286,9 @@ public class MAVLinkReceiver : MonoBehaviour
         if (locationComponent == null)
         {
             Debug.LogError("❌ ArcGISLocationComponent NOT FOUND");
-            return;
         }
 
-        if (alignToMapOriginOnStart)
+        if (alignToMapOriginOnStart && locationComponent != null)
         {
             StartCoroutine(AlignToMapOriginWhenReady());
         }
@@ -337,7 +331,8 @@ public class MAVLinkReceiver : MonoBehaviour
     void TrySyncHomeLocation()
     {
         if (hasConfirmedHomeSync ||
-            commandClient == null ||
+            client == null ||
+            endPoint == null ||
             txParser == null ||
             !GameManager.hasHomeLocation)
         {
@@ -373,13 +368,6 @@ public class MAVLinkReceiver : MonoBehaviour
             (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
         );
 
-        commandClient.Send(setHomePacket, setHomePacket.Length, commandEndPoint);
-        commandClient.Send(
-            setHomePacket,
-            setHomePacket.Length,
-            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14551)
-        );
-
         var requestHome = new MAVLink.mavlink_command_long_t(
             242f,
             0f,
@@ -402,20 +390,92 @@ public class MAVLinkReceiver : MonoBehaviour
             (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
         );
 
-        commandClient.Send(requestHomePacket, requestHomePacket.Length, commandEndPoint);
-        commandClient.Send(
-            requestHomePacket,
-            requestHomePacket.Length,
-            new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14551)
+        if (SendToVehicle(setHomePacket) && SendToVehicle(requestHomePacket))
+        {
+            Debug.Log(
+                $"🧭 Requested home sync: {GameManager.homeLat}, {GameManager.homeLon}, {GameManager.homeAlt}"
+            );
+        }
+    }
+
+    void RequestPositionStream()
+    {
+        if (client == null || endPoint == null || txParser == null)
+        {
+            return;
+        }
+
+        // MAV_CMD_SET_MESSAGE_INTERVAL is idempotent, so retrying also recovers
+        // if ArduPilot restarts after Unity has opened its telemetry socket.
+        bool hasFreshPosition =
+            hasTargetPosition &&
+            lastPositionTime > 0f &&
+            (Time.time - lastPositionTime) < 2f;
+
+        if (hasFreshPosition ||
+            (Time.time - lastPositionStreamRequestTime) < 2f)
+        {
+            return;
+        }
+
+        lastPositionStreamRequestTime = Time.time;
+        float intervalMicroseconds = 1000000f / Mathf.Max(1f, requestedPositionRateHz);
+
+        var requestPosition = new MAVLink.mavlink_command_long_t(
+            (float)MAVLink.MAVLINK_MSG_ID.GLOBAL_POSITION_INT,
+            intervalMicroseconds,
+            0f,
+            0f,
+            0f,
+            0f,
+            0f,
+            (ushort)MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL,
+            vehicleSystemId,
+            vehicleComponentId,
+            0
         );
-        Debug.Log(
-            $"🧭 Requested home sync: {GameManager.homeLat}, {GameManager.homeLon}, {GameManager.homeAlt}"
+
+        byte[] requestPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_LONG,
+            requestPosition,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
         );
+
+        if (SendToVehicle(requestPacket) && !hasLoggedPositionStreamRequest)
+        {
+            Debug.Log(
+                $"Requested GLOBAL_POSITION_INT at {requestedPositionRateHz:0.#} Hz from ArduPilot."
+            );
+            hasLoggedPositionStreamRequest = true;
+        }
+    }
+
+    bool SendToVehicle(byte[] packet)
+    {
+        if (client == null || endPoint == null || packet == null || packet.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            // serial1 uses ArduPilot's bidirectional udpclient backend. Commands
+            // must reply to the endpoint that sent telemetry, from Unity's 14551 socket.
+            client.Send(packet, packet.Length, endPoint);
+            return true;
+        }
+        catch (SocketException exception)
+        {
+            Debug.LogWarning($"⚠️ MAVLink command send failed: {exception.Message}");
+            return false;
+        }
     }
 
     void Update()
     {
-        if (client == null)
+        if (!EnsureUdpSocketOpen())
             return;
 
         if (IsTogglePressed())
@@ -446,6 +506,59 @@ public class MAVLinkReceiver : MonoBehaviour
                 {
                 }
             }
+        }
+    }
+
+    bool EnsureUdpSocketOpen()
+    {
+        if (client != null)
+        {
+            return true;
+        }
+
+        if (Time.unscaledTime < nextSocketOpenAttemptTime)
+        {
+            return false;
+        }
+
+        nextSocketOpenAttemptTime =
+            Time.unscaledTime + Mathf.Max(0.1f, udpReconnectSeconds);
+
+        UdpClient newClient = null;
+
+        try
+        {
+            newClient = new UdpClient();
+            newClient.Client.SetSocketOption(
+                SocketOptionLevel.Socket,
+                SocketOptionName.ReuseAddress,
+                true
+            );
+            newClient.Client.Bind(
+                new IPEndPoint(IPAddress.Any, udpListenPort)
+            );
+
+            client = newClient;
+            Debug.Log(
+                $"MAVLink receiver listening on UDP {udpListenPort}."
+            );
+            return true;
+        }
+        catch (System.Exception exception)
+        {
+            newClient?.Close();
+
+            if (client != null)
+            {
+                client.Close();
+                client = null;
+            }
+
+            Debug.LogWarning(
+                $"MAVLink receiver could not bind UDP {udpListenPort}; " +
+                $"retrying: {exception.Message}"
+            );
+            return false;
         }
     }
 
@@ -640,6 +753,7 @@ public class MAVLinkReceiver : MonoBehaviour
             targetRelativeAlt = gps.relative_alt * 0.001f;
             lastGpsPacketTime = Time.time;
             lastPositionTime = Time.time;
+            hasLoggedPositionStreamRequest = false;
             TrySyncHomeLocation();
 
 
@@ -850,6 +964,7 @@ public class MAVLinkReceiver : MonoBehaviour
             hbArmed = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.SAFETY_ARMED) != 0;
             hbGuided = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.GUIDED_ENABLED) != 0;
             TrySyncHomeLocation();
+            RequestPositionStream();
         }
 
         if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.EXTENDED_SYS_STATE)
@@ -1024,11 +1139,8 @@ public class MAVLinkReceiver : MonoBehaviour
 
     void SendGuidedRepositionNudge()
     {
-        if (commandClient == null || txParser == null || !hasNavTargetDist)
+        if (client == null || endPoint == null || txParser == null || !hasNavTargetDist)
             return;
-
-        IPEndPoint targetEpPrimary = commandEndPoint;
-        IPEndPoint targetEpSecondary = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 14551);
 
         float brgRad = navTargetBearingDeg * Mathf.Deg2Rad;
         float nudgeSpeed = Mathf.Clamp(navTargetDistM * 0.02f, 1.5f, 4.0f);
@@ -1061,8 +1173,7 @@ public class MAVLinkReceiver : MonoBehaviour
             255,
             (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
         );
-        commandClient.Send(setVelPacket, setVelPacket.Length, targetEpPrimary);
-        commandClient.Send(setVelPacket, setVelPacket.Length, targetEpSecondary);
+        SendToVehicle(setVelPacket);
 
         double metersPerDegLat = 111320.0;
         double cosLat = System.Math.Cos(targetLat * System.Math.PI / 180.0);
@@ -1096,8 +1207,7 @@ public class MAVLinkReceiver : MonoBehaviour
             (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
         );
 
-        commandClient.Send(cmdIntPacket, cmdIntPacket.Length, targetEpPrimary);
-        commandClient.Send(cmdIntPacket, cmdIntPacket.Length, targetEpSecondary);
+        SendToVehicle(cmdIntPacket);
 
         var cmdLong = new MAVLink.mavlink_command_long_t(
             nudgeSpeed,
@@ -1121,8 +1231,7 @@ public class MAVLinkReceiver : MonoBehaviour
             (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
         );
 
-        commandClient.Send(cmdLongPacket, cmdLongPacket.Length, targetEpPrimary);
-        commandClient.Send(cmdLongPacket, cmdLongPacket.Length, targetEpSecondary);
+        SendToVehicle(cmdLongPacket);
         lastStatusText = $"Guided nudge: sys={vehicleSystemId} comp={vehicleComponentId} SET_VEL+CMD_INT+CMD_LONG";
     }
 
@@ -1189,12 +1298,6 @@ public class MAVLinkReceiver : MonoBehaviour
             client = null;
         }
 
-        if (commandClient != null)
-        {
-            commandClient.Close();
-            commandClient = null;
-        }
-
         if (Active == this)
         {
             Active = null;
@@ -1235,6 +1338,9 @@ public class MAVLinkReceiver : MonoBehaviour
 
     void OnValidate()
     {
+        udpListenPort = Mathf.Clamp(udpListenPort, 1, 65535);
+        udpReconnectSeconds = Mathf.Max(0.1f, udpReconnectSeconds);
+        requestedPositionRateHz = Mathf.Max(1f, requestedPositionRateHz);
         headingSmoothTime = Mathf.Max(0.01f, headingSmoothTime);
         maximumHeadingSpeed = Mathf.Max(1f, maximumHeadingSpeed);
         headingDeadZoneDegrees = Mathf.Max(0f, headingDeadZoneDegrees);
