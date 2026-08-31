@@ -95,11 +95,6 @@ public class GameManager : MonoBehaviour
             LevelConfig match = levels.Find(level =>
                 string.Equals(level.sceneName, sceneName, StringComparison.OrdinalIgnoreCase));
 
-            if (match == null && levels.Count > 0)
-            {
-                match = levels[0];
-            }
-
             if (match != null)
             {
                 ApplyLevel(match);

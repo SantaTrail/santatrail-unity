@@ -6,6 +6,7 @@ using UnityEngine;
 using Esri.ArcGISMapsSDK.Components;
 using Esri.HPFramework;
 using UnityEngine.Serialization;
+using UnityEngine.SceneManagement;
 
 public class DeliveryScoreManager : MonoBehaviour
 {
@@ -232,6 +233,8 @@ public class DeliveryScoreManager : MonoBehaviour
     private float statusUntilTime = -1f;
     private int completedDeliveries = 0;
     private bool level1Completed = false;
+    private bool completionSavedThisSession = false;
+    private string flightSessionId = "";
     private MAVLinkReceiver mavReceiver;
     private SpawnedBuildingTarget currentNearestBuilding;
     private SpawnedBuildingTarget currentDeliverableTarget;
@@ -799,9 +802,11 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         totalTargets = activeTargets.Count;
+        flightSessionId = Guid.NewGuid().ToString("N");
         RefreshTargetChimneys();
         RefreshDeliveryRings();
         TargetsRemainingChanged?.Invoke(RemainingTargets);
+        SaveProgress();
 
         string selectionDescription = usedNearestFallback
             ? "using the nearest-house fallback"
@@ -2351,6 +2356,8 @@ public class DeliveryScoreManager : MonoBehaviour
             LevelCompleted?.Invoke();
             Debug.Log("✅ Level 1 Complete");
         }
+
+        SaveProgress(level1Completed);
     }
 
 
@@ -2735,6 +2742,65 @@ public class DeliveryScoreManager : MonoBehaviour
         if (scoreText != null)
         {
             scoreText.text = "Score: " + score;
+        }
+    }
+
+    void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus)
+        {
+            SaveProgress(level1Completed);
+        }
+    }
+
+    void OnApplicationQuit()
+    {
+        SaveProgress(level1Completed);
+    }
+
+    void SaveProgress(bool levelCompleted = false)
+    {
+        if (totalTargets <= 0)
+        {
+            return;
+        }
+
+        float elapsedSeconds = -1f;
+        Level1Manager levelManager = FindFirstObjectByType<Level1Manager>();
+        if (levelManager != null && levelManager.HasLevelStarted)
+        {
+            float endTime = levelCompleted && levelManager.HasLevelCompleted
+                ? levelManager.LevelCompletedAt
+                : Time.time;
+            elapsedSeconds = Mathf.Max(0f, endTime - levelManager.LevelStartedAt);
+        }
+
+        string sceneName = SceneManager.GetActiveScene().name;
+        if (levelCompleted && !completionSavedThisSession)
+        {
+            ProgressSaveSystem.RecordLevelResult(
+                sceneName,
+                completedDeliveries,
+                totalTargets,
+                score,
+                true,
+                elapsedSeconds,
+                flightSessionId
+            );
+            completionSavedThisSession = true;
+        }
+        else
+        {
+            ProgressSaveSystem.RecordLevelProgress(
+                sceneName,
+                completedDeliveries,
+                totalTargets,
+                score,
+                levelCompleted,
+                elapsedSeconds,
+                false,
+                flightSessionId
+            );
         }
     }
 }

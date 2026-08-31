@@ -3247,6 +3247,7 @@ GameObject:
   - component: {fileID: 791846182}
   - component: {fileID: 791846181}
   - component: {fileID: 791846180}
+  - component: {fileID: 791846183}
   m_Layer: 5
   m_Name: ReturnButton
   m_TagString: Untagged
@@ -3317,7 +3318,19 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 791846181}
   m_OnClick:
     m_PersistentCalls:
-      m_Calls: []
+      m_Calls:
+      - m_Target: {fileID: 791846183}
+        m_TargetAssemblyTypeName: SceneLoaderButton, Assembly-CSharp
+        m_MethodName: LoadScene
+        m_Mode: 1
+        m_Arguments:
+          m_ObjectArgument: {fileID: 0}
+          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
+          m_IntArgument: 0
+          m_FloatArgument: 0
+          m_StringArgument: 
+          m_BoolArgument: 0
+        m_CallState: 2
 --- !u!114 &791846181
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3356,6 +3369,19 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 791846178}
   m_CullTransparentMesh: 1
+--- !u!114 &791846183
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 791846178}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d72d56e9ccc248de96ae0289cb30286e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SceneLoaderButton
+  sceneName: MainPageScene
 --- !u!1001 &850543067
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -4561,6 +4587,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 47d006beeb121427796959267fb09a3a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MAVLinkReceiver
+  udpListenPort: 14551
+  udpReconnectSeconds: 1
+  requestedPositionRateHz: 10
   locationComponent: {fileID: 0}
   alignToMapOriginOnStart: 1
   showDebugOverlay: 0
@@ -7657,6 +7686,10 @@ MonoBehaviour:
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
+  waitForArcGISBeforeHidingLoadingScreen: 1
+  waitForDeliveryTargetsBeforeHidingLoadingScreen: 1
+  finalLevelReadyTimeoutSeconds: 90
+  finalRenderFrameCount: 3
   allowLocalGpsFallback: 1
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
@@ -7666,6 +7699,7 @@ MonoBehaviour:
   hideOsmBuildingLayer: 1
   logLayerVisibilityChanges: 1
   buildingYawCorrectionDegrees: 0
+  placementValidator: {fileID: 0}
   buildingGenerationMode: 1
   modularHouseGenerator: {fileID: 0}
   modularFootprintFillThreshold: 0.92
@@ -7800,6 +7834,7 @@ MonoBehaviour:
   - {fileID: 8996232818695397333, guid: 53d6ac1e6f9d14e4e99f64c5c55139f4, type: 3}
   - {fileID: 1401966042494842254, guid: 9d609ccce0bfc499ca214c6aa78955ed, type: 3}
   spawnVisibleVillageClusterOnly: 0
+  spawnFallbackVillageWhenNoOsmBuildings: 1
   smallBuildingAreaMax: 120
   mediumBuildingAreaMax: 900
   buildingReplacements: []
@@ -7833,6 +7868,10 @@ MonoBehaviour:
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
+  waitForArcGISBeforeHidingLoadingScreen: 1
+  waitForDeliveryTargetsBeforeHidingLoadingScreen: 1
+  finalLevelReadyTimeoutSeconds: 90
+  finalRenderFrameCount: 3
   allowLocalGpsFallback: 1
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
@@ -7842,6 +7881,7 @@ MonoBehaviour:
   hideOsmBuildingLayer: 1
   logLayerVisibilityChanges: 1
   buildingYawCorrectionDegrees: 0
+  placementValidator: {fileID: 0}
   buildingGenerationMode: 1
   modularHouseGenerator: {fileID: 0}
   modularFootprintFillThreshold: 0.92
@@ -7976,6 +8016,7 @@ MonoBehaviour:
   - {fileID: 8996232818695397333, guid: 53d6ac1e6f9d14e4e99f64c5c55139f4, type: 3}
   - {fileID: 1401966042494842254, guid: 9d609ccce0bfc499ca214c6aa78955ed, type: 3}
   spawnVisibleVillageClusterOnly: 0
+  spawnFallbackVillageWhenNoOsmBuildings: 1
   smallBuildingAreaMax: 120
   mediumBuildingAreaMax: 900
   buildingReplacements: []
@@ -9489,12 +9530,12 @@ PrefabInstance:
       value: 0.3
       objectReference: {fileID: 0}
     - target: {fileID: 71094168508711027, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
-      propertyPath: modelHeadingOffsetDegrees
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 71094168508711027, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: modelBasePitchDegrees
       value: 90
+      objectReference: {fileID: 0}
+    - target: {fileID: 71094168508711027, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
+      propertyPath: modelHeadingOffsetDegrees
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 71094168508711027, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: enableGuidedRepositionNudge
@@ -9570,35 +9611,35 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -0.0000009898802
+      value: -0.0000025050424
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 5.6249976
+      value: 5.62
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -8.749996
+      value: -10.439995
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0.9795777
+      value: 0.99284405
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.x
-      value: 0.20106597
+      value: 0.11941857
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.00000005621516
+      value: 0.00000019645495
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.z
-      value: -0.000000013457567
+      value: -0.00000030438733
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
-      value: -1428.494
+      value: -1426.283
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalEulerAnglesHint.y

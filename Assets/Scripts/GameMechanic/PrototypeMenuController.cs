@@ -56,6 +56,7 @@ public class PrototypeMenuController : MonoBehaviour
 
     private int selectedLevelIndex;
     private string selectedSceneName;
+    private bool levelLockedByLauncher;
     private List<LevelConfig> resolvedLevels = new List<LevelConfig>();
 
     void Awake()
@@ -64,8 +65,14 @@ public class PrototypeMenuController : MonoBehaviour
 
         if (resolvedLevels.Count > 0)
         {
-            selectedLevelIndex = 0;
-            ApplySelectedLevel(resolvedLevels[0]);
+            int launchLevelIndex = FindLaunchLevelIndex();
+            levelLockedByLauncher = launchLevelIndex >= 0;
+            selectedLevelIndex = launchLevelIndex >= 0
+                ? launchLevelIndex
+                : levelDropdown != null
+                    ? Mathf.Clamp(levelDropdown.value, 0, resolvedLevels.Count - 1)
+                    : 0;
+            ApplySelectedLevel(resolvedLevels[selectedLevelIndex]);
         }
 
         SetupLevelDropdown();
@@ -81,7 +88,7 @@ public class PrototypeMenuController : MonoBehaviour
         {
             resolvedLevels.AddRange(loadedLevels);
             Debug.Log(
-                $"PrototypeMenuController: loaded {resolvedLevels.Count} levels from Resources/LevelDatabase.json"
+                $"PrototypeMenuController: loaded {resolvedLevels.Count} levels from the level database."
             );
             return;
         }
@@ -108,12 +115,47 @@ public class PrototypeMenuController : MonoBehaviour
         levelDropdown.AddOptions(options);
         levelDropdown.onValueChanged.RemoveListener(OnDropdownChanged);
         levelDropdown.onValueChanged.AddListener(OnDropdownChanged);
-        selectedLevelIndex = Mathf.Clamp(levelDropdown.value, 0, Mathf.Max(0, resolvedLevels.Count - 1));
+        selectedLevelIndex = Mathf.Clamp(selectedLevelIndex, 0, Mathf.Max(0, resolvedLevels.Count - 1));
+        levelDropdown.SetValueWithoutNotify(selectedLevelIndex);
+        levelDropdown.interactable = !levelLockedByLauncher;
 
         if (resolvedLevels.Count > 0)
         {
             ApplySelectedLevel(resolvedLevels[selectedLevelIndex]);
         }
+    }
+
+    private int FindLaunchLevelIndex()
+    {
+        string[] arguments = Environment.GetCommandLineArgs();
+        string requestedLevel = null;
+
+        for (int i = 0; i < arguments.Length; i++)
+        {
+            const string option = "--santatrail-level";
+            if (string.Equals(arguments[i], option, StringComparison.OrdinalIgnoreCase) &&
+                i + 1 < arguments.Length)
+            {
+                requestedLevel = arguments[i + 1];
+                break;
+            }
+
+            string prefix = option + "=";
+            if (arguments[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                requestedLevel = arguments[i].Substring(prefix.Length);
+                break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(requestedLevel))
+        {
+            return -1;
+        }
+
+        return resolvedLevels.FindIndex(level =>
+            string.Equals(level.id, requestedLevel, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(level.sceneName, requestedLevel, StringComparison.OrdinalIgnoreCase));
     }
 
     void SetupButtons()
@@ -126,6 +168,8 @@ public class PrototypeMenuController : MonoBehaviour
 
     void OnDropdownChanged(int index)
     {
+        if (levelLockedByLauncher) return;
+
         selectedLevelIndex = index;
         if (resolvedLevels.Count > 0)
         {
@@ -166,7 +210,7 @@ public class PrototypeMenuController : MonoBehaviour
 
     public void SelectLevel(int index)
     {
-        if (resolvedLevels.Count == 0) return;
+        if (levelLockedByLauncher || resolvedLevels.Count == 0) return;
 
         selectedLevelIndex = Mathf.Clamp(index, 0, resolvedLevels.Count - 1);
         ApplySelectedLevel(resolvedLevels[selectedLevelIndex]);
@@ -176,6 +220,8 @@ public class PrototypeMenuController : MonoBehaviour
 
     public void SelectLevelByScene(string sceneName)
     {
+        if (levelLockedByLauncher) return;
+
         if (string.IsNullOrWhiteSpace(sceneName))
         {
             Debug.LogError("PrototypeMenuController: sceneName is empty.");

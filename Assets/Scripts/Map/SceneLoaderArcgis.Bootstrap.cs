@@ -201,15 +201,88 @@ public partial class SceneLoaderArcgis
             return;
         }
 
-        mapComponent.MapType = ArcGISMapType.Local;
-        mapComponent.EnableExtent = true;
-        mapComponent.Extent = new ArcGISExtentInstanceData
+        // ArcGISMapComponent can expose its View before the SDK has finished
+        // creating the native map used by MapType. Applying the extent in
+        // Awake can therefore throw inside the SDK and stop all generation.
+        if (mapExtentCoroutine != null)
         {
-            GeographicCenter = extentCenter.ToInstanceData(),
-            ExtentShape = MapExtentShapes.Circle,
-            ShapeDimensions = new double2(mapExtentSizeMeters, 0),
-            UseOriginAsCenter = true
-        };
+            return;
+        }
+
+        mapExtentCoroutine = StartCoroutine(
+            ApplyConfiguredMapExtentWhenReady(mapComponent, extentCenter)
+        );
+    }
+
+    IEnumerator ApplyConfiguredMapExtentWhenReady(
+        ArcGISMapComponent mapComponent,
+        ArcGISPoint extentCenter
+    )
+    {
+        // Let ArcGIS finish its component initialization before changing
+        // MapType or Extent. This is especially important in a standalone
+        // build, where SDK startup timing differs from the Unity editor.
+        yield return null;
+
+        const int maxFrames = 300;
+        for (int frame = 0; frame < maxFrames; frame++)
+        {
+            if (mapComponent == null || !limitMapExtent)
+            {
+                mapExtentCoroutine = null;
+                yield break;
+            }
+
+            var map = mapComponent.View?.Map;
+            if (map != null)
+            {
+                if (map.LoadStatus == ArcGISLoadStatus.FailedToLoad)
+                {
+                    map.RetryLoad();
+                }
+                else if (map.LoadStatus == ArcGISLoadStatus.NotLoaded)
+                {
+                    map.Load();
+                }
+
+                // MapType calls back into the SDK's native map state. Wait
+                // until the map is fully loaded instead of only checking that
+                // the managed View and Map wrappers exist.
+                if (map.LoadStatus == ArcGISLoadStatus.Loaded)
+                {
+                    try
+                    {
+                        mapComponent.MapType = ArcGISMapType.Local;
+                        mapComponent.EnableExtent = true;
+                        mapComponent.Extent = new ArcGISExtentInstanceData
+                        {
+                            GeographicCenter = extentCenter.ToInstanceData(),
+                            ExtentShape = MapExtentShapes.Circle,
+                            ShapeDimensions = new double2(mapExtentSizeMeters, 0),
+                            UseOriginAsCenter = true
+                        };
+
+                        Debug.Log("🗺 ArcGIS map extent applied after SDK initialization.");
+                        mapExtentCoroutine = null;
+                        yield break;
+                    }
+                    catch (System.Exception exception)
+                    {
+                        if (frame == maxFrames - 1)
+                        {
+                            Debug.LogWarning(
+                                "⚠️ ArcGIS map extent could not be applied: " +
+                                exception.Message
+                            );
+                        }
+                    }
+                }
+            }
+
+            yield return null;
+        }
+
+        mapExtentCoroutine = null;
     }
 
     void ApplyLayerVisibilityOverrides()
@@ -299,6 +372,11 @@ public partial class SceneLoaderArcgis
             loadingScreen.SetProgress(0.02f);
         }
 
+        // Request this from the active loader as well as the global scene
+        // callback. This removes a startup race when the level is loaded
+        // before AutoArduPilotOnPlay subscribes to sceneLoaded.
+        AutoArduPilotOnPlay.RequestLaunchForScene(gameObject.scene.name);
+
         string projectRoot = Application.dataPath + "/../";
         string backendPath = ResolveBackendPath(projectRoot);
 
@@ -385,17 +463,10 @@ public partial class SceneLoaderArcgis
 
             Directory.CreateDirectory(writableBackendPath);
 
-            foreach (string sourcePath in Directory.GetFiles(
-                         packagedBackendPath,
-                         "*.py"
-                     ))
-            {
-                string destinationPath = Path.Combine(
-                    writableBackendPath,
-                    Path.GetFileName(sourcePath)
-                );
-                File.Copy(sourcePath, destinationPath, true);
-            }
+            CopyPackagedBackend(
+                packagedBackendPath,
+                writableBackendPath
+            );
 
             Debug.Log(
                 "📦 Prepared packaged Python backend at: " +
@@ -423,6 +494,54 @@ public partial class SceneLoaderArcgis
         }
 
         return packagedBackendPath;
+    }
+
+    void CopyPackagedBackend(string sourceDirectory, string destinationDirectory)
+    {
+        string normalizedSource = Path.GetFullPath(sourceDirectory).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar
+        );
+
+        Directory.CreateDirectory(destinationDirectory);
+
+        foreach (string sourceFile in Directory.GetFiles(
+            normalizedSource,
+            "*",
+            SearchOption.AllDirectories
+        ))
+        {
+            string relativePath = sourceFile.Substring(normalizedSource.Length)
+                .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (relativePath.EndsWith(
+                    ".meta",
+                    System.StringComparison.OrdinalIgnoreCase
+                ) ||
+                relativePath.StartsWith(
+                    "__pycache__" + Path.DirectorySeparatorChar,
+                    System.StringComparison.OrdinalIgnoreCase
+                ) ||
+                relativePath.Contains(
+                    Path.DirectorySeparatorChar + "__pycache__" + Path.DirectorySeparatorChar
+                ))
+            {
+                continue;
+            }
+
+            string destinationFile = Path.Combine(
+                destinationDirectory,
+                relativePath
+            );
+            string destinationParent = Path.GetDirectoryName(destinationFile);
+
+            if (!string.IsNullOrEmpty(destinationParent))
+            {
+                Directory.CreateDirectory(destinationParent);
+            }
+
+            File.Copy(sourceFile, destinationFile, true);
+        }
     }
 
     IEnumerator InitializeEverything()

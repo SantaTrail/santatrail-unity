@@ -342,6 +342,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     bool fallbackOriginSet;
     double fallbackOriginLat;
     double fallbackOriginLon;
+    Coroutine mapExtentCoroutine;
     Transform generatedObjectsRoot;
     Transform generatedBuildingsRoot;
     Transform droneTransform;
@@ -4902,20 +4903,49 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         List<string> candidates = new List<string>();
 
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        candidates.Add(Path.Combine(
-            Application.streamingAssetsPath,
-            "Python",
-            "python.exe"
-        ));
+        bool useWindowsRuntime;
+#if UNITY_EDITOR
+        // Unity can compile for a Windows build target while Play Mode is
+        // still running inside the macOS editor. Use the actual host here.
+        useWindowsRuntime = Application.platform == RuntimePlatform.WindowsEditor;
+#elif UNITY_STANDALONE_WIN
+        useWindowsRuntime = true;
 #else
-        candidates.Add(Path.Combine(
-            Application.streamingAssetsPath,
-            "Python",
-            "bin",
-            "python3"
-        ));
+        useWindowsRuntime = false;
 #endif
+
+        if (useWindowsRuntime)
+        {
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+            candidates.Add(Path.Combine(
+                Application.streamingAssetsPath,
+                "Python",
+                "python.exe"
+            ));
+            candidates.Add(Path.Combine(
+                System.Environment.GetFolderPath(
+                    System.Environment.SpecialFolder.LocalApplicationData
+                ),
+                "SantaTrail",
+                "Python",
+                "python.exe"
+            ));
+#endif
+        }
+        else
+        {
+#if UNITY_EDITOR || UNITY_STANDALONE_OSX
+            candidates.Add(Path.Combine(
+                Application.streamingAssetsPath,
+                "Python",
+                "bin",
+                "python3"
+            ));
+            candidates.Add("/usr/bin/python3");
+            candidates.Add("/opt/homebrew/bin/python3");
+            candidates.Add("/usr/local/bin/python3");
+#endif
+        }
 
         foreach (string candidate in candidates)
         {
@@ -4925,11 +4955,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             }
         }
 
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        return "python";
-#else
-        return "python3";
-#endif
+        return useWindowsRuntime ? "python" : "python3";
     }
 
     bool TryConvertGPS(double lat, double lon, double alt, out Vector3 pos)
