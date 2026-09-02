@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using UnityEngine.SceneManagement;
 
 public static class AutoArduPilotOnPlay
 {
+    private const string QgcMapTypeAtStartup = "Satellite";
     private static bool hasLaunchedThisSession;
     private static bool isLaunchInProgress;
     private static bool hasAttemptedWindowsFirstRunSetup;
@@ -67,6 +69,28 @@ public static class AutoArduPilotOnPlay
             return;
         }
 #endif
+
+        if (string.Equals(
+                sceneName,
+                "LoadingScene",
+                StringComparison.OrdinalIgnoreCase
+            ))
+        {
+            if (SantaTrailSceneLoadRequest.HasPendingRequest)
+            {
+                UnityEngine.Debug.Log(
+                    "SantaTrail: LoadingScene is handling a requested scene transition; " +
+                    "skipping the flight setup."
+                );
+                return;
+            }
+
+            UnityEngine.Debug.Log(
+                "SantaTrail: LoadingScene entered; starting the support-package check."
+            );
+            _ = SantaTrailWindowsFirstRunSetup.EnsureAsync();
+            return;
+        }
 
         if (hasLaunchedThisSession || isLaunchInProgress)
         {
@@ -334,6 +358,7 @@ public static class AutoArduPilotOnPlay
             "SITL"
         );
         Directory.CreateDirectory(stateDirectory);
+        string sitlLogPath = Path.Combine(stateDirectory, "ArduCopter.log");
 
         string home = $"{homeLat},{homeLon},{homeAlt},{homeYaw}";
         ProcessStartInfo startInfo = new ProcessStartInfo
@@ -348,9 +373,15 @@ public static class AutoArduPilotOnPlay
                 "--serial0=udpclient:127.0.0.1:14550",
                 "--serial1=udpclient:127.0.0.1:14551"
             }),
-            WorkingDirectory = stateDirectory,
+            // ArduPilot needs to resolve its bundled DLLs and support files
+            // relative to NativeSITL, not the per-user diagnostics folder.
+            WorkingDirectory = Path.GetDirectoryName(sitlExecutable),
             UseShellExecute = false,
-            CreateNoWindow = true
+            // Keep the console visible while validating a user's package. It
+            // also makes an immediate ArduPilot failure obvious to the user.
+            CreateNoWindow = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         Process process = Process.Start(startInfo);
@@ -358,7 +389,74 @@ public static class AutoArduPilotOnPlay
         {
             throw new InvalidOperationException("Could not start the native Windows ArduPilot SITL process.");
         }
+
+        UnityEngine.Debug.Log(
+            "AutoArduPilotOnPlay: ArduPilot started (PID " + process.Id + ") from " +
+            sitlExecutable + ". Diagnostics will be written to " + sitlLogPath
+        );
+        _ = CaptureWindowsSitlOutputAsync(process, sitlLogPath);
+        _ = VerifyWindowsSitlAsync(process, sitlExecutable);
         return process;
+    }
+
+    private static async Task VerifyWindowsSitlAsync(Process process, string executablePath)
+    {
+        await Task.Delay(1500);
+
+        try
+        {
+            if (process.HasExited)
+            {
+                UnityEngine.Debug.LogError(
+                    "AutoArduPilotOnPlay: ArduPilot exited immediately (exit code " +
+                    process.ExitCode + ") from " + executablePath + ". " +
+                    "Check %LOCALAPPDATA%\\SantaTrail\\SITL\\ArduCopter.log."
+                );
+            }
+            else
+            {
+                UnityEngine.Debug.Log(
+                    "AutoArduPilotOnPlay: ArduPilot SITL is still running and ready for QGroundControl."
+                );
+            }
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning(
+                "AutoArduPilotOnPlay: could not verify ArduPilot startup. " +
+                exception.Message
+            );
+        }
+    }
+
+    private static async Task CaptureWindowsSitlOutputAsync(Process process, string logPath)
+    {
+        try
+        {
+            Task<string> standardOutputTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> standardErrorTask = process.StandardError.ReadToEndAsync();
+            string[] output = await Task.WhenAll(standardOutputTask, standardErrorTask);
+
+            string report =
+                "Exit code: " + process.ExitCode + Environment.NewLine +
+                "--- stdout ---" + Environment.NewLine + output[0] + Environment.NewLine +
+                "--- stderr ---" + Environment.NewLine + output[1];
+            await Task.Run(() => File.WriteAllText(logPath, report));
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                await Task.Run(() => File.AppendAllText(
+                    logPath,
+                    Environment.NewLine + "Could not capture ArduPilot output: " + exception.Message
+                ));
+            }
+            catch
+            {
+                // The diagnostic process must never affect the game flow.
+            }
+        }
     }
 
     private static string ResolveWindowsSitlExecutable()
@@ -512,6 +610,8 @@ public static class AutoArduPilotOnPlay
                 return;
             }
 
+            ConfigureWindowsQgcMapType();
+
             ProcessStartInfo qgcStartInfo = new ProcessStartInfo
             {
                 FileName = qgcPath,
@@ -547,6 +647,124 @@ public static class AutoArduPilotOnPlay
 #endif
         }
     }
+
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+    private static void ConfigureWindowsQgcMapType()
+    {
+        try
+        {
+            string settingsPath = ResolveWindowsQgcSettingsPath();
+            string settingsDirectory = Path.GetDirectoryName(settingsPath);
+            if (!string.IsNullOrEmpty(settingsDirectory))
+            {
+                Directory.CreateDirectory(settingsDirectory);
+            }
+
+            List<string> lines = File.Exists(settingsPath)
+                ? new List<string>(File.ReadAllLines(settingsPath))
+                : new List<string>();
+
+            int flightMapSectionIndex = -1;
+            int nextSectionIndex = lines.Count;
+            bool insideFlightMapSection = false;
+            bool mapTypeWritten = false;
+
+            for (int index = 0; index < lines.Count; index++)
+            {
+                string trimmedLine = lines[index].Trim();
+                if (trimmedLine.StartsWith("[", StringComparison.Ordinal) &&
+                    trimmedLine.EndsWith("]", StringComparison.Ordinal))
+                {
+                    insideFlightMapSection = string.Equals(
+                        trimmedLine,
+                        "[FlightMap]",
+                        StringComparison.OrdinalIgnoreCase
+                    );
+
+                    if (insideFlightMapSection)
+                    {
+                        flightMapSectionIndex = index;
+                    }
+                    else if (flightMapSectionIndex >= 0 && nextSectionIndex == lines.Count)
+                    {
+                        nextSectionIndex = index;
+                    }
+
+                    continue;
+                }
+
+                if (!insideFlightMapSection)
+                {
+                    continue;
+                }
+
+                int separatorIndex = trimmedLine.IndexOf('=');
+                if (separatorIndex <= 0)
+                {
+                    continue;
+                }
+
+                string key = trimmedLine.Substring(0, separatorIndex).Trim();
+                if (string.Equals(key, "mapType", StringComparison.OrdinalIgnoreCase))
+                {
+                    lines[index] = "mapType=" + QgcMapTypeAtStartup;
+                    mapTypeWritten = true;
+                }
+            }
+
+            if (flightMapSectionIndex < 0)
+            {
+                if (lines.Count > 0 && !string.IsNullOrWhiteSpace(lines[lines.Count - 1]))
+                {
+                    lines.Add(string.Empty);
+                }
+
+                lines.Add("[FlightMap]");
+                lines.Add("mapType=" + QgcMapTypeAtStartup);
+            }
+            else if (!mapTypeWritten)
+            {
+                lines.Insert(nextSectionIndex, "mapType=" + QgcMapTypeAtStartup);
+            }
+
+            File.WriteAllLines(settingsPath, lines);
+            UnityEngine.Debug.Log(
+                $"AutoArduPilotOnPlay: QGroundControl map type set to {QgcMapTypeAtStartup}."
+            );
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning(
+                "AutoArduPilotOnPlay: could not set the QGroundControl map type. " +
+                exception.Message
+            );
+        }
+    }
+
+    private static string ResolveWindowsQgcSettingsPath()
+    {
+        string roamingAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.ApplicationData
+        );
+
+        string[] candidates =
+        {
+            Path.Combine(roamingAppData, "QGroundControl", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl.org", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl.ini")
+        };
+
+        foreach (string candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return candidates[0];
+    }
+#endif
 
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
     private static string ResolveWindowsQGroundControlPath()

@@ -112,7 +112,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         "1 matches the source exactly; 1.3 makes the visible house fill " +
         "the wider ArcGIS building shadow."
     )]
-    [SerializeField] float osmWallFootprintScale = 1.3f;
+    [SerializeField] float osmWallFootprintScale = 1.05f;
 
     [System.Serializable]
     public class BuildingOrientationRule
@@ -348,6 +348,16 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     Transform droneTransform;
     int visibleBuildingCounter;
     Transform generatedEnvironmentRoot;
+
+    static SceneLoaderArcgis configuredMapExtentSource;
+    static bool hasConfiguredMapExtent;
+    static double configuredMapExtentRadiusMeters;
+
+    public static bool TryGetConfiguredMapExtentRadius(out double radiusMeters)
+    {
+        radiusMeters = configuredMapExtentRadiusMeters;
+        return hasConfiguredMapExtent && radiusMeters > 0.0;
+    }
 
     // The current level bootstrap lives in SceneLoaderArcgis.Bootstrap.cs.
     // Keep this retired implementation out of the compiled partial class so
@@ -2463,8 +2473,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 depth
             );
 
-            // Use one uniform map-shadow correction for all modular houses,
-            // never a different collision-driven scale for each building.
+            // Start from one small map-shadow correction. The placement validator
+            // may reduce this per house when neighboring OSM footprints collide.
             float requestedFootprintScale = useModularHouse
                 ? Mathf.Clamp(osmWallFootprintScale, 1f, 1.5f)
                 : 1f;
@@ -4771,6 +4781,52 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     void RunPython()
     {
+        string backendDirectory = Path.GetDirectoryName(scriptPath);
+        string[] requiredBackendFiles =
+        {
+            "main.py",
+            "parser.py",
+            "osm.py",
+            "elevation.py",
+            "features.py",
+            "classifier.py"
+        };
+        List<string> missingBackendFiles = new List<string>();
+
+        if (!string.IsNullOrEmpty(backendDirectory))
+        {
+            for (int i = 0; i < requiredBackendFiles.Length; i++)
+            {
+                string requiredFile = Path.Combine(
+                    backendDirectory,
+                    requiredBackendFiles[i]
+                );
+                if (!File.Exists(requiredFile))
+                {
+                    missingBackendFiles.Add(requiredBackendFiles[i]);
+                }
+            }
+        }
+
+        if (missingBackendFiles.Count > 0)
+        {
+            string missingFiles = string.Join(", ", missingBackendFiles);
+            string errorMessage =
+                "The bundled terrain backend is incomplete. Missing: " +
+                missingFiles +
+                ". Rebuild the Windows player with all files from " +
+                "Assets/StreamingAssets/Backend.";
+
+            pythonProcessExitCode = -1;
+            pythonProcessCompleted = true;
+            Debug.LogError("❌ " + errorMessage);
+            if (loadingScreen != null)
+            {
+                loadingScreen.ShowError(errorMessage);
+            }
+            return;
+        }
+
         string resolvedPythonPath = ResolvePythonExecutable();
         string customLocation = string.Format(
             CultureInfo.InvariantCulture,
@@ -4802,6 +4858,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+
+        // Keep the bundled Windows Python process from using the machine's
+        // legacy cp1252 console encoding when backend logs contain Unicode.
+        psi.Environment["PYTHONUTF8"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8:replace";
 
         pythonProcessCompleted = false;
         pythonProcessExitCode = int.MinValue;

@@ -37,6 +37,10 @@ public class LoadingScreenUI : MonoBehaviour
     private Coroutine fadeCoroutine;
     private bool spinnerEnabled;
 
+    public float CurrentProgress { get; private set; }
+    public bool IsReady { get; private set; }
+    public bool HasError { get; private set; }
+
     private void Awake()
     {
         if (canvasGroup == null)
@@ -72,6 +76,8 @@ public class LoadingScreenUI : MonoBehaviour
         StopFade();
 
         spinnerEnabled = true;
+        IsReady = false;
+        HasError = false;
 
         if (canvasGroup != null)
         {
@@ -86,6 +92,8 @@ public class LoadingScreenUI : MonoBehaviour
     public void SetProgress(float progress, string message = null)
     {
         progress = Mathf.Clamp01(progress);
+        CurrentProgress = progress;
+        IsReady = progress >= 1f;
 
         if (progressSlider != null)
         {
@@ -113,6 +121,8 @@ public class LoadingScreenUI : MonoBehaviour
         StopFade();
         gameObject.SetActive(true);
         spinnerEnabled = false;
+        IsReady = false;
+        HasError = true;
 
         if (!string.IsNullOrWhiteSpace(message))
         {
@@ -198,55 +208,55 @@ public class LoadingScreenUI : MonoBehaviour
     {
         if (progress < 0.08f)
         {
-            return "Opening tonight's mission letter...";
+            return "Santa is checking tonight's present list...";
         }
 
         if (progress < 0.18f)
         {
-            return "Waking up the delivery drone...";
+            return "Santa is waking the delivery drone...";
         }
 
         if (progress < 0.30f)
         {
-            return "Connecting to Santa's navigation system...";
+            return "Connecting the sleigh-drone to Santa's flight desk...";
         }
 
         if (progress < 0.42f)
         {
-            return "Unfolding the village map...";
+            return "Unfolding the Christmas delivery map...";
         }
 
         if (progress < 0.55f)
         {
-            return "Building the snowy village...";
+            return "Building the snowy village for present deliveries...";
         }
 
         if (progress < 0.68f)
         {
-            return "Searching for delivery rooftops...";
+            return "Finding rooftops ready for presents...";
         }
 
         if (progress < 0.80f)
         {
-            return "Packing presents into the cargo bay...";
+            return "Checking the present list for each child...";
         }
 
         if (progress < 0.90f)
         {
-            return "Planning a safe delivery route...";
+            return "Plotting Santa's safest delivery route...";
         }
 
         if (progress < 0.97f)
         {
-            return "Checking the Christmas spirit signal...";
+            return "Checking Christmas spirit at every home...";
         }
 
         if (progress < 1f)
         {
-            return "Finishing the elf flight checklist...";
+            return "Finishing Santa's final flight checklist...";
         }
 
-        return "Mission ready! Prepare for takeoff!";
+        return "Present route ready! Let's deliver Christmas!";
     }
 
     private IEnumerator FadeOut()

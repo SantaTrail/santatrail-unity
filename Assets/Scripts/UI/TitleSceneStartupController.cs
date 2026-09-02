@@ -31,9 +31,15 @@ public sealed class TitleSceneStartupController : MonoBehaviour
     private TextMeshProUGUI percentageText;
     private Image progressFill;
     private bool startupStarted;
+    private string destinationSceneName;
+    private bool prepareLetterScene;
 
     private void Start()
     {
+        Debug.Log(
+            $"SantaTrail startup: entered {gameObject.scene.name}. " +
+            $"SetupInThisScene={runSetupInThisScene}."
+        );
         CreateOverlay();
         if (runSetupInThisScene)
         {
@@ -66,6 +72,9 @@ public sealed class TitleSceneStartupController : MonoBehaviour
         }
 
         startupStarted = true;
+        Debug.Log(runSetupInThisScene
+            ? "SantaTrail startup: LoadingScene setup started."
+            : $"SantaTrail startup: title activated loading scene '{loadingSceneName}'.");
         if (promptText != null)
         {
             promptText.text = string.Empty;
@@ -73,28 +82,94 @@ public sealed class TitleSceneStartupController : MonoBehaviour
 
         if (!runSetupInThisScene)
         {
-            SceneManager.LoadSceneAsync(loadingSceneName, LoadSceneMode.Single);
+            try
+            {
+                AsyncOperation loadingOperation = SceneManager.LoadSceneAsync(
+                    loadingSceneName,
+                    LoadSceneMode.Single
+                );
+                if (loadingOperation == null)
+                {
+                    Debug.LogError(
+                        $"SantaTrail startup: loading scene '{loadingSceneName}' was not found."
+                    );
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError(
+                    "SantaTrail startup: could not open LoadingScene. " + exception.Message
+                );
+            }
             return;
         }
 
-        StartCoroutine(PrepareAndOpenMainPage());
+        StartCoroutine(PrepareAndOpenDestination());
     }
 
-    private IEnumerator PrepareAndOpenMainPage()
+    private IEnumerator PrepareAndOpenDestination()
     {
-        SetProgress(0.03f, "Checking SantaTrail files...");
+        destinationSceneName = mainPageSceneName;
+        prepareLetterScene = false;
+        bool hasRequestedDestination = SantaTrailSceneLoadRequest.TryConsume(
+                out string requestedSceneName,
+                out bool requestedLetterPreparation
+            );
+        if (hasRequestedDestination)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedSceneName))
+            {
+                destinationSceneName = requestedSceneName;
+            }
+
+            prepareLetterScene = requestedLetterPreparation;
+            Debug.Log(
+                $"SantaTrail startup: LoadingScene destination is '{destinationSceneName}'. " +
+                $"PrepareLetter={prepareLetterScene}."
+            );
+        }
+
         yield return null;
+
+        // The title-to-main-page transition owns flight-tool setup. A
+        // MainPage-to-letter transition only needs to prepare the letter
+        // scene, so it must not run the flight setup again.
+        if (prepareLetterScene)
+        {
+            yield return StartCoroutine(PrepareLetterSceneAndOpen());
+            yield break;
+        }
+
+        // Other scene transitions can reuse this loading screen without
+        // repeating first-run flight setup. The title entry is the only path
+        // that performs the dependency check below.
+        if (hasRequestedDestination)
+        {
+            yield return StartCoroutine(OpenRequestedScene());
+            yield break;
+        }
+
+        SetProgress(0.03f, "Santa is checking the flight desk and delivery tools...");
 
         Task setupTask = null;
         bool setupNeeded = false;
         try
         {
             setupNeeded = SantaTrailWindowsFirstRunSetup.IsNeeded();
-            if (setupNeeded)
-            {
-                SetProgress(0.08f, "Downloading required support packages...");
-                setupTask = SantaTrailWindowsFirstRunSetup.EnsureAsync();
-            }
+            Debug.Log(
+                "SantaTrail startup: LoadingScene dependency check. " +
+                SantaTrailWindowsFirstRunSetup.GetReadinessSummary()
+            );
+            SetProgress(
+                0.08f,
+                setupNeeded
+                    ? "The elves are downloading tools for tonight's deliveries..."
+                    : "Santa is checking the present delivery tools..."
+            );
+            // Run the check on every LoadingScene entry. EnsureAsync skips
+            // downloads and extraction when the files are already present.
+            setupTask = SantaTrailWindowsFirstRunSetup.EnsureAsync();
+            Debug.Log("SantaTrail startup: dependency setup task started.");
         }
         catch (Exception exception)
         {
@@ -109,7 +184,7 @@ public sealed class TitleSceneStartupController : MonoBehaviour
                 // The setup class downloads several files but does not expose
                 // byte progress, so show honest activity instead of a fake ETA.
                 fakeProgress = Mathf.Min(0.82f, fakeProgress + 0.015f);
-                SetProgress(fakeProgress, "Preparing support packages...");
+                SetProgress(fakeProgress, "The elves are preparing Santa's delivery tools...");
                 yield return new WaitForSecondsRealtime(0.25f);
             }
 
@@ -122,51 +197,84 @@ public sealed class TitleSceneStartupController : MonoBehaviour
             {
                 SetProgress(
                     0.86f,
-                    "Some optional flight tools are unavailable. Continuing with guided mode..."
+                    "Some flight tools are missing; Santa will use guided mode..."
                 );
                 yield return new WaitForSecondsRealtime(1.2f);
             }
             else
             {
-                SetProgress(0.86f, "Support packages are ready.");
+                SetProgress(0.86f, "Santa's flight desk is ready for deliveries.");
             }
+            Debug.Log(
+                "SantaTrail startup: dependency setup task finished. " +
+                SantaTrailWindowsFirstRunSetup.GetReadinessSummary()
+            );
         }
         else
         {
-            SetProgress(0.72f, "Support packages are already ready.");
+            SetProgress(0.72f, "Santa's delivery tools are ready.");
         }
 
-        string backendPath = Path.Combine(
+        string backendDirectory = Path.Combine(
             Application.streamingAssetsPath,
-            "Backend",
-            "main.py"
+            "Backend"
         );
-        if (!File.Exists(backendPath))
+        string[] requiredBackendFiles =
+        {
+            "main.py",
+            "parser.py",
+            "osm.py",
+            "elevation.py",
+            "features.py",
+            "classifier.py"
+        };
+        string missingBackendFiles = "";
+
+        for (int i = 0; i < requiredBackendFiles.Length; i++)
+        {
+            if (!File.Exists(Path.Combine(
+                    backendDirectory,
+                    requiredBackendFiles[i]
+                )))
+            {
+                if (missingBackendFiles.Length > 0)
+                {
+                    missingBackendFiles += ", ";
+                }
+
+                missingBackendFiles += requiredBackendFiles[i];
+            }
+        }
+
+        if (missingBackendFiles.Length > 0)
         {
             SetProgress(
                 0.86f,
-                "The bundled terrain backend is missing. Rebuild the Windows package."
+                "Oh snow! The terrain delivery package is missing. Rebuild the Windows package."
             );
-            Debug.LogError("SantaTrail startup: Backend/main.py was not found.");
+            Debug.LogError(
+                "SantaTrail startup: incomplete Backend folder. Missing: " +
+                missingBackendFiles
+            );
             yield break;
         }
 
-        SetProgress(0.92f, "Opening the SantaTrail main page...");
+        SetProgress(0.92f, "Santa is opening the present delivery desk...");
         if (!loadMainPageAfterSetup)
         {
-            SetProgress(1f, "Ready.");
+            SetProgress(1f, "Santa's delivery desk is ready!");
             yield break;
         }
 
         AsyncOperation loadOperation = SceneManager.LoadSceneAsync(
-            mainPageSceneName,
+            destinationSceneName,
             LoadSceneMode.Single
         );
         if (loadOperation == null)
         {
-            SetProgress(0.92f, "Could not load the main page scene.");
+            SetProgress(0.92f, "Oh snow! Santa's delivery desk could not open.");
             Debug.LogError(
-                $"SantaTrail startup: scene '{mainPageSceneName}' could not be loaded."
+                $"SantaTrail startup: scene '{destinationSceneName}' could not be loaded."
             );
             yield break;
         }
@@ -175,7 +283,53 @@ public sealed class TitleSceneStartupController : MonoBehaviour
         while (loadOperation.progress < 0.9f)
         {
             float sceneProgress = Mathf.Lerp(0.92f, 0.99f, loadOperation.progress / 0.9f);
-            SetProgress(sceneProgress, "Opening the SantaTrail main page...");
+            SetProgress(sceneProgress, "Santa is opening the present delivery desk...");
+            yield return null;
+        }
+
+        SetProgress(1f, "Santa's delivery desk is ready!");
+        loadOperation.allowSceneActivation = true;
+    }
+
+    private IEnumerator OpenRequestedScene()
+    {
+        if (string.Equals(destinationSceneName, "LV1", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return StartCoroutine(OpenLevelSceneAndWaitForReady());
+            yield break;
+        }
+
+        SetProgress(0.08f, $"Opening {destinationSceneName}...");
+
+        AsyncOperation loadOperation;
+        try
+        {
+            loadOperation = SceneManager.LoadSceneAsync(
+                destinationSceneName,
+                LoadSceneMode.Single
+            );
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            SetProgress(0.08f, $"Could not load {destinationSceneName}.");
+            yield break;
+        }
+
+        if (loadOperation == null)
+        {
+            Debug.LogError(
+                $"SantaTrail startup: requested scene '{destinationSceneName}' could not be loaded."
+            );
+            SetProgress(0.08f, $"Could not load {destinationSceneName}.");
+            yield break;
+        }
+
+        loadOperation.allowSceneActivation = false;
+        while (loadOperation.progress < 0.9f)
+        {
+            float sceneProgress = Mathf.Lerp(0.08f, 0.99f, loadOperation.progress / 0.9f);
+            SetProgress(sceneProgress, $"Opening {destinationSceneName}...");
             yield return null;
         }
 
@@ -183,25 +337,309 @@ public sealed class TitleSceneStartupController : MonoBehaviour
         loadOperation.allowSceneActivation = true;
     }
 
+    private IEnumerator OpenLevelSceneAndWaitForReady()
+    {
+        SetProgress(0.08f, "Santa is loading the LV1 present route...");
+
+        AsyncOperation loadOperation;
+        try
+        {
+            loadOperation = SceneManager.LoadSceneAsync(
+                destinationSceneName,
+                LoadSceneMode.Additive
+            );
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            SetProgress(0.08f, "Could not load LV1.");
+            yield break;
+        }
+
+        if (loadOperation == null)
+        {
+            Debug.LogError("SantaTrail startup: LV1 could not be loaded additively.");
+            SetProgress(0.08f, "Could not load LV1.");
+            yield break;
+        }
+
+        while (!loadOperation.isDone)
+        {
+            float loadProgress = Mathf.Lerp(0.08f, 0.35f, loadOperation.progress);
+            SetProgress(loadProgress, "Santa is opening the delivery village...");
+            yield return null;
+        }
+
+        Scene levelScene = SceneManager.GetSceneByName(destinationSceneName);
+        if (!levelScene.IsValid() || !levelScene.isLoaded)
+        {
+            SetProgress(0.08f, "Oh snow! Santa's delivery village could not be opened.");
+            Debug.LogError("SantaTrail startup: loaded LV1 scene is invalid.");
+            yield break;
+        }
+
+        SceneManager.SetActiveScene(levelScene);
+        yield return null;
+
+        LoadingScreenUI levelLoadingScreen = null;
+        float startupWait = 0f;
+        const float startupWaitLimit = 10f;
+        while (levelLoadingScreen == null && startupWait < startupWaitLimit)
+        {
+            levelLoadingScreen = FindFirstObjectByType<LoadingScreenUI>(
+                FindObjectsInactive.Include
+            );
+            if (levelLoadingScreen != null)
+            {
+                break;
+            }
+
+            startupWait += 0.1f;
+            yield return new WaitForSecondsRealtime(0.1f);
+        }
+
+        if (levelLoadingScreen == null)
+        {
+            Debug.LogWarning(
+                "SantaTrail startup: LV1 has no LoadingScreenUI; revealing the scene after loading."
+            );
+            SetProgress(1f, "Santa's present route is ready!");
+            yield return new WaitForSecondsRealtime(0.25f);
+            SceneManager.SetActiveScene(levelScene);
+            SceneManager.UnloadSceneAsync(gameObject.scene);
+            yield break;
+        }
+
+        float levelWait = 0f;
+        const float levelWaitLimit = 300f;
+        while (!levelLoadingScreen.IsReady &&
+               !levelLoadingScreen.HasError &&
+               levelWait < levelWaitLimit)
+        {
+            float levelProgress = Mathf.Clamp01(levelLoadingScreen.CurrentProgress);
+            float sharedProgress = Mathf.Lerp(0.35f, 0.98f, levelProgress);
+            SetProgress(sharedProgress, "Santa is preparing rooftops for present delivery...");
+            levelWait += 0.2f;
+            yield return new WaitForSecondsRealtime(0.2f);
+        }
+
+        if (levelLoadingScreen.HasError)
+        {
+            SetProgress(
+                0.98f,
+                "Oh snow! Santa could not finish preparing the present route."
+            );
+            Debug.LogError("SantaTrail startup: LV1 reported a loading error.");
+            yield break;
+        }
+
+        if (!levelLoadingScreen.IsReady)
+        {
+            SetProgress(0.98f, "Santa is still preparing the present route...");
+            Debug.LogError("SantaTrail startup: timed out waiting for LV1 readiness.");
+            yield break;
+        }
+
+        SetProgress(1f, "Santa's present route is ready! Opening...");
+        yield return new WaitForSecondsRealtime(0.25f);
+        SceneManager.SetActiveScene(levelScene);
+        SceneManager.UnloadSceneAsync(gameObject.scene);
+    }
+
+    private IEnumerator PrepareLetterSceneAndOpen()
+    {
+        if (!string.Equals(destinationSceneName, "letter", StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.LogError(
+                $"SantaTrail startup: letter preparation was requested for '{destinationSceneName}'."
+            );
+            SetProgress(0.92f, "The letter destination is not configured correctly.");
+            yield break;
+        }
+
+        SetProgress(0.08f, "Santa is opening envelopes from the children...");
+        SantaLetterPreloadSession.IsPreparing = true;
+
+        AsyncOperation letterLoadOperation;
+        try
+        {
+            letterLoadOperation = SceneManager.LoadSceneAsync(
+                destinationSceneName,
+                LoadSceneMode.Additive
+            );
+        }
+        catch (Exception exception)
+        {
+            SantaLetterPreloadSession.IsPreparing = false;
+            Debug.LogException(exception);
+            SetProgress(0.08f, "Oh snow! Santa could not open the children's envelopes.");
+            yield break;
+        }
+
+        if (letterLoadOperation == null)
+        {
+            SantaLetterPreloadSession.IsPreparing = false;
+            Debug.LogError(
+                $"SantaTrail startup: scene '{destinationSceneName}' could not be loaded additively."
+            );
+            SetProgress(0.08f, "Oh snow! Santa could not open the children's envelopes.");
+            yield break;
+        }
+
+        while (!letterLoadOperation.isDone)
+        {
+            float loadProgress = Mathf.Lerp(0.08f, 0.35f, letterLoadOperation.progress);
+            SetProgress(loadProgress, "Opening the children's envelopes...");
+            yield return null;
+        }
+
+        Scene letterScene = SceneManager.GetSceneByName(destinationSceneName);
+        if (!letterScene.IsValid() || !letterScene.isLoaded)
+        {
+            SantaLetterPreloadSession.IsPreparing = false;
+            SetProgress(0.08f, "Oh snow! Santa could not open the children's envelopes.");
+            Debug.LogError("SantaTrail startup: loaded letter scene is invalid.");
+            yield break;
+        }
+
+        SceneManager.SetActiveScene(letterScene);
+        yield return null;
+
+        SantaLetterGameManager letterManager =
+            FindFirstObjectByType<SantaLetterGameManager>();
+        if (letterManager == null)
+        {
+            Debug.LogError("SantaTrail startup: SantaLetterGameManager was not found in letter scene.");
+            yield return StartCoroutine(ReturnToMainPageAfterLetterFailure(
+                letterScene,
+                "The letter manager is missing from the letter scene."
+            ));
+            yield break;
+        }
+
+        SetProgress(0.4f, "Reading the children's wishes and preparing gift choices...");
+        Task<bool> preparationTask = null;
+        try
+        {
+            preparationTask = letterManager.PrepareNewDeliveryAsync();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+        }
+
+        if (preparationTask == null)
+        {
+            yield return StartCoroutine(ReturnToMainPageAfterLetterFailure(
+                letterScene,
+                "The children's letter could not be prepared."
+            ));
+            yield break;
+        }
+
+        float preparationProgress = 0.4f;
+        while (!preparationTask.IsCompleted)
+        {
+            preparationProgress = Mathf.Min(0.985f, preparationProgress + 0.012f);
+            SetProgress(preparationProgress, "Reading each child's wishes and matching gift choices...");
+            yield return new WaitForSecondsRealtime(0.2f);
+        }
+
+        bool prepared = false;
+        if (preparationTask.IsFaulted)
+        {
+            Debug.LogException(preparationTask.Exception);
+        }
+        else if (!preparationTask.IsCanceled)
+        {
+            prepared = preparationTask.Result;
+        }
+
+        SantaLetterPreloadSession.IsPreparing = false;
+        if (!prepared)
+        {
+            Debug.LogError("SantaTrail startup: letter preparation failed.");
+            yield return StartCoroutine(ReturnToMainPageAfterLetterFailure(
+                letterScene,
+                "The children's letters could not be prepared. Returning to the main page..."
+            ));
+            yield break;
+        }
+
+        Debug.Log("SantaTrail startup: letter scene is prepared; revealing generated letter and choices.");
+        SetProgress(1f, "The children's letters and gift choices are ready! Opening...");
+        yield return new WaitForSecondsRealtime(0.25f);
+
+        // Keep the prepared letter scene alive and remove only the loading
+        // scene, leaving its generated UI and choices untouched.
+        SceneManager.SetActiveScene(letterScene);
+        SceneManager.UnloadSceneAsync(gameObject.scene);
+    }
+
+    private IEnumerator ReturnToMainPageAfterLetterFailure(
+        Scene letterScene,
+        string message
+    )
+    {
+        SantaLetterPreloadSession.IsPreparing = false;
+        SetProgress(0.94f, message);
+
+        Scene loadingScene = gameObject.scene;
+        if (loadingScene.IsValid() && loadingScene.isLoaded)
+        {
+            SceneManager.SetActiveScene(loadingScene);
+        }
+
+        if (letterScene.IsValid() && letterScene.isLoaded)
+        {
+            AsyncOperation unloadOperation = SceneManager.UnloadSceneAsync(letterScene);
+            if (unloadOperation != null)
+            {
+                while (!unloadOperation.isDone)
+                {
+                    yield return null;
+                }
+            }
+        }
+
+        yield return new WaitForSecondsRealtime(1f);
+
+        AsyncOperation mainPageOperation = SceneManager.LoadSceneAsync(
+            mainPageSceneName,
+            LoadSceneMode.Single
+        );
+        if (mainPageOperation == null)
+        {
+            Debug.LogError(
+                $"SantaTrail startup: could not return to '{mainPageSceneName}' after letter failure."
+            );
+        }
+    }
+
     private bool WasContinueInputPressed()
     {
-        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+        Mouse mouse = Mouse.current;
+        if (mouse != null &&
+            (mouse.leftButton.wasPressedThisFrame ||
+             mouse.rightButton.wasPressedThisFrame ||
+             mouse.middleButton.wasPressedThisFrame))
         {
             return true;
         }
 
         Keyboard keyboard = Keyboard.current;
-        if (keyboard != null &&
-            (keyboard.spaceKey.wasPressedThisFrame ||
-             keyboard.enterKey.wasPressedThisFrame ||
-             keyboard.numpadEnterKey.wasPressedThisFrame))
+        if (keyboard != null && keyboard.anyKey.wasPressedThisFrame)
         {
             return true;
         }
 
         Touchscreen touchscreen = Touchscreen.current;
-        return touchscreen != null &&
-            touchscreen.primaryTouch.press.wasPressedThisFrame;
+        if (touchscreen != null && touchscreen.primaryTouch.press.wasPressedThisFrame)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private void CreateOverlay()
@@ -221,7 +659,9 @@ public sealed class TitleSceneStartupController : MonoBehaviour
 
         overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
         overlayCanvas.overrideSorting = true;
-        overlayCanvas.sortingOrder = 500;
+        // LV1 has a legacy loading canvas at sorting order 1000. Keep this
+        // shared loading screen above it until LV1 has finished initializing.
+        overlayCanvas.sortingOrder = 2000;
 
         CanvasScaler scaler = overlayCanvas.GetComponent<CanvasScaler>();
         if (scaler == null)

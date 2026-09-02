@@ -1074,12 +1074,15 @@ MonoBehaviour:
   showTutorial: 1
   welcomeMessage: Welcome! First, open QGroundControl and make sure the drone is
     connected.
+  mapModeMessage: QGroundControl opens in Satellite map mode automatically. Use the
+    map to locate the drone and delivery area.
   findTargetMessage: Change the flight mode to Guided so the drone accepts the tutorial
     controls.
   approachMessage: Use Guided takeoff and climb to a safe height.
   holdPositionMessage: Now try to gently control the drone and hold a steady position.
   transitionMessage: Great. Now you can try the first delivery target.
   connectionHoldSeconds: 8
+  mapModeDisplaySeconds: 4
   takeoffAltitudeMeters: 1.5
   controlMovementMeters: 2
   autoLoadNextScene: 0
@@ -7706,7 +7709,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1.3
+  osmWallFootprintScale: 1.05
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -7888,7 +7891,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1.3
+  osmWallFootprintScale: 1.05
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station

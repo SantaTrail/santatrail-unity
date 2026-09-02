@@ -10,6 +10,8 @@ public class FlightLogDashboardUI : MonoBehaviour
 {
     private const int DeliveriesPerLevel = 5;
     private const int InitialSpiritLevelCapacity = 5;
+    private const float GeneratedRowWidth = 1500f;
+    private const float GeneratedRowHeight = 88f;
 
     private enum FilterMode
     {
@@ -139,6 +141,7 @@ public class FlightLogDashboardUI : MonoBehaviour
     private Slider spiritSlider;
     private TMP_Text spiritPercentageText;
     private bool configured;
+    private bool generatedRowTemplate;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     private static void RegisterSceneLoadHandler()
@@ -243,6 +246,11 @@ public class FlightLogDashboardUI : MonoBehaviour
             {
                 rows.Add(new FlightLogRowWidgets(child));
             }
+        }
+
+        if (rows.Count == 0)
+        {
+            CreateGeneratedRowTemplate();
         }
 
         if (rows.Count > 0)
@@ -503,6 +511,172 @@ public class FlightLogDashboardUI : MonoBehaviour
         Refresh();
     }
 
+    private void CreateGeneratedRowTemplate()
+    {
+        if (content == null)
+        {
+            return;
+        }
+
+        RectTransform contentRect = content.GetComponent<RectTransform>();
+        if (contentRect != null)
+        {
+            contentRect.anchorMin = new Vector2(0f, 1f);
+            contentRect.anchorMax = new Vector2(1f, 1f);
+            contentRect.pivot = new Vector2(0.5f, 1f);
+            contentRect.anchoredPosition = Vector2.zero;
+            contentRect.sizeDelta = new Vector2(0f, GeneratedRowHeight);
+        }
+
+        GameObject rowObject = new GameObject(
+            "FlightLogRow (Generated)",
+            typeof(RectTransform)
+        );
+        rowObject.layer = content.gameObject.layer;
+        rowObject.transform.SetParent(content, false);
+
+        RectTransform rowRect = rowObject.GetComponent<RectTransform>();
+        rowRect.anchorMin = new Vector2(0.5f, 1f);
+        rowRect.anchorMax = new Vector2(0.5f, 1f);
+        rowRect.pivot = new Vector2(0.5f, 1f);
+        rowRect.anchoredPosition = Vector2.zero;
+        rowRect.sizeDelta = new Vector2(GeneratedRowWidth, GeneratedRowHeight);
+
+        CreateGeneratedText(
+            rowObject.transform,
+            "DateText",
+            new Vector2(-615f, 0f),
+            new Vector2(220f, 60f),
+            TextAlignmentOptions.MidlineLeft,
+            20f
+        );
+        CreateGeneratedText(
+            rowObject.transform,
+            "MissionNameText",
+            new Vector2(-315f, 16f),
+            new Vector2(520f, 34f),
+            TextAlignmentOptions.BottomLeft,
+            20f
+        );
+        CreateGeneratedText(
+            rowObject.transform,
+            "MissionDetailText",
+            new Vector2(-315f, -18f),
+            new Vector2(520f, 28f),
+            TextAlignmentOptions.TopLeft,
+            16f
+        );
+        CreateGeneratedText(
+            rowObject.transform,
+            "ScoreText",
+            new Vector2(175f, 0f),
+            new Vector2(150f, 60f),
+            TextAlignmentOptions.MidlineLeft,
+            20f
+        );
+        CreateGeneratedText(
+            rowObject.transform,
+            "FlightTimeText",
+            new Vector2(370f, 0f),
+            new Vector2(200f, 60f),
+            TextAlignmentOptions.MidlineLeft,
+            20f
+        );
+        CreateGeneratedText(
+            rowObject.transform,
+            "OutcomeText",
+            new Vector2(625f, 0f),
+            new Vector2(300f, 60f),
+            TextAlignmentOptions.MidlineLeft,
+            20f
+        );
+
+        AlignGeneratedTextToHeader(rowObject.transform, "DateText", "DateHeader");
+        AlignGeneratedTextToHeader(rowObject.transform, "MissionNameText", "MissionHeader");
+        AlignGeneratedTextToHeader(rowObject.transform, "ScoreText", "ScoreHeader");
+        AlignGeneratedTextToHeader(rowObject.transform, "FlightTimeText", "FlightTimeHeader");
+        AlignGeneratedTextToHeader(rowObject.transform, "OutcomeText", "OutcomeHeader");
+
+        rows.Add(new FlightLogRowWidgets(rowObject.transform));
+        rowTemplate = rowObject.transform;
+        generatedRowTemplate = true;
+        Debug.Log("FlightLogDashboardUI: no row template found; created a runtime flight-log row.");
+    }
+
+    private static TMP_Text CreateGeneratedText(
+        Transform parent,
+        string objectName,
+        Vector2 position,
+        Vector2 size,
+        TextAlignmentOptions alignment,
+        float fontSize
+    )
+    {
+        GameObject textObject = new GameObject(objectName, typeof(RectTransform));
+        textObject.layer = parent.gameObject.layer;
+        textObject.transform.SetParent(parent, false);
+
+        RectTransform textRect = textObject.GetComponent<RectTransform>();
+        textRect.anchorMin = new Vector2(0.5f, 0.5f);
+        textRect.anchorMax = new Vector2(0.5f, 0.5f);
+        textRect.pivot = new Vector2(0.5f, 0.5f);
+        textRect.anchoredPosition = position;
+        textRect.sizeDelta = size;
+
+        TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
+        text.fontSize = fontSize;
+        text.alignment = alignment;
+        text.color = new Color(0.93f, 0.78f, 0.36f, 1f);
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.overflowMode = TextOverflowModes.Ellipsis;
+        text.raycastTarget = false;
+        return text;
+    }
+
+    private void AlignGeneratedTextToHeader(
+        Transform row,
+        string generatedTextName,
+        string headerName
+    )
+    {
+        Transform header = FindChildByName(transform, headerName);
+        if (header == null)
+        {
+            return;
+        }
+
+        TMP_Text headerText = header.GetComponentInChildren<TMP_Text>(true);
+        TMP_Text generatedText = FindText(row, generatedTextName);
+        if (headerText == null || generatedText == null)
+        {
+            return;
+        }
+
+        RectTransform headerRect = headerText.rectTransform;
+        RectTransform generatedRect = generatedText.rectTransform;
+        Vector3[] headerCorners = new Vector3[4];
+        Vector3[] generatedCorners = new Vector3[4];
+        headerRect.GetWorldCorners(headerCorners);
+        generatedRect.GetWorldCorners(generatedCorners);
+
+        Vector3 horizontalOffset = headerCorners[0] - generatedCorners[0];
+        horizontalOffset.y = 0f;
+        generatedRect.position += horizontalOffset;
+    }
+
+    private static TMP_Text FindText(Transform root, string textName)
+    {
+        foreach (TMP_Text text in root.GetComponentsInChildren<TMP_Text>(true))
+        {
+            if (string.Equals(text.name, textName, StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
     private void ShowPassed()
     {
         filterMode = FilterMode.Passed;
@@ -545,6 +719,18 @@ public class FlightLogDashboardUI : MonoBehaviour
             cloneRect.anchoredPosition = previousRect.anchoredPosition +
                 new Vector2(0f, -rowSpacing);
             rows.Add(new FlightLogRowWidgets(clone.transform));
+        }
+
+        if (generatedRowTemplate)
+        {
+            RectTransform contentRect = content.GetComponent<RectTransform>();
+            if (contentRect != null)
+            {
+                contentRect.sizeDelta = new Vector2(
+                    contentRect.sizeDelta.x,
+                    Mathf.Max(GeneratedRowHeight, rows.Count * rowSpacing)
+                );
+            }
         }
     }
 

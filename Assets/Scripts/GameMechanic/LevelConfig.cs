@@ -20,6 +20,17 @@ public class LevelConfig
     public int deliveryCount = 5;
     public bool showTutorial = true;
 
+    [Header("Preview Details")]
+    public string previewMissionType = "";
+    public string previewMissionTitle = "";
+    public string previewLocation = "";
+    public string previewDifficulty = "";
+    public string previewReward = "";
+    public string previewTimeWindow = "";
+    [TextArea(1, 2)]
+    public string mainGoal = "";
+    public List<string> previewChecklist = new List<string>();
+
     [Header("Scene Flow")]
     public bool autoLoadNextScene = false;
     public string nextSceneName = "";
@@ -59,6 +70,20 @@ public static class LevelConfigLoader
         }
 
         return TryParseLevels(resource.text, out levels);
+    }
+
+    public static bool TryFindLevel(string sceneName, out LevelConfig level)
+    {
+        level = null;
+        if (string.IsNullOrWhiteSpace(sceneName) || !TryLoadLevels(out List<LevelConfig> levels))
+        {
+            return false;
+        }
+
+        level = levels.Find(candidate =>
+            candidate != null &&
+            string.Equals(candidate.sceneName, sceneName, StringComparison.OrdinalIgnoreCase));
+        return level != null;
     }
 
     private static bool TryParseLevels(string json, out List<LevelConfig> levels)

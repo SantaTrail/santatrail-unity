@@ -27,6 +27,11 @@ public partial class SceneLoaderArcgis
             return;
         }
 
+        configuredMapExtentSource = this;
+        hasConfiguredMapExtent = limitMapExtent;
+        configuredMapExtentRadiusMeters =
+            System.Math.Max(1.0, mapExtentSizeMeters);
+
         TryResolveArcGISConverter();
         ResolveModularHouseGenerator();
         GameManager.TryApplyLevelForScene(SceneManager.GetActiveScene().name);
@@ -62,6 +67,18 @@ public partial class SceneLoaderArcgis
         }
         if (arcGISConverter == null)
             Debug.LogWarning("⚠️ ArcGISConverter not found in Awake (will keep retrying)");
+    }
+
+    void OnDisable()
+    {
+        if (configuredMapExtentSource != this)
+        {
+            return;
+        }
+
+        configuredMapExtentSource = null;
+        hasConfiguredMapExtent = false;
+        configuredMapExtentRadiusMeters = 0.0;
     }
 
     void OnDrawGizmosSelected()
@@ -388,6 +405,52 @@ public partial class SceneLoaderArcgis
                 backendPath,
                 expandedBuildingScriptName
             );
+
+        string[] requiredBackendFiles =
+        {
+            "main.py",
+            "parser.py",
+            "osm.py",
+            "elevation.py",
+            "features.py",
+            "classifier.py"
+        };
+        List<string> missingBackendFiles = new List<string>();
+
+        for (int i = 0; i < requiredBackendFiles.Length; i++)
+        {
+            string requiredFilePath = Path.Combine(
+                backendPath,
+                requiredBackendFiles[i]
+            );
+
+            if (!File.Exists(requiredFilePath))
+            {
+                missingBackendFiles.Add(requiredBackendFiles[i]);
+            }
+        }
+
+        if (missingBackendFiles.Count > 0)
+        {
+            string missingFiles = string.Join(", ", missingBackendFiles);
+            string errorMessage =
+                "The terrain backend is incomplete. Missing: " +
+                missingFiles +
+                ". Rebuild the Windows player with all files from " +
+                "Assets/StreamingAssets/Backend.";
+
+            Debug.LogError(
+                "❌ " + errorMessage +
+                " Backend path: " + backendPath
+            );
+
+            if (loadingScreen != null)
+            {
+                loadingScreen.ShowError(errorMessage);
+            }
+
+            return;
+        }
 
         outputPath = Path.Combine(backendPath, "output.json");
 

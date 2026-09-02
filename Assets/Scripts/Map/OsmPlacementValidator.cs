@@ -16,10 +16,10 @@ public class OsmPlacementValidator : MonoBehaviour
     [Header("OSM Footprint Matching")]
     [Tooltip(
         "Keep each house at its exact OSM footprint even when OSM polygons " +
-        "touch or overlap. Disable only when a simplified collision-safe map " +
-        "is preferred over matching the map shadows."
+        "touch or overlap. Enable only when matching the map shadows is more " +
+        "important than keeping generated houses visually separate."
     )]
-    [SerializeField] bool useExactOsmFootprints = true;
+    [SerializeField] bool useExactOsmFootprints = false;
 
     [Range(0.15f, 1f)]
     [Tooltip(

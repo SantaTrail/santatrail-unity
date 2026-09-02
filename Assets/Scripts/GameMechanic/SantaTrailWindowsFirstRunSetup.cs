@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -30,13 +31,51 @@ public static class SantaTrailWindowsFirstRunSetup
             return false;
         }
 
-        return FindQGroundControl() == null ||
-            FindPython() == null ||
-            (FindNativeSitl() == null && FindMissionPlanner() == null);
+        return GetMissingComponents().Count > 0;
 #else
         return false;
 #endif
     }
+
+    public static string GetReadinessSummary()
+    {
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+        if (!IsWindowsRuntime())
+        {
+            return "Windows setup is not required on this host.";
+        }
+
+        List<string> missingComponents = GetMissingComponents();
+        return missingComponents.Count == 0
+            ? "QGroundControl, Python and flight support are ready."
+            : "Missing: " + string.Join(", ", missingComponents);
+#else
+        return "Windows setup is not required on this platform.";
+#endif
+    }
+
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+    private static List<string> GetMissingComponents()
+    {
+        List<string> missingComponents = new List<string>();
+        if (FindQGroundControl() == null)
+        {
+            missingComponents.Add("QGroundControl");
+        }
+
+        if (FindPython() == null)
+        {
+            missingComponents.Add("portable Python");
+        }
+
+        if (FindNativeSitl() == null && FindMissionPlanner() == null)
+        {
+            missingComponents.Add("ArduPilot SITL or Mission Planner");
+        }
+
+        return missingComponents;
+    }
+#endif
 
     public static Task EnsureAsync()
     {
