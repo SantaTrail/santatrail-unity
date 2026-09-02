@@ -19,17 +19,30 @@ public class FlightLogger : MonoBehaviour
 
     void Start()
     {
-        string folder = Application.dataPath + "/FlightLogs/";
+        string folder = Path.Combine(
+            Application.persistentDataPath,
+            "SantaTrail",
+            "FlightLogs"
+        );
 
-        if (!Directory.Exists(folder))
-            Directory.CreateDirectory(folder);
+        Directory.CreateDirectory(folder);
 
         string timestamp = System.DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-        path = folder + "flight_log_" + timestamp + ".csv";
+        path = Path.Combine(folder, "flight_log_" + timestamp + ".csv");
 
         if (deliveryScoreManager == null)
         {
             deliveryScoreManager = Object.FindFirstObjectByType<DeliveryScoreManager>();
+        }
+
+        if (drone == null && deliveryScoreManager != null)
+        {
+            drone = deliveryScoreManager.drone;
+        }
+
+        if (drone == null)
+        {
+            Debug.LogWarning("FlightLogger could not find a drone. Assign Drone in the Inspector.");
         }
 
         if (deliveryScoreManager != null)

@@ -150,6 +150,40 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("Minimum seconds between reposition nudges.")]
     public float guidedNudgeIntervalSeconds = 0.5f;
 
+    [Header("Map Boundary Stop")]
+    [Tooltip("Request BRAKE from ArduPilot when the vehicle reaches the configured map boundary.")]
+    [SerializeField] bool enforceMapGeofence = true;
+
+    [Tooltip("Use the active SceneLoaderArcgis map radius instead of duplicating the radius here.")]
+    [SerializeField] bool useSceneMapExtentForGeofence = true;
+
+    [Tooltip("Use the fallback radius only when no SceneLoaderArcgis map extent is available.")]
+    [SerializeField] bool useFallbackGeofenceRadius = false;
+
+    [Min(1f)]
+    [Tooltip("Fallback playable radius in metres when no scene map extent is available.")]
+    [SerializeField] float fallbackGeofenceRadiusMeters = 500f;
+
+    [Min(0f)]
+    [Tooltip("Stop before the exact map edge by this many metres.")]
+    [SerializeField] float geofenceBufferMeters = 20f;
+
+    [Min(0.2f)]
+    [Tooltip("Minimum seconds between automatic BRAKE requests.")]
+    [SerializeField] float geofenceCommandIntervalSeconds = 1f;
+
+    [Header("Altitude Limit")]
+    [Tooltip("Request BRAKE from ArduPilot when the drone reaches the maximum relative altitude.")]
+    [SerializeField] bool enforceMaximumAltitude = true;
+
+    [Min(1f)]
+    [Tooltip("Maximum altitude above the ArduPilot home position in metres.")]
+    [SerializeField] float maximumRelativeAltitudeMeters = 45f;
+
+    [Min(0f)]
+    [Tooltip("Stop before the exact altitude limit by this many metres.")]
+    [SerializeField] float altitudeLimitBufferMeters = 3f;
+
     private double targetLat;
     private double targetLon;
     private double targetAlt;
@@ -202,6 +236,10 @@ public class MAVLinkReceiver : MonoBehaviour
     private bool hasCommandAck;
     private byte vehicleSystemId = 1;
     private byte vehicleComponentId = 1;
+    private bool mapGeofenceTriggered;
+    private double mapGeofenceDistanceMeters;
+    private bool altitudeLimitTriggered;
+    private float lastSafetyBrakeCommandTime = -1000f;
 
     public bool IsGuidedArmed => hbGuided && hbArmed;
     public bool IsGuidedMode => hbGuided;
@@ -214,6 +252,9 @@ public class MAVLinkReceiver : MonoBehaviour
     public Vector3 VelocityNed => new Vector3(velNorthMps, velEastMps, velDownMps);
     public float HorizontalSpeedMps => Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps);
     public float SpeedMps => Mathf.Sqrt(velNorthMps * velNorthMps + velEastMps * velEastMps + velDownMps * velDownMps);
+    public bool MapGeofenceTriggered => mapGeofenceTriggered;
+    public double MapGeofenceDistanceMeters => mapGeofenceDistanceMeters;
+    public bool AltitudeLimitTriggered => altitudeLimitTriggered;
 
     string GetCopterModeName(uint customMode)
     {
@@ -471,6 +512,208 @@ public class MAVLinkReceiver : MonoBehaviour
             Debug.LogWarning($"⚠️ MAVLink command send failed: {exception.Message}");
             return false;
         }
+    }
+
+    public void StopDrone()
+    {
+        if (SendBrakeMode())
+        {
+            Debug.Log("MAVLinkReceiver: BRAKE requested from StopDrone().");
+        }
+        else
+        {
+            Debug.LogWarning("MAVLinkReceiver: could not send BRAKE; MAVLink is not connected.");
+        }
+    }
+
+    void CheckMapGeofence()
+    {
+        if (!enforceMapGeofence ||
+            !hasTargetPosition ||
+            !GameManager.hasHomeLocation)
+        {
+            return;
+        }
+
+        if (!TryGetGeofenceRadius(out double radiusMeters))
+        {
+            return;
+        }
+
+        mapGeofenceDistanceMeters = CalculateDistanceMeters(
+            GameManager.homeLat,
+            GameManager.homeLon,
+            targetLat,
+            targetLon
+        );
+
+        double triggerRadiusMeters = System.Math.Max(
+            1.0,
+            radiusMeters - System.Math.Max(0.0, geofenceBufferMeters)
+        );
+
+        if (mapGeofenceTriggered &&
+            mapGeofenceDistanceMeters <= radiusMeters * 0.85)
+        {
+            mapGeofenceTriggered = false;
+        }
+
+        if (mapGeofenceDistanceMeters < triggerRadiusMeters || !hbArmed)
+        {
+            return;
+        }
+
+        if (hbCustomMode == 17u)
+        {
+            mapGeofenceTriggered = true;
+            return;
+        }
+
+        if (Time.time - lastSafetyBrakeCommandTime <
+            Mathf.Max(0.2f, geofenceCommandIntervalSeconds))
+        {
+            return;
+        }
+
+        lastSafetyBrakeCommandTime = Time.time;
+
+        if (!SendBrakeMode())
+        {
+            return;
+        }
+
+        mapGeofenceTriggered = true;
+        Debug.LogWarning(
+            $"MAP BOUNDARY: vehicle is {mapGeofenceDistanceMeters:F1}m " +
+            $"from home outside the {radiusMeters:F1}m map radius. " +
+            "BRAKE requested from ArduPilot."
+        );
+    }
+
+    void CheckAltitudeLimit()
+    {
+        if (!enforceMaximumAltitude ||
+            !hasTargetPosition ||
+            !hbArmed ||
+            float.IsNaN(targetRelativeAlt) ||
+            float.IsInfinity(targetRelativeAlt))
+        {
+            return;
+        }
+
+        float maximumAltitude = Mathf.Max(1f, maximumRelativeAltitudeMeters);
+        float triggerAltitude = Mathf.Max(
+            0.1f,
+            maximumAltitude - Mathf.Max(0f, altitudeLimitBufferMeters)
+        );
+
+        if (altitudeLimitTriggered &&
+            targetRelativeAlt <= maximumAltitude * 0.85f)
+        {
+            altitudeLimitTriggered = false;
+        }
+
+        if (targetRelativeAlt < triggerAltitude)
+        {
+            return;
+        }
+
+        if (hbCustomMode == 17u)
+        {
+            altitudeLimitTriggered = true;
+            return;
+        }
+
+        if (Time.time - lastSafetyBrakeCommandTime <
+            Mathf.Max(0.2f, geofenceCommandIntervalSeconds))
+        {
+            return;
+        }
+
+        lastSafetyBrakeCommandTime = Time.time;
+
+        if (!SendBrakeMode())
+        {
+            return;
+        }
+
+        altitudeLimitTriggered = true;
+        Debug.LogWarning(
+            $"ALTITUDE LIMIT: vehicle is at {targetRelativeAlt:F1}m " +
+            $"relative altitude and the limit is {maximumAltitude:F1}m. " +
+            "BRAKE requested from ArduPilot."
+        );
+    }
+
+    bool TryGetGeofenceRadius(out double radiusMeters)
+    {
+        radiusMeters = 0.0;
+
+        if (useSceneMapExtentForGeofence &&
+            SceneLoaderArcgis.TryGetConfiguredMapExtentRadius(out radiusMeters))
+        {
+            return true;
+        }
+
+        if (!useFallbackGeofenceRadius)
+        {
+            return false;
+        }
+
+        radiusMeters = System.Math.Max(1.0, fallbackGeofenceRadiusMeters);
+        return true;
+    }
+
+    static double CalculateDistanceMeters(
+        double latitude1,
+        double longitude1,
+        double latitude2,
+        double longitude2)
+    {
+        const double earthRadiusMeters = 6371000.0;
+        double latitude1Radians = latitude1 * System.Math.PI / 180.0;
+        double latitude2Radians = latitude2 * System.Math.PI / 180.0;
+        double deltaLatitude = (latitude2 - latitude1) * System.Math.PI / 180.0;
+        double deltaLongitude = (longitude2 - longitude1) * System.Math.PI / 180.0;
+
+        double sinLatitude = System.Math.Sin(deltaLatitude * 0.5);
+        double sinLongitude = System.Math.Sin(deltaLongitude * 0.5);
+        double haversine =
+            sinLatitude * sinLatitude +
+            System.Math.Cos(latitude1Radians) *
+            System.Math.Cos(latitude2Radians) *
+            sinLongitude * sinLongitude;
+
+        haversine = System.Math.Max(0.0, System.Math.Min(1.0, haversine));
+        return earthRadiusMeters * 2.0 * System.Math.Atan2(
+            System.Math.Sqrt(haversine),
+            System.Math.Sqrt(1.0 - haversine)
+        );
+    }
+
+    bool SendBrakeMode()
+    {
+        if (txParser == null)
+        {
+            return false;
+        }
+
+        MAVLink.mavlink_set_mode_t setMode =
+            new MAVLink.mavlink_set_mode_t(
+                17u,
+                vehicleSystemId,
+                (byte)MAVLink.MAV_MODE_FLAG.CUSTOM_MODE_ENABLED
+            );
+
+        byte[] brakePacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.SET_MODE,
+            setMode,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        return SendToVehicle(brakePacket);
     }
 
     void Update()
@@ -849,6 +1092,8 @@ public class MAVLinkReceiver : MonoBehaviour
             gpsMsgCount++;
 
             hasTargetPosition = true;
+            CheckMapGeofence();
+            CheckAltitudeLimit();
 
             // =====================================================
             // GPS HEADING
@@ -1273,6 +1518,24 @@ public class MAVLinkReceiver : MonoBehaviour
         debugSb.Append("target brg(nav): ").Append(hasNavTargetDist ? navTargetBearingDeg.ToString("F1") : "N/A").Append(" deg\n");
         debugSb.Append("armed/guided: ").Append(hbArmed ? "Y" : "N").Append(" / ").Append(hbGuided ? "Y" : "N").Append('\n');
         debugSb.Append("custom mode: ").Append(hbCustomMode).Append(" (").Append(GetCopterModeName(hbCustomMode)).Append(")\n");
+        if (enforceMapGeofence)
+        {
+            debugSb.Append("map boundary: ")
+                .Append(mapGeofenceDistanceMeters.ToString("F1"))
+                .Append("m / ")
+                .Append(mapGeofenceTriggered ? "BRAKE" : "clear")
+                .Append('\n');
+        }
+        if (enforceMaximumAltitude)
+        {
+            debugSb.Append("altitude limit: ")
+                .Append(targetRelativeAlt.ToString("F1"))
+                .Append("m / ")
+                .Append(maximumRelativeAltitudeMeters.ToString("F1"))
+                .Append("m / ")
+                .Append(altitudeLimitTriggered ? "BRAKE" : "clear")
+                .Append('\n');
+        }
         debugSb.Append("landed: ").Append(landedState.ToString()).Append('\n');
         debugSb.Append("sys status: ").Append(hbSystemStatus).Append('\n');
         if (hasCommandAck)

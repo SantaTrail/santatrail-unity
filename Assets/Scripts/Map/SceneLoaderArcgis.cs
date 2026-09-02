@@ -112,7 +112,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         "1 matches the source exactly; 1.3 makes the visible house fill " +
         "the wider ArcGIS building shadow."
     )]
-    [SerializeField] float osmWallFootprintScale = 1.3f;
+    [SerializeField] float osmWallFootprintScale = 1.05f;
 
     [System.Serializable]
     public class BuildingOrientationRule
@@ -342,11 +342,22 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     bool fallbackOriginSet;
     double fallbackOriginLat;
     double fallbackOriginLon;
+    Coroutine mapExtentCoroutine;
     Transform generatedObjectsRoot;
     Transform generatedBuildingsRoot;
     Transform droneTransform;
     int visibleBuildingCounter;
     Transform generatedEnvironmentRoot;
+
+    static SceneLoaderArcgis configuredMapExtentSource;
+    static bool hasConfiguredMapExtent;
+    static double configuredMapExtentRadiusMeters;
+
+    public static bool TryGetConfiguredMapExtentRadius(out double radiusMeters)
+    {
+        radiusMeters = configuredMapExtentRadiusMeters;
+        return hasConfiguredMapExtent && radiusMeters > 0.0;
+    }
 
     // The current level bootstrap lives in SceneLoaderArcgis.Bootstrap.cs.
     // Keep this retired implementation out of the compiled partial class so
@@ -2462,8 +2473,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 depth
             );
 
-            // Use one uniform map-shadow correction for all modular houses,
-            // never a different collision-driven scale for each building.
+            // Start from one small map-shadow correction. The placement validator
+            // may reduce this per house when neighboring OSM footprints collide.
             float requestedFootprintScale = useModularHouse
                 ? Mathf.Clamp(osmWallFootprintScale, 1f, 1.5f)
                 : 1f;
@@ -4770,6 +4781,52 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     void RunPython()
     {
+        string backendDirectory = Path.GetDirectoryName(scriptPath);
+        string[] requiredBackendFiles =
+        {
+            "main.py",
+            "parser.py",
+            "osm.py",
+            "elevation.py",
+            "features.py",
+            "classifier.py"
+        };
+        List<string> missingBackendFiles = new List<string>();
+
+        if (!string.IsNullOrEmpty(backendDirectory))
+        {
+            for (int i = 0; i < requiredBackendFiles.Length; i++)
+            {
+                string requiredFile = Path.Combine(
+                    backendDirectory,
+                    requiredBackendFiles[i]
+                );
+                if (!File.Exists(requiredFile))
+                {
+                    missingBackendFiles.Add(requiredBackendFiles[i]);
+                }
+            }
+        }
+
+        if (missingBackendFiles.Count > 0)
+        {
+            string missingFiles = string.Join(", ", missingBackendFiles);
+            string errorMessage =
+                "The bundled terrain backend is incomplete. Missing: " +
+                missingFiles +
+                ". Rebuild the Windows player with all files from " +
+                "Assets/StreamingAssets/Backend.";
+
+            pythonProcessExitCode = -1;
+            pythonProcessCompleted = true;
+            Debug.LogError("❌ " + errorMessage);
+            if (loadingScreen != null)
+            {
+                loadingScreen.ShowError(errorMessage);
+            }
+            return;
+        }
+
         string resolvedPythonPath = ResolvePythonExecutable();
         string customLocation = string.Format(
             CultureInfo.InvariantCulture,
@@ -4801,6 +4858,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+
+        // Keep the bundled Windows Python process from using the machine's
+        // legacy cp1252 console encoding when backend logs contain Unicode.
+        psi.Environment["PYTHONUTF8"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8:replace";
 
         pythonProcessCompleted = false;
         pythonProcessExitCode = int.MinValue;
@@ -4902,20 +4964,49 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         List<string> candidates = new List<string>();
 
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        candidates.Add(Path.Combine(
-            Application.streamingAssetsPath,
-            "Python",
-            "python.exe"
-        ));
+        bool useWindowsRuntime;
+#if UNITY_EDITOR
+        // Unity can compile for a Windows build target while Play Mode is
+        // still running inside the macOS editor. Use the actual host here.
+        useWindowsRuntime = Application.platform == RuntimePlatform.WindowsEditor;
+#elif UNITY_STANDALONE_WIN
+        useWindowsRuntime = true;
 #else
-        candidates.Add(Path.Combine(
-            Application.streamingAssetsPath,
-            "Python",
-            "bin",
-            "python3"
-        ));
+        useWindowsRuntime = false;
 #endif
+
+        if (useWindowsRuntime)
+        {
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+            candidates.Add(Path.Combine(
+                Application.streamingAssetsPath,
+                "Python",
+                "python.exe"
+            ));
+            candidates.Add(Path.Combine(
+                System.Environment.GetFolderPath(
+                    System.Environment.SpecialFolder.LocalApplicationData
+                ),
+                "SantaTrail",
+                "Python",
+                "python.exe"
+            ));
+#endif
+        }
+        else
+        {
+#if UNITY_EDITOR || UNITY_STANDALONE_OSX
+            candidates.Add(Path.Combine(
+                Application.streamingAssetsPath,
+                "Python",
+                "bin",
+                "python3"
+            ));
+            candidates.Add("/usr/bin/python3");
+            candidates.Add("/opt/homebrew/bin/python3");
+            candidates.Add("/usr/local/bin/python3");
+#endif
+        }
 
         foreach (string candidate in candidates)
         {
@@ -4925,11 +5016,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             }
         }
 
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        return "python";
-#else
-        return "python3";
-#endif
+        return useWindowsRuntime ? "python" : "python3";
     }
 
     bool TryConvertGPS(double lat, double lon, double alt, out Vector3 pos)

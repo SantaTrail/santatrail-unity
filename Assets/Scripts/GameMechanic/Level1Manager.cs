@@ -8,6 +8,7 @@ public class Level1Manager : MonoBehaviour
     private enum TutorialStep
     {
         WaitForConnection,
+        ShowMapMode,
         WaitForGuidedMode,
         WaitForTakeoff,
         WaitForControl,
@@ -28,6 +29,8 @@ public class Level1Manager : MonoBehaviour
     public bool showTutorial = true;
     [TextArea(2, 4)] public string welcomeMessage =
         "Welcome! First, open QGroundControl and make sure the drone is connected.";
+    [TextArea(2, 4)] public string mapModeMessage =
+        "QGroundControl opens in Satellite map mode automatically. Use the map to locate the drone and delivery area.";
     [TextArea(2, 4)] public string findTargetMessage =
         "Change the flight mode to Guided so the drone accepts the tutorial controls.";
     [TextArea(2, 4)] public string approachMessage =
@@ -37,6 +40,7 @@ public class Level1Manager : MonoBehaviour
     [TextArea(2, 4)] public string transitionMessage =
         "Good. The delivery targets are now unlocked. You still need to deliver 5 presents.";
     [Min(0.1f)] public float connectionHoldSeconds = 8f;
+    [Min(0.1f)] public float mapModeDisplaySeconds = 4f;
     [Min(0.1f)] public float takeoffAltitudeMeters = 1.5f;
     [Min(0.1f)] public float controlMovementMeters = 2f;
 
@@ -54,6 +58,7 @@ public class Level1Manager : MonoBehaviour
     private Vector3 controlStartPosition;
     private bool hasControlReference;
     private float connectionDetectedTime = -1f;
+    private float mapModeInstructionStartedAt = -1f;
 
     public float LevelStartedAt { get; private set; } = -1f;
     public float LevelCompletedAt { get; private set; } = -1f;
@@ -89,6 +94,7 @@ public class Level1Manager : MonoBehaviour
             tutorialStep = TutorialStep.WaitForConnection;
             hasControlReference = false;
             connectionDetectedTime = -1f;
+            mapModeInstructionStartedAt = -1f;
             LevelStartedAt = -1f;
             LevelCompletedAt = -1f;
             SetObjectiveText("Tutorial step 1/4");
@@ -195,8 +201,19 @@ public class Level1Manager : MonoBehaviour
 
                     if ((Time.time - connectionDetectedTime) >= connectionHoldSeconds)
                     {
-                        SetTutorialStep(TutorialStep.WaitForGuidedMode);
+                        SetTutorialStep(TutorialStep.ShowMapMode);
                     }
+                }
+                break;
+
+            case TutorialStep.ShowMapMode:
+                if (mapModeInstructionStartedAt < 0f)
+                {
+                    mapModeInstructionStartedAt = Time.time;
+                }
+                else if ((Time.time - mapModeInstructionStartedAt) >= mapModeDisplaySeconds)
+                {
+                    SetTutorialStep(TutorialStep.WaitForGuidedMode);
                 }
                 break;
 
@@ -325,19 +342,23 @@ public class Level1Manager : MonoBehaviour
         switch (tutorialStep)
         {
             case TutorialStep.WaitForConnection:
-                SetObjectiveText("Tutorial step 1/4");
+                SetObjectiveText("Tutorial step 1/5");
                 SetStatusText(welcomeMessage);
                 break;
+            case TutorialStep.ShowMapMode:
+                SetObjectiveText("Tutorial step 2/5");
+                SetStatusText(mapModeMessage);
+                break;
             case TutorialStep.WaitForGuidedMode:
-                SetObjectiveText("Tutorial step 2/4");
+                SetObjectiveText("Tutorial step 3/5");
                 SetStatusText(findTargetMessage);
                 break;
             case TutorialStep.WaitForTakeoff:
-                SetObjectiveText("Tutorial step 3/4");
+                SetObjectiveText("Tutorial step 4/5");
                 SetStatusText(approachMessage);
                 break;
             case TutorialStep.WaitForControl:
-                SetObjectiveText("Tutorial step 4/4");
+                SetObjectiveText("Tutorial step 5/5");
                 SetStatusText(holdPositionMessage);
                 break;
             case TutorialStep.DeliveryUnlocked:
