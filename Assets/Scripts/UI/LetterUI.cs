@@ -13,58 +13,119 @@ public class LetterUI : MonoBehaviour
     public TMP_FontAsset age7to8Font;
     public TMP_FontAsset age9to11Font;
 
-    public void UpdateUI(ChildData child, string aiLetter)
+    public void UpdateUI(
+        ChildData child,
+        string aiLetter)
     {
-        ApplyFont(child.age);
+        if (child == null)
+        {
+            return;
+        }
 
-        childName.SetText(child.name.ToUpper());
-        childAge.SetText("AGE {0}", child.age);
-        letter.SetText(aiLetter);
-        letter.ForceMeshUpdate();
+        ApplyFont(
+            child.age
+        );
+
+        if (childName != null)
+        {
+            childName.SetText(
+                child.name.ToUpper()
+            );
+        }
+
+        if (childAge != null)
+        {
+            childAge.SetText(
+                "AGE {0}",
+                child.age
+            );
+        }
+
+        if (letter != null)
+        {
+            letter.SetText(
+                aiLetter ?? ""
+            );
+
+            letter.ForceMeshUpdate();
+        }
     }
 
-    void ApplyFont(int age)
+    private void ApplyFont(
+        int age)
     {
         TMP_FontAsset selectedFont;
-        
+
         if (age <= 4)
         {
-            selectedFont = age3to4Font;
-            // for ajusting the font space for realistic
-            letter.fontSize = 30;
-            letter.lineSpacing = 1;
-        }
+            selectedFont =
+                age3to4Font;
 
+            if (letter != null)
+            {
+                letter.fontSize = 30;
+                letter.lineSpacing = 1;
+            }
+        }
         else if (age <= 6)
         {
-            selectedFont = age5to6Font;
-            letter.fontSize = 30;
-            letter.lineSpacing = 0.1f;
-        }
+            selectedFont =
+                age5to6Font;
 
+            if (letter != null)
+            {
+                letter.fontSize = 30;
+                letter.lineSpacing = 0.1f;
+            }
+        }
         else if (age <= 8)
         {
-            selectedFont = age7to8Font;
-            letter.fontSize = 30;
-            letter.lineSpacing = 1;
-            childName.fontSize = 50;
-            childAge.fontSize = 50;
-        }
+            selectedFont =
+                age7to8Font;
 
+            if (letter != null)
+            {
+                letter.fontSize = 30;
+                letter.lineSpacing = 1;
+            }
+        }
         else
         {
-            selectedFont = age9to11Font;
-            letter.fontSize = 20;
-            letter.lineSpacing = 1;
+            selectedFont =
+                age9to11Font;
+
+            if (letter != null)
+            {
+                letter.fontSize = 20;
+                letter.lineSpacing = 1;
+            }
         }
 
-        // Apply font
-        letter.font = selectedFont;
-        childName.font = selectedFont;
-        childAge.font = selectedFont;
+        if (letter != null)
+        {
+            letter.font =
+                selectedFont;
 
-        // Set font sizes
-        childName.fontSize = 30;
-        childAge.fontSize = 30;
+            letter.fontSize =
+                age > 8 ? 20 : 30;
+        }
+
+        if (childName != null)
+        {
+            childName.font =
+                selectedFont;
+
+            childName.fontSize =
+                30;
+        }
+
+        if (childAge != null)
+        {
+            childAge.font =
+                selectedFont;
+
+            childAge.fontSize =
+                30;
+        }
     }
 }
