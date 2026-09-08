@@ -78,7 +78,7 @@ public class Level1Manager : MonoBehaviour
 
         if (deliveryScoreManager == null)
         {
-            SetObjectiveText(0);
+            SetObjectiveText($"{GetObjectiveLabel()}: 0/0");
             SetStatusText("Waiting for delivery system...");
             Debug.LogWarning("Level1Manager: DeliveryScoreManager was not found.");
             return;
@@ -97,7 +97,7 @@ public class Level1Manager : MonoBehaviour
             mapModeInstructionStartedAt = -1f;
             LevelStartedAt = -1f;
             LevelCompletedAt = -1f;
-            SetObjectiveText("Tutorial step 1/4");
+            RefreshDeliveryObjective();
             SetStatusText(welcomeMessage);
         }
         else
@@ -141,6 +141,7 @@ public class Level1Manager : MonoBehaviour
 
     void Update()
     {
+        if (PauseMenuController.IsPaused) return;
         if (completed || deliveryScoreManager == null)
         {
             return;
@@ -296,11 +297,6 @@ public class Level1Manager : MonoBehaviour
             return;
         }
 
-        if (showTutorial && !tutorialFinished)
-        {
-            return;
-        }
-
         RefreshDeliveryObjective();
 
         if (tutorialFinished &&
@@ -308,14 +304,6 @@ public class Level1Manager : MonoBehaviour
             deliveryScoreManager.CompletedTargets > 0)
         {
             SetStatusText("");
-        }
-    }
-
-    void SetObjectiveText(int remaining)
-    {
-        if (objectiveText != null)
-        {
-            objectiveText.text = $"{objectivePrefix}{remaining}";
         }
     }
 
@@ -342,23 +330,18 @@ public class Level1Manager : MonoBehaviour
         switch (tutorialStep)
         {
             case TutorialStep.WaitForConnection:
-                SetObjectiveText("Tutorial step 1/5");
                 SetStatusText(welcomeMessage);
                 break;
             case TutorialStep.ShowMapMode:
-                SetObjectiveText("Tutorial step 2/5");
                 SetStatusText(mapModeMessage);
                 break;
             case TutorialStep.WaitForGuidedMode:
-                SetObjectiveText("Tutorial step 3/5");
                 SetStatusText(findTargetMessage);
                 break;
             case TutorialStep.WaitForTakeoff:
-                SetObjectiveText("Tutorial step 4/5");
                 SetStatusText(approachMessage);
                 break;
             case TutorialStep.WaitForControl:
-                SetObjectiveText("Tutorial step 5/5");
                 SetStatusText(holdPositionMessage);
                 break;
             case TutorialStep.DeliveryUnlocked:
@@ -443,6 +426,14 @@ public class Level1Manager : MonoBehaviour
             ? deliveryScoreManager.TotalTargets
             : deliveryScoreManager.targetBuildingCount;
 
-        objectiveText.text = $"{objectivePrefix}{completedTargets}/{Mathf.Max(1, totalTargets)}";
+        objectiveText.text =
+            $"{GetObjectiveLabel()}: {completedTargets}/{Mathf.Max(1, totalTargets)}";
+    }
+
+    private string GetObjectiveLabel()
+    {
+        return string.IsNullOrWhiteSpace(objectivePrefix)
+            ? "Deliver presents"
+            : objectivePrefix.Trim();
     }
 }

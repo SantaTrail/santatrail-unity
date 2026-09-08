@@ -72,6 +72,7 @@ public class FlightLogger : MonoBehaviour
 
     void Update()
     {
+        if (PauseMenuController.IsPaused || Time.deltaTime <= 0f) return;
         // ✅ auto-find terrain if not assigned
         if (terrain == null)
         {

@@ -197,7 +197,9 @@ public sealed class TitleSceneStartupController : MonoBehaviour
             {
                 SetProgress(
                     0.86f,
-                    "Some flight tools are missing; Santa will use guided mode..."
+                    string.IsNullOrWhiteSpace(SantaTrailWindowsFirstRunSetup.LastError)
+                        ? "Some flight tools are missing; Santa will use guided mode..."
+                        : SantaTrailWindowsFirstRunSetup.LastError
                 );
                 yield return new WaitForSecondsRealtime(1.2f);
             }

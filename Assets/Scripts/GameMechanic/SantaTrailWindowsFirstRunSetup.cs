@@ -16,12 +16,30 @@ public static class SantaTrailWindowsFirstRunSetup
 {
     private const string QGroundControlUrl =
         "https://github.com/mavlink/qgroundcontrol/releases/latest/download/QGroundControl-installer-AMD64.exe";
-    private const string MissionPlannerUrl =
-        "https://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-latest.zip";
     private const string PythonUrl =
         "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip";
+    private const string VisualCppUrl =
+        "https://aka.ms/vc14/vc_redist.x64.exe";
+    private const string NativeSitlBaseUrl =
+        "https://firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable/";
+    private static readonly string[] NativeSitlSupportFiles =
+    {
+        "cygatomic-1.dll",
+        "cyggcc_s-1.dll",
+        "cyggcc_s-seh-1.dll",
+        "cyggomp-1.dll",
+        "cygiconv-2.dll",
+        "cygintl-8.dll",
+        "cygquadmath-0.dll",
+        "cygssp-0.dll",
+        "cygstdc++-6.dll",
+        "cygwin1.dll"
+    };
+    private static readonly Version MinimumVisualCppVersion =
+        new Version(14, 38, 33130, 0);
 
     private static Task setupTask;
+    public static string LastError { get; private set; }
 
     public static bool IsNeeded()
     {
@@ -58,6 +76,13 @@ public static class SantaTrailWindowsFirstRunSetup
     private static List<string> GetMissingComponents()
     {
         List<string> missingComponents = new List<string>();
+        Version visualCppVersion = GetVisualCppRuntimeVersion();
+        if (visualCppVersion == null ||
+            visualCppVersion.CompareTo(MinimumVisualCppVersion) < 0)
+        {
+            missingComponents.Add("Microsoft map runtime");
+        }
+
         if (FindQGroundControl() == null)
         {
             missingComponents.Add("QGroundControl");
@@ -68,9 +93,9 @@ public static class SantaTrailWindowsFirstRunSetup
             missingComponents.Add("portable Python");
         }
 
-        if (FindNativeSitl() == null && FindMissionPlanner() == null)
+        if (FindNativeSitl() == null)
         {
-            missingComponents.Add("ArduPilot SITL or Mission Planner");
+            missingComponents.Add("ArduPilot SITL");
         }
 
         return missingComponents;
@@ -127,6 +152,8 @@ public static class SantaTrailWindowsFirstRunSetup
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
     private static async Task EnsureWindowsRuntimesAsync()
     {
+        LastError = null;
+
         try
         {
             string dataDirectory = Path.Combine(
@@ -135,6 +162,61 @@ public static class SantaTrailWindowsFirstRunSetup
             );
             string downloadDirectory = Path.Combine(dataDirectory, "Downloads");
             Directory.CreateDirectory(downloadDirectory);
+
+            Version visualCppVersion = GetVisualCppRuntimeVersion();
+            if (visualCppVersion == null ||
+                visualCppVersion.CompareTo(MinimumVisualCppVersion) < 0)
+            {
+                string cachedInstaller = Path.Combine(
+                    GetGameRoot(),
+                    "InstallerCache",
+                    "vc_redist.x64.exe"
+                );
+                string installer = File.Exists(cachedInstaller)
+                    ? cachedInstaller
+                    : Path.Combine(downloadDirectory, "vc_redist.x64.exe");
+
+                if (!File.Exists(cachedInstaller))
+                {
+                    await DownloadFileAsync(
+                        VisualCppUrl,
+                        installer,
+                        "Microsoft map runtime"
+                    );
+                }
+
+                UnityEngine.Debug.Log(
+                    "SantaTrail: opening the official Microsoft map runtime installer. " +
+                    "Accept the Windows permission prompt once; setup then continues automatically."
+                );
+
+                int exitCode = await RunInstallerAndWaitAsync(
+                    installer,
+                    "/install /passive /norestart",
+                    "runas"
+                );
+                if (exitCode == 3010)
+                {
+                    throw new InvalidOperationException(
+                        "Windows must restart once to finish the Microsoft map runtime."
+                    );
+                }
+                if (exitCode != 0 && exitCode != 1638)
+                {
+                    throw new InvalidOperationException(
+                        "Microsoft map runtime installer returned code " + exitCode + "."
+                    );
+                }
+
+                visualCppVersion = GetVisualCppRuntimeVersion();
+                if (visualCppVersion == null ||
+                    visualCppVersion.CompareTo(MinimumVisualCppVersion) < 0)
+                {
+                    throw new InvalidOperationException(
+                        "Microsoft map runtime installation did not complete."
+                    );
+                }
+            }
 
             if (FindPython() == null)
             {
@@ -174,29 +256,10 @@ public static class SantaTrailWindowsFirstRunSetup
                 await RunInstallerAndWaitAsync(installer);
             }
 
-            if (FindNativeSitl() == null && FindMissionPlanner() == null)
+            if (FindNativeSitl() == null)
             {
-                string missionPlannerArchive = Path.Combine(
-                    downloadDirectory,
-                    "MissionPlanner-latest.zip"
-                );
-                await DownloadFileAsync(
-                    MissionPlannerUrl,
-                    missionPlannerArchive,
-                    "Mission Planner"
-                );
-
-                string missionPlannerDirectory = Path.Combine(
-                    dataDirectory,
-                    "MissionPlanner"
-                );
-                Directory.CreateDirectory(missionPlannerDirectory);
-                await Task.Run(() =>
-                    ZipFile.ExtractToDirectory(
-                        missionPlannerArchive,
-                        missionPlannerDirectory,
-                        true
-                    )
+                await InstallNativeSitlAsync(
+                    Path.Combine(dataDirectory, "NativeSITL")
                 );
             }
 
@@ -208,20 +271,59 @@ public static class SantaTrailWindowsFirstRunSetup
                 );
             }
 
-            if (FindNativeSitl() == null && FindMissionPlanner() == null)
+            if (FindNativeSitl() == null)
             {
                 UnityEngine.Debug.LogWarning(
-                    "SantaTrail: Mission Planner could not be prepared. " +
-                    "Automatic flight requires NativeSITL\\ArduCopter.exe."
+                    "SantaTrail: ArduPilot SITL could not be prepared. " +
+                    "QGroundControl and the game will not receive vehicle telemetry."
                 );
             }
         }
         catch (Exception exception)
         {
+            LastError = exception.Message;
             UnityEngine.Debug.LogError(
                 "SantaTrail first-run setup failed: " + exception.Message
             );
         }
+    }
+
+    private static async Task InstallNativeSitlAsync(string destinationDirectory)
+    {
+        Directory.CreateDirectory(destinationDirectory);
+
+        string executable = Path.Combine(destinationDirectory, "ArduCopter.exe");
+        if (File.Exists(executable) && new FileInfo(executable).Length < 1024 * 1024)
+        {
+            File.Delete(executable);
+        }
+
+        await DownloadFileAsync(
+            NativeSitlBaseUrl + "ArduCopter.elf",
+            executable,
+            "ArduPilot SITL"
+        );
+
+        for (int i = 0; i < NativeSitlSupportFiles.Length; i++)
+        {
+            string fileName = NativeSitlSupportFiles[i];
+            await DownloadFileAsync(
+                NativeSitlBaseUrl + fileName,
+                Path.Combine(destinationDirectory, fileName),
+                "ArduPilot support file " + fileName
+            );
+        }
+
+        if (!File.Exists(executable) || new FileInfo(executable).Length < 1024 * 1024)
+        {
+            throw new InvalidDataException(
+                "The ArduPilot SITL download was incomplete."
+            );
+        }
+
+        UnityEngine.Debug.Log(
+            "SantaTrail: native ArduPilot SITL is ready at " + executable
+        );
     }
 
     private static async Task DownloadFileAsync(
@@ -277,24 +379,71 @@ public static class SantaTrailWindowsFirstRunSetup
         }
     }
 
-    private static Task RunInstallerAndWaitAsync(string installer)
+    private static Task<int> RunInstallerAndWaitAsync(
+        string installer,
+        string arguments = "",
+        string verb = ""
+    )
     {
-        Process process = Process.Start(new ProcessStartInfo
+        ProcessStartInfo startInfo = new ProcessStartInfo
         {
             FileName = installer,
+            Arguments = arguments,
             UseShellExecute = true,
             WorkingDirectory = Path.GetDirectoryName(installer),
             CreateNoWindow = false
-        });
+        };
+
+        if (!string.IsNullOrWhiteSpace(verb))
+        {
+            startInfo.Verb = verb;
+        }
+
+        Process process = Process.Start(startInfo);
 
         if (process == null)
         {
             throw new InvalidOperationException(
-                "The QGroundControl installer could not be opened."
+                "The installer could not be opened."
             );
         }
 
-        return Task.Run(() => process.WaitForExit());
+        return Task.Run(() =>
+        {
+            process.WaitForExit();
+            return process.ExitCode;
+        });
+    }
+
+    private static Version GetVisualCppRuntimeVersion()
+    {
+        try
+        {
+            string runtimePath = Path.Combine(
+                Environment.SystemDirectory,
+                "vcruntime140.dll"
+            );
+            if (!File.Exists(runtimePath))
+            {
+                return null;
+            }
+
+            FileVersionInfo version = FileVersionInfo.GetVersionInfo(runtimePath);
+            return new Version(
+                Math.Max(0, version.FileMajorPart),
+                Math.Max(0, version.FileMinorPart),
+                Math.Max(0, version.FileBuildPart),
+                Math.Max(0, version.FilePrivatePart)
+            );
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning(
+                "SantaTrail could not read the Microsoft map runtime version: " +
+                exception.Message
+            );
+            return null;
+        }
     }
 
     private static string FindQGroundControl()
@@ -349,11 +498,47 @@ public static class SantaTrailWindowsFirstRunSetup
         return File.Exists(installedPython) ? installedPython : null;
     }
 
-    private static string FindNativeSitl()
+    public static string FindNativeSitl()
     {
         string gameRoot = GetGameRoot();
-        string nativeSitlDirectory = Path.Combine(gameRoot, "NativeSITL");
-        return FindFile(nativeSitlDirectory, "ArduCopter.exe");
+        string localAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData
+        );
+        string packagedExecutable = FindFile(
+            Path.Combine(gameRoot, "NativeSITL"),
+            "ArduCopter.exe"
+        );
+        if (packagedExecutable != null)
+        {
+            return packagedExecutable;
+        }
+
+        string downloadedDirectory = Path.Combine(
+            localAppData,
+            "SantaTrail",
+            "NativeSITL"
+        );
+        string downloadedExecutable = Path.Combine(
+            downloadedDirectory,
+            "ArduCopter.exe"
+        );
+        if (!File.Exists(downloadedExecutable))
+        {
+            return null;
+        }
+
+        for (int i = 0; i < NativeSitlSupportFiles.Length; i++)
+        {
+            if (!File.Exists(Path.Combine(
+                    downloadedDirectory,
+                    NativeSitlSupportFiles[i]
+                )))
+            {
+                return null;
+            }
+        }
+
+        return downloadedExecutable;
     }
 
     private static string FindFile(string directory, string fileName)

@@ -1069,7 +1069,7 @@ MonoBehaviour:
   deliveryScoreManager: {fileID: 0}
   objectiveText: {fileID: 1111008509}
   levelStatusText: {fileID: 1267712440}
-  objectivePrefix: 
+  objectivePrefix: Deliver presents
   completedMessage: Nice work! You finished the guided-flight tutorial.
   showTutorial: 1
   welcomeMessage: Welcome! First, open QGroundControl and make sure the drone is
@@ -4427,7 +4427,7 @@ MonoBehaviour:
   m_VertexBufferAutoSizeReduction: 0
   m_useMaxVisibleDescender: 1
   m_pageToDisplay: 1
-  m_margin: {x: -278.1454, y: 0, z: -1.9004822, w: -19.016632}
+  m_margin: {x: -572.0298, y: 0, z: -1.9004822, w: -19.016632}
   m_isUsingLegacyAnimationComponent: 0
   m_isVolumetricText: 0
   m_hasFontAssetChanged: 0
@@ -4624,6 +4624,15 @@ MonoBehaviour:
   enableGuidedRepositionNudge: 1
   guidedStallSecondsBeforeNudge: 2
   guidedNudgeIntervalSeconds: 0.5
+  enforceMapGeofence: 1
+  useSceneMapExtentForGeofence: 1
+  useFallbackGeofenceRadius: 0
+  fallbackGeofenceRadiusMeters: 500
+  geofenceBufferMeters: 20
+  geofenceCommandIntervalSeconds: 1
+  enforceMaximumAltitude: 1
+  maximumRelativeAltitudeMeters: 45
+  altitudeLimitBufferMeters: 3
 --- !u!4 &1214233501
 Transform:
   m_ObjectHideFlags: 0
@@ -6011,7 +6020,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1625187251
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -7453,6 +7462,8 @@ MonoBehaviour:
   level1RequiredDeliveries: 5
   tutorialLockout: 0
   showDeliveryRingsDuringTutorial: 1
+  altitudeDisciplineMinimumMeters: 20
+  altitudeDisciplineMaximumMeters: 45
   score: 0
 --- !u!1 &1901079121
 GameObject:
@@ -9614,7 +9625,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -0.0000025050424
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.y
@@ -9622,7 +9633,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -10.439995
+      value: -11.34
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.w
@@ -9670,11 +9681,15 @@ PrefabInstance:
       objectReference: {fileID: 9019559010159681732}
     - target: {fileID: 8873881419992814454, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_Enabled
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 8873881419992814454, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: invertHeading
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8873881419992814454, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
+      propertyPath: mountedFieldOfView
+      value: 37.5
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalScale.x

@@ -676,15 +676,23 @@ public partial class SceneLoaderArcgis
                 }
                 else
                 {
+                    string pythonDiagnostic =
+                        string.IsNullOrEmpty(pythonProcessError)
+                            ? "Exit code " + pythonProcessExitCode
+                            : pythonProcessError;
+
                     Debug.LogError(
                         "❌ Python level generation failed with exit code " +
-                        pythonProcessExitCode
+                        pythonProcessExitCode + ". " + pythonDiagnostic
                     );
 
                     if (loadingScreen != null)
                     {
-                        loadingScreen.ShowError(
-                            "Python level generation failed. Check the Console."
+                        loadingScreen.ShowActionableError(
+                            "The building generator could not start. Extract the complete " +
+                            "game folder, install the Microsoft Visual C++ 2015-2022 x64 " +
+                            "runtime, then start with Start SantaTrail.bat. Diagnostic log: " +
+                            Application.consoleLogPath + ". Error: " + pythonDiagnostic
                         );
                     }
 
@@ -859,14 +867,23 @@ public partial class SceneLoaderArcgis
 
                 if (!mapReady)
                 {
+                    string diagnostic = arcGISConverter != null
+                        ? arcGISConverter.GetDiagnosticSummary()
+                        : "ArcGISConverter is missing. Log=" + Application.consoleLogPath;
+
                     Debug.LogError(
-                        "❌ Level objects finished, but ArcGIS did not become ready."
+                        "❌ Level objects finished, but ArcGIS did not become ready. " +
+                        diagnostic
                     );
 
                     if (loadingScreen != null)
                     {
-                        loadingScreen.ShowError(
-                            "ArcGIS map did not finish loading. Check the Console."
+                        loadingScreen.ShowActionableError(
+                            "ArcGIS map did not finish loading. " +
+                            "On Windows, start the game with Start SantaTrail.bat, " +
+                            "install the Microsoft Visual C++ 2015-2022 x64 runtime, " +
+                            "and check your internet connection. Diagnostic log: " +
+                            Application.consoleLogPath
                         );
                     }
 
@@ -945,8 +962,14 @@ public partial class SceneLoaderArcgis
 
         if (loadingScreen != null)
         {
-            loadingScreen.ShowError(
-                "Loading timed out. Check ArcGIS, Python and the Console."
+            string diagnostic = arcGISConverter != null
+                ? arcGISConverter.GetDiagnosticSummary()
+                : "ArcGISConverter is missing. Log=" + Application.consoleLogPath;
+
+            loadingScreen.ShowActionableError(
+                "Loading timed out. On Windows, start with Start SantaTrail.bat " +
+                "and confirm the Microsoft Visual C++ 2015-2022 x64 runtime is installed. " +
+                diagnostic
             );
         }
     }

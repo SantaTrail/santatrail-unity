@@ -140,6 +140,10 @@ public class FlightLogDashboardUI : MonoBehaviour
     private TMP_Text deliveredSummaryText;
     private Slider spiritSlider;
     private TMP_Text spiritPercentageText;
+    private TMP_Text altitudeDisciplineText;
+    private TMP_Text minimumAltitudeText;
+    private TMP_Text maximumAltitudeText;
+    private Image altitudeDisciplineMeter;
     private bool configured;
     private bool generatedRowTemplate;
 
@@ -304,6 +308,10 @@ public class FlightLogDashboardUI : MonoBehaviour
         {
             magicAmountText = FindTextInHierarchy(canvas.transform, "MagicAmount");
             deliveredSummaryText = FindTextInHierarchy(canvas.transform, "PresentDeliverValue");
+            altitudeDisciplineText = FindTextInHierarchy(canvas.transform, "Altitude");
+            minimumAltitudeText = FindTextInHierarchy(canvas.transform, "MinAltValue");
+            maximumAltitudeText = FindTextInHierarchy(canvas.transform, "MaxAltValue");
+            altitudeDisciplineMeter = FindImageInHierarchy(canvas.transform, "Meter");
 
             Transform spirit = FindChildByName(canvas.transform, "ChristmasSpirit");
             if (spirit != null)
@@ -362,6 +370,30 @@ public class FlightLogDashboardUI : MonoBehaviour
                 "N0",
                 CultureInfo.InvariantCulture
             );
+        }
+
+        int altitudeDiscipline = ProgressSaveSystem.BestAltitudeDiscipline;
+        if (altitudeDisciplineText != null)
+        {
+            altitudeDisciplineText.text = ProgressSaveSystem.AverageAltitude.ToString(
+                "0.0",
+                CultureInfo.InvariantCulture
+            );
+        }
+
+        if (minimumAltitudeText != null)
+        {
+            minimumAltitudeText.text = FormatAltitude(ProgressSaveSystem.MinimumAltitude);
+        }
+
+        if (maximumAltitudeText != null)
+        {
+            maximumAltitudeText.text = FormatAltitude(ProgressSaveSystem.MaximumAltitude);
+        }
+
+        if (altitudeDisciplineMeter != null)
+        {
+            altitudeDisciplineMeter.fillAmount = altitudeDiscipline / 100f;
         }
 
         for (int index = 0; index < rows.Count; index++)
@@ -758,6 +790,24 @@ public class FlightLogDashboardUI : MonoBehaviour
         }
 
         return null;
+    }
+
+    private static Image FindImageInHierarchy(Transform root, string objectName)
+    {
+        foreach (Image image in root.GetComponentsInChildren<Image>(true))
+        {
+            if (string.Equals(image.name, objectName, StringComparison.Ordinal))
+            {
+                return image;
+            }
+        }
+
+        return null;
+    }
+
+    private static string FormatAltitude(float altitude)
+    {
+        return $"{altitude.ToString("0.0", CultureInfo.InvariantCulture)} M";
     }
 
     private static string GetLevelLabel(ProgressSaveSystem.FlightHistoryRecord record)

@@ -118,6 +118,16 @@ public class LoadingScreenUI : MonoBehaviour
 
     public void ShowError(string message)
     {
+        ShowErrorInternal(message, false);
+    }
+
+    public void ShowActionableError(string message)
+    {
+        ShowErrorInternal(message, true);
+    }
+
+    private void ShowErrorInternal(string message, bool alwaysShowDetails)
+    {
         StopFade();
         gameObject.SetActive(true);
         spinnerEnabled = false;
@@ -141,7 +151,7 @@ public class LoadingScreenUI : MonoBehaviour
 
         string playerMessage = friendlyErrorMessage;
 
-        if (showDetailedErrorToPlayer &&
+        if ((showDetailedErrorToPlayer || alwaysShowDetails) &&
             !string.IsNullOrWhiteSpace(message))
         {
             playerMessage += "\n" + message;

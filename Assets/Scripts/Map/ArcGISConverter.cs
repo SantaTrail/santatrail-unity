@@ -17,6 +17,8 @@ public class ArcGISConverter : MonoBehaviour
 
     void Awake()
     {
+        LogRuntimeEnvironment();
+
         arcGISMap = FindFirstObjectByType<ArcGISMapComponent>();
 
         if (arcGISMap == null)
@@ -89,7 +91,24 @@ if (arcGISMap?.View != null)
 {
     Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
 }
-        Debug.LogError($"❌ ArcGIS readiness timeout (90s). {DescribeMapLoadState()}");
+        Debug.LogError($"❌ ArcGIS readiness timeout (90s). {GetDiagnosticSummary()}");
+    }
+
+    void LogRuntimeEnvironment()
+    {
+        Debug.Log(
+            "🖥 SantaTrail map diagnostics | " +
+            $"Unity={Application.unityVersion} | " +
+            $"OS={SystemInfo.operatingSystem} | " +
+            $"CPU={SystemInfo.processorType} | " +
+            $"RAM={SystemInfo.systemMemorySize} MB | " +
+            $"GPU={SystemInfo.graphicsDeviceName} | " +
+            $"GraphicsAPI={SystemInfo.graphicsDeviceType} | " +
+            $"GraphicsMemory={SystemInfo.graphicsMemorySize} MB | " +
+            $"ShaderLevel={SystemInfo.graphicsShaderLevel} | " +
+            $"ComputeShaders={SystemInfo.supportsComputeShaders} | " +
+            $"Log={Application.consoleLogPath}"
+        );
     }
 
     void EnsureMapIsLoading(float timer)
@@ -165,6 +184,21 @@ if (arcGISMap?.View != null)
         }
 
         return state;
+    }
+
+    public string GetDiagnosticSummary()
+    {
+        string probeError = string.IsNullOrEmpty(lastProbeError)
+            ? "none"
+            : lastProbeError;
+
+        return
+            $"{DescribeMapLoadState()} | " +
+            $"GraphicsAPI={SystemInfo.graphicsDeviceType} | " +
+            $"GPU={SystemInfo.graphicsDeviceName} | " +
+            $"OS={SystemInfo.operatingSystem} | " +
+            $"ProbeError={probeError} | " +
+            $"Log={Application.consoleLogPath}";
     }
 
     public bool IsReady()

@@ -417,7 +417,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 121, y: 253}
+  m_AnchoredPosition: {x: 115.8, y: 253}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &182219195
@@ -474,7 +474,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 2
+  m_HorizontalAlignment: 1
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: -3
@@ -704,7 +704,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Retry
+  m_text: Change Toy
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 5a69945c2415440a4a1cfe8e012352d5, type: 2}
   m_sharedMaterial: {fileID: -3529223316903021415, guid: 5a69945c2415440a4a1cfe8e012352d5, type: 2}
@@ -1274,6 +1274,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LetterGenerator
   agent: {fileID: 712542969}
   ui: {fileID: 296600225}
+  useOfflineFallback: 1
+  llmReadyTimeoutSeconds: 8
 --- !u!114 &296600227
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1387,6 +1389,8 @@ MonoBehaviour:
   level1RequiredDeliveries: 5
   tutorialLockout: 0
   showDeliveryRingsDuringTutorial: 1
+  altitudeDisciplineMinimumMeters: 20
+  altitudeDisciplineMaximumMeters: 45
   score: 0
 --- !u!114 &296600229
 MonoBehaviour:
@@ -2023,7 +2027,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &631720809
 RectTransform:
   m_ObjectHideFlags: 0
@@ -2072,7 +2076,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 1, g: 1, b: 1, a: 0.392}
+  m_Color: {r: 0.29803923, g: 0.29803923, b: 0.29803923, a: 0.62352943}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -2637,7 +2641,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0, g: 0, b: 0, a: 0.7058824}
+  m_Color: {r: 0.3773585, g: 0.3755785, b: 0.3755785, a: 0.7058824}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -3112,6 +3116,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LetterGenerator
   agent: {fileID: 712542969}
   ui: {fileID: 296600225}
+  useOfflineFallback: 1
+  llmReadyTimeoutSeconds: 8
 --- !u!114 &992171049
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3153,6 +3159,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LetterGenerator
   agent: {fileID: 712542969}
   ui: {fileID: 296600225}
+  useOfflineFallback: 1
+  llmReadyTimeoutSeconds: 8
 --- !u!114 &992171052
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4252,9 +4260,17 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MissionProgressUI
   deliveryText: {fileID: 1280941166}
+  openPresentSprite: {fileID: 21300000, guid: 4cae37443906f4989a118501382366a2, type: 3}
+  closedPresentSprite: {fileID: 21300000, guid: 85e2a3aede0e54b27891c90e18a60b48, type: 3}
   presentIcons: []
-  emptyPresent: {fileID: 21300000, guid: 4f6fa2824323d4d3ebca0ab89d128c03, type: 3}
-  filledPresent: {fileID: 21300000, guid: cbe1ad3d41fc8a94e91ec58ff313f446, type: 3}
+  presentIconSizes:
+  - {x: 0, y: 0}
+  - {x: 0, y: 0}
+  - {x: 0, y: 0}
+  presentIconPositions: []
+  defaultPresentIconSize: {x: 70, y: 70}
+  openPresentIconSize: {x: 110, y: 110}
+  closedPresentIconSize: {x: 70, y: 70}
 --- !u!1 &1280941164
 GameObject:
   m_ObjectHideFlags: 0

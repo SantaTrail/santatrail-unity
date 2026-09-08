@@ -333,13 +333,13 @@ public class SantaLetterGameManager : MonoBehaviour
     {
         if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
         {
-            return Mathf.Max(1, GameManager.activeDeliveryCount);
+            return Mathf.Max(5, GameManager.activeDeliveryCount);
         }
 
         switch (difficulty)
         {
             case Difficulty.Easy:
-                return 3;
+                return 5;
 
             case Difficulty.Medium:
                 return 5;

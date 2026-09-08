@@ -5,11 +5,15 @@ using UnityEngine;
 
 public static class ProgressSaveSystem
 {
+    // Publishes a detached snapshot of this flight, not the cumulative level record.
+    public static event Action<LevelProgressRecord> LevelProgressSaved;
+
     [Serializable]
     public class LevelProgressRecord
     {
         public string sceneName = "";
         public string levelLabel = "";
+        public string lastFlightId = "";
         public int completedTargets;
         public int totalTargets;
         public int score;
@@ -17,6 +21,10 @@ public static class ProgressSaveSystem
         public int attempts;
         public int bestScore;
         public int bestCompletedTargets;
+        public int bestAltitudeDiscipline;
+        public float bestAverageAltitude = -1f;
+        public float bestMinimumAltitude = -1f;
+        public float bestMaximumAltitude = -1f;
         public float bestTimeSeconds = -1f;
         public string savedAtUtc = "";
     }
@@ -166,7 +174,11 @@ public static class ProgressSaveSystem
         int score,
         bool levelCompleted,
         float elapsedSeconds = -1f,
-        string flightId = "")
+        string flightId = "",
+        float altitudeDiscipline = -1f,
+        float averageAltitude = -1f,
+        float minimumAltitude = -1f,
+        float maximumAltitude = -1f)
     {
         RecordLevelProgress(
             sceneName,
@@ -176,7 +188,11 @@ public static class ProgressSaveSystem
             levelCompleted,
             elapsedSeconds,
             true,
-            flightId
+            flightId,
+            altitudeDiscipline,
+            averageAltitude,
+            minimumAltitude,
+            maximumAltitude
         );
     }
 
@@ -188,7 +204,11 @@ public static class ProgressSaveSystem
         bool levelCompleted,
         float elapsedSeconds = -1f,
         bool countAttempt = false,
-        string flightId = "")
+        string flightId = "",
+        float altitudeDiscipline = -1f,
+        float averageAltitude = -1f,
+        float minimumAltitude = -1f,
+        float maximumAltitude = -1f)
     {
         EnsureLoaded();
 
@@ -207,6 +227,10 @@ public static class ProgressSaveSystem
         }
 
         record.sceneName = sceneName;
+        if (!string.IsNullOrWhiteSpace(flightId))
+        {
+            record.lastFlightId = flightId;
+        }
         if (string.IsNullOrWhiteSpace(record.levelLabel) &&
             string.Equals(sceneName, GameManager.activeSceneName, StringComparison.OrdinalIgnoreCase))
         {
@@ -227,6 +251,35 @@ public static class ProgressSaveSystem
             record.bestCompletedTargets,
             completedTargets
         );
+
+        // Only the first completion save contributes a finished-flight score.
+        // Intermediate deliveries and later pause/quit saves must not set a best.
+        if (levelCompleted && countAttempt && altitudeDiscipline >= 0f &&
+            !float.IsNaN(altitudeDiscipline) && !float.IsInfinity(altitudeDiscipline))
+        {
+            record.bestAltitudeDiscipline = Mathf.Max(
+                record.bestAltitudeDiscipline,
+                Mathf.RoundToInt(Mathf.Clamp01(altitudeDiscipline) * 100f)
+            );
+        }
+
+        if (averageAltitude >= 0f && !float.IsNaN(averageAltitude) &&
+            !float.IsInfinity(averageAltitude))
+        {
+            record.bestAverageAltitude = averageAltitude;
+        }
+
+        if (minimumAltitude >= 0f && !float.IsNaN(minimumAltitude) &&
+            !float.IsInfinity(minimumAltitude))
+        {
+            record.bestMinimumAltitude = minimumAltitude;
+        }
+
+        if (maximumAltitude >= 0f && !float.IsNaN(maximumAltitude) &&
+            !float.IsInfinity(maximumAltitude))
+        {
+            record.bestMaximumAltitude = maximumAltitude;
+        }
 
         if (levelCompleted && elapsedSeconds >= 0f &&
             (record.bestTimeSeconds < 0f || elapsedSeconds < record.bestTimeSeconds))
@@ -252,6 +305,29 @@ public static class ProgressSaveSystem
         );
 
         Save();
+        LevelProgressSaved?.Invoke(new LevelProgressRecord
+        {
+            sceneName = sceneName,
+            levelLabel = record.levelLabel,
+            lastFlightId = flightId,
+            completedTargets = Mathf.Max(0, completedTargets),
+            totalTargets = Mathf.Max(0, totalTargets),
+            score = score,
+            levelCompleted = levelCompleted,
+            attempts = countAttempt ? 1 : 0,
+            bestScore = score,
+            bestCompletedTargets = Mathf.Max(0, completedTargets),
+            // Retain the API field names, but send this flight's measurements.
+            bestAltitudeDiscipline = altitudeDiscipline >= 0f &&
+                !float.IsNaN(altitudeDiscipline) && !float.IsInfinity(altitudeDiscipline)
+                ? Mathf.RoundToInt(Mathf.Clamp01(altitudeDiscipline) * 100f)
+                : 0,
+            bestAverageAltitude = averageAltitude,
+            bestMinimumAltitude = minimumAltitude,
+            bestMaximumAltitude = maximumAltitude,
+            bestTimeSeconds = levelCompleted ? elapsedSeconds : -1f,
+            savedAtUtc = record.savedAtUtc
+        });
     }
 
     public static int CompletedLevelCount
@@ -288,6 +364,84 @@ public static class ProgressSaveSystem
                 total += record.bestScore;
             }
             return total;
+        }
+    }
+
+    public static int BestAltitudeDiscipline
+    {
+        get
+        {
+            EnsureLoaded();
+            int total = 0;
+            int recordsWithData = 0;
+            foreach (LevelProgressRecord record in currentData.levelRecords)
+            {
+                if (record != null && record.bestAltitudeDiscipline > 0)
+                {
+                    total += Mathf.Clamp(record.bestAltitudeDiscipline, 0, 100);
+                    recordsWithData++;
+                }
+            }
+
+            return recordsWithData > 0
+                ? Mathf.RoundToInt(total / (float)recordsWithData)
+                : 0;
+        }
+    }
+
+    public static float AverageAltitude
+    {
+        get
+        {
+            EnsureLoaded();
+            float total = 0f;
+            int recordsWithData = 0;
+            foreach (LevelProgressRecord record in currentData.levelRecords)
+            {
+                if (record != null && record.bestAverageAltitude >= 0f)
+                {
+                    total += record.bestAverageAltitude;
+                    recordsWithData++;
+                }
+            }
+
+            return recordsWithData > 0 ? total / recordsWithData : 0f;
+        }
+    }
+
+    public static float MinimumAltitude
+    {
+        get
+        {
+            EnsureLoaded();
+            float minimum = float.MaxValue;
+            foreach (LevelProgressRecord record in currentData.levelRecords)
+            {
+                if (record != null && record.bestMinimumAltitude >= 0f)
+                {
+                    minimum = Mathf.Min(minimum, record.bestMinimumAltitude);
+                }
+            }
+
+            return minimum < float.MaxValue ? minimum : 0f;
+        }
+    }
+
+    public static float MaximumAltitude
+    {
+        get
+        {
+            EnsureLoaded();
+            float maximum = 0f;
+            foreach (LevelProgressRecord record in currentData.levelRecords)
+            {
+                if (record != null && record.bestMaximumAltitude >= 0f)
+                {
+                    maximum = Mathf.Max(maximum, record.bestMaximumAltitude);
+                }
+            }
+
+            return maximum;
         }
     }
 

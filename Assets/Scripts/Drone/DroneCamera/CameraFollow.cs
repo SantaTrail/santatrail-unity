@@ -4,9 +4,18 @@ public class CameraFollow : MonoBehaviour
 {
     public Transform drone;
     public MAVLinkReceiver receiver;
+    [Tooltip("Cached Camera component so we can tweak the field of view when mounted.")]
+    public Camera cameraComponent;
     [Tooltip("If true, camera is mounted to drone at local offset (no chase follow).")]
     public bool attachToDrone = true;
     public Vector3 offset = new Vector3(0, 2, -5);
+    [Tooltip("Local-space point on the drone that the camera should look at when mounted.")]
+    public Vector3 lookAtLocalOffset = new Vector3(0f, 0.35f, 0f);
+    [Tooltip("Optional mounted FOV. Lower values make the drone appear larger.")]
+    [Range(20f, 90f)]
+    public float mountedFieldOfView = 50f;
+    [Tooltip("Apply the mounted FOV while the camera is attached to the drone.")]
+    public bool applyMountedFieldOfView = true;
     public float smoothSpeed = 5f;
     [Tooltip("If true, offset rotates with drone yaw only (ignores roll/pitch).")]
     public bool followYawOnly = true;
@@ -26,12 +35,23 @@ public class CameraFollow : MonoBehaviour
     private Vector3 smoothedLookDir = Vector3.forward;
     private float lastVelocityHeadingTime = -999f;
     private Transform originalParent;
+    private float originalFieldOfView = -1f;
     private Vector3 lastValidCameraPosition;
     private bool hasLastValidCameraPosition;
 
     void Awake()
     {
         originalParent = transform.parent;
+        if (cameraComponent == null)
+        {
+            cameraComponent = GetComponent<Camera>();
+        }
+
+        if (cameraComponent != null)
+        {
+            originalFieldOfView = cameraComponent.fieldOfView;
+        }
+
         if (drone == null)
         {
             GameObject droneObj = GameObject.FindGameObjectWithTag("Drone");
@@ -72,8 +92,14 @@ public class CameraFollow : MonoBehaviour
             // This is the player's view: keep it mounted behind the drone, rather
             // than using the top-down world-space pose used by a minimap camera.
             transform.localPosition = offset;
-            transform.localRotation = offset.sqrMagnitude > 0.0001f
-                ? Quaternion.LookRotation(-offset.normalized, Vector3.up)
+            if (cameraComponent != null && applyMountedFieldOfView)
+            {
+                cameraComponent.fieldOfView = mountedFieldOfView;
+            }
+
+            Vector3 lookDirection = lookAtLocalOffset - offset;
+            transform.localRotation = lookDirection.sqrMagnitude > 0.0001f
+                ? Quaternion.LookRotation(lookDirection.normalized, Vector3.up)
                 : Quaternion.identity;
             return;
         }
@@ -86,6 +112,11 @@ public class CameraFollow : MonoBehaviour
             {
                 transform.SetParent(detachedParent, true);
             }
+        }
+
+        if (cameraComponent != null && applyMountedFieldOfView && originalFieldOfView > 0f)
+        {
+            cameraComponent.fieldOfView = originalFieldOfView;
         }
 
         Vector3 desiredOffset;
@@ -149,7 +180,8 @@ public class CameraFollow : MonoBehaviour
         }
         else if (alwaysLookAtDrone)
         {
-            Vector3 lookAtDir = (drone.position - transform.position).normalized;
+            Vector3 lookAtTarget = drone.position + drone.TransformVector(lookAtLocalOffset);
+            Vector3 lookAtDir = (lookAtTarget - transform.position).normalized;
             if (lookAtDir.sqrMagnitude > 0.0001f)
             {
                 desiredLookDir = lookAtDir;

@@ -14,18 +14,20 @@ public static class AutoArduPilotOnPlay
     private static bool isLaunchInProgress;
     private static bool hasAttemptedWindowsFirstRunSetup;
     private static string pendingSceneName;
-    private static Process windowsSitlProcess;
+    private static Process ownedSitlProcess;
+    private static SitlProcessPause sitlPause;
+    private static int launchGeneration;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetLaunchState()
     {
-        StopWindowsSitl();
+        EndFlightSession();
         hasLaunchedThisSession = false;
         isLaunchInProgress = false;
         hasAttemptedWindowsFirstRunSetup = false;
         pendingSceneName = null;
         SceneManager.sceneLoaded -= OnSceneLoaded;
-        Application.quitting -= StopWindowsSitl;
+        Application.quitting -= StopOwnedSitl;
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -34,8 +36,8 @@ public static class AutoArduPilotOnPlay
 #if UNITY_EDITOR || UNITY_STANDALONE_OSX || UNITY_STANDALONE_WIN
         SceneManager.sceneLoaded -= OnSceneLoaded;
         SceneManager.sceneLoaded += OnSceneLoaded;
-        Application.quitting -= StopWindowsSitl;
-        Application.quitting += StopWindowsSitl;
+        Application.quitting -= StopOwnedSitl;
+        Application.quitting += StopOwnedSitl;
 #else
         UnityEngine.Debug.LogWarning(
             "AutoArduPilotOnPlay: auto-launch is configured for macOS and Windows standalone builds only."
@@ -92,6 +94,8 @@ public static class AutoArduPilotOnPlay
             return;
         }
 
+        if (PauseMenuController.IsPaused) return;
+
         if (hasLaunchedThisSession || isLaunchInProgress)
         {
             if (isLaunchInProgress && !string.IsNullOrEmpty(sceneName))
@@ -120,7 +124,7 @@ public static class AutoArduPilotOnPlay
         {
             hasAttemptedWindowsFirstRunSetup = true;
             isLaunchInProgress = true;
-            _ = EnsureWindowsFirstRunSetupAndRetryAsync(sceneName);
+            _ = EnsureWindowsFirstRunSetupAndRetryAsync(sceneName, launchGeneration);
             return;
         }
 
@@ -150,7 +154,7 @@ public static class AutoArduPilotOnPlay
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
                 if (ResolveWindowsSitlExecutable() != null)
                 {
-                    windowsSitlProcess = StartWindowsSitl(homeLat, homeLon, homeAlt, homeYaw);
+                    ownedSitlProcess = StartWindowsSitl(homeLat, homeLon, homeAlt, homeYaw);
                     UnityEngine.Debug.Log("AutoArduPilotOnPlay: launched native Windows ArduPilot SITL.");
                 }
                 else
@@ -191,8 +195,8 @@ public static class AutoArduPilotOnPlay
                     CreateNoWindow = true
                 };
 
-                Process sitlProcess = Process.Start(sitlStartInfo);
-                if (sitlProcess == null)
+                ownedSitlProcess = Process.Start(sitlStartInfo);
+                if (ownedSitlProcess == null)
                 {
                     UnityEngine.Debug.LogError(
                         "AutoArduPilotOnPlay: could not start the SITL process."
@@ -211,8 +215,9 @@ public static class AutoArduPilotOnPlay
 #endif
             }
 
+            if (ownedSitlProcess != null) sitlPause = new SitlProcessPause(ownedSitlProcess);
             hasLaunchedThisSession = true;
-            _ = LaunchQgcAfterSITLBootAsync();
+            _ = LaunchQgcAfterSITLBootAsync(launchGeneration);
         }
         catch (Exception exception)
         {
@@ -232,7 +237,7 @@ public static class AutoArduPilotOnPlay
 #endif
     }
 
-    private static async Task EnsureWindowsFirstRunSetupAndRetryAsync(string sceneName)
+    private static async Task EnsureWindowsFirstRunSetupAndRetryAsync(string sceneName, int generation)
     {
         try
         {
@@ -249,8 +254,10 @@ public static class AutoArduPilotOnPlay
         }
         finally
         {
-            isLaunchInProgress = false;
+            if (generation == launchGeneration) isLaunchInProgress = false;
         }
+
+        if (generation != launchGeneration) return;
 
         string retrySceneName = string.IsNullOrEmpty(pendingSceneName)
             ? sceneName
@@ -461,6 +468,12 @@ public static class AutoArduPilotOnPlay
 
     private static string ResolveWindowsSitlExecutable()
     {
+        string preparedSitl = SantaTrailWindowsFirstRunSetup.FindNativeSitl();
+        if (preparedSitl != null)
+        {
+            return preparedSitl;
+        }
+
         string gameRoot = Directory.GetParent(Application.dataPath).FullName;
         string localAppData = Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData
@@ -554,19 +567,45 @@ public static class AutoArduPilotOnPlay
         return "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 
-    private static void StopWindowsSitl()
+#endif
+
+    public static void EndFlightSession()
     {
-        if (windowsSitlProcess == null)
+        launchGeneration++;
+        StopOwnedSitl();
+        hasLaunchedThisSession = false;
+        isLaunchInProgress = false;
+        pendingSceneName = null;
+    }
+
+    public static bool TryPauseFlight(bool paused)
+    {
+        if (sitlPause == null) return false;
+        try
+        {
+            sitlPause.SetPaused(paused);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning("SantaTrail: could not change simulator pause state. " + exception.Message);
+            return false;
+        }
+    }
+
+    private static void StopOwnedSitl()
+    {
+        if (ownedSitlProcess == null)
         {
             return;
         }
 
         try
         {
-            if (!windowsSitlProcess.HasExited)
+            if (!ownedSitlProcess.HasExited)
             {
-                windowsSitlProcess.Kill();
-                windowsSitlProcess.WaitForExit(2000);
+                ownedSitlProcess.Kill();
+                ownedSitlProcess.WaitForExit(2000);
             }
         }
         catch (Exception exception)
@@ -577,19 +616,20 @@ public static class AutoArduPilotOnPlay
         }
         finally
         {
-            windowsSitlProcess.Dispose();
-            windowsSitlProcess = null;
+            try { sitlPause?.Dispose(); }
+            catch (Exception exception) { UnityEngine.Debug.LogWarning(exception.Message); }
+            sitlPause = null;
+            ownedSitlProcess.Dispose();
+            ownedSitlProcess = null;
         }
     }
-#else
-    private static void StopWindowsSitl()
-    {
-    }
-#endif
 
-    private static async Task LaunchQgcAfterSITLBootAsync()
+    private static async Task LaunchQgcAfterSITLBootAsync(int generation)
     {
         await Task.Delay(5000);
+        while (generation == launchGeneration && PauseMenuController.IsPaused)
+            await Task.Delay(250);
+        if (generation != launchGeneration) return;
 
         Process[] existingQgc = Process.GetProcessesByName("QGroundControl");
         if (existingQgc != null && existingQgc.Length > 0)

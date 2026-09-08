@@ -718,6 +718,7 @@ public class MAVLinkReceiver : MonoBehaviour
 
     void Update()
     {
+        if (PauseMenuController.IsPaused) return;
         if (!EnsureUdpSocketOpen())
             return;
 
@@ -807,6 +808,7 @@ public class MAVLinkReceiver : MonoBehaviour
 
     void LateUpdate()
     {
+        if (PauseMenuController.IsPaused) return;
         // Position and rotation are applied together after MAVLink packets are
         // processed in Update. This prevents physics/render timing mismatch.
         ApplySmoothedTransform();

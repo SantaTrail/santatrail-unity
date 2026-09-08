@@ -218,6 +218,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     Process pythonProcess;
     volatile bool pythonProcessCompleted;
     volatile int pythonProcessExitCode = int.MinValue;
+    volatile string pythonProcessError = "";
     [Header("Prefabs")]
     public GameObject treePrefab;
     [Tooltip("Optional tree palette used for environment detail. If empty, Tree Prefab is used.")]
@@ -4866,6 +4867,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         pythonProcessCompleted = false;
         pythonProcessExitCode = int.MinValue;
+        pythonProcessError = "";
 
         pythonProcess = new Process
         {
@@ -4887,6 +4889,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             {
                 if (!string.IsNullOrEmpty(args.Data))
                 {
+                    pythonProcessError = args.Data;
                     Debug.LogError(
                         "🐍 ERROR: " + args.Data
                     );
@@ -4924,6 +4927,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         {
             pythonProcessExitCode = -1;
             pythonProcessCompleted = true;
+            pythonProcessError = exception.GetType().Name + ": " + exception.Message;
 
             Debug.LogError(
                 "❌ Could not start Python: " +

@@ -201,6 +201,10 @@ public class DeliveryScoreManager : MonoBehaviour
     [Tooltip("Keep target rings visible as guidance while tutorial delivery controls are locked.")]
     public bool showDeliveryRingsDuringTutorial = true;
 
+    [Header("Altitude Discipline")]
+    [Min(0f)] public float altitudeDisciplineMinimumMeters = 20f;
+    [Min(0f)] public float altitudeDisciplineMaximumMeters = 45f;
+
     public int score = 0;
     private bool buildingsInitialized = false;
     private bool initializationFinished = false;
@@ -254,6 +258,11 @@ public class DeliveryScoreManager : MonoBehaviour
     private bool hasLoggedDeliveryHome;
     private bool hasLoggedNoDeliveryCandidates;
     private float currentSpeed;
+    private float altitudeTrackedSeconds;
+    private float altitudeDisciplinedSeconds;
+    private float altitudeTotal;
+    private float altitudeMinimum = float.MaxValue;
+    private float altitudeMaximum = float.MinValue;
 
     void Start()
     {
@@ -361,14 +370,50 @@ public class DeliveryScoreManager : MonoBehaviour
         initializationCoroutine = null;
     }
 
+    private void UpdateAltitudeDiscipline()
+    {
+        if (level1Completed || mavReceiver == null ||
+            !mavReceiver.HasRecentTelemetry || !mavReceiver.IsArmed)
+        {
+            return;
+        }
+
+        float altitude = mavReceiver.RelativeAltitudeMeters;
+        if (float.IsNaN(altitude) || float.IsInfinity(altitude))
+        {
+            return;
+        }
+
+        float minimum = Mathf.Min(
+            altitudeDisciplineMinimumMeters,
+            altitudeDisciplineMaximumMeters
+        );
+        float maximum = Mathf.Max(
+            altitudeDisciplineMinimumMeters,
+            altitudeDisciplineMaximumMeters
+        );
+        float sampleSeconds = Mathf.Min(Time.deltaTime, 0.25f);
+        altitudeTrackedSeconds += sampleSeconds;
+        altitudeTotal += altitude * sampleSeconds;
+        altitudeMinimum = Mathf.Min(altitudeMinimum, altitude);
+        altitudeMaximum = Mathf.Max(altitudeMaximum, altitude);
+        if (altitude >= minimum && altitude <= maximum)
+        {
+            altitudeDisciplinedSeconds += sampleSeconds;
+        }
+    }
+
     void Update()
     {
+        if (PauseMenuController.IsPaused) return;
         AutoBindDrone();
         // Debug.Log($"Drone transform = {drone.position}");
         if (mavReceiver == null)
         {
             mavReceiver = MAVLinkReceiver.Active;
         }
+
+        UpdateAltitudeDiscipline();
 
         if (drone == null)
         {
@@ -2745,6 +2790,11 @@ public class DeliveryScoreManager : MonoBehaviour
         }
     }
 
+    public void SaveCurrentProgress()
+    {
+        SaveProgress(level1Completed);
+    }
+
     void OnApplicationPause(bool pauseStatus)
     {
         if (pauseStatus)
@@ -2776,6 +2826,14 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         string sceneName = SceneManager.GetActiveScene().name;
+        float altitudeDiscipline = altitudeTrackedSeconds > 0.01f
+            ? altitudeDisciplinedSeconds / altitudeTrackedSeconds
+            : -1f;
+        float averageAltitude = altitudeTrackedSeconds > 0.01f
+            ? altitudeTotal / altitudeTrackedSeconds
+            : -1f;
+        float minimumAltitude = altitudeMinimum < float.MaxValue ? altitudeMinimum : -1f;
+        float maximumAltitude = altitudeMaximum > float.MinValue ? altitudeMaximum : -1f;
         if (levelCompleted && !completionSavedThisSession)
         {
             ProgressSaveSystem.RecordLevelResult(
@@ -2785,7 +2843,11 @@ public class DeliveryScoreManager : MonoBehaviour
                 score,
                 true,
                 elapsedSeconds,
-                flightSessionId
+                flightSessionId,
+                altitudeDiscipline,
+                averageAltitude,
+                minimumAltitude,
+                maximumAltitude
             );
             completionSavedThisSession = true;
         }
@@ -2799,7 +2861,11 @@ public class DeliveryScoreManager : MonoBehaviour
                 levelCompleted,
                 elapsedSeconds,
                 false,
-                flightSessionId
+                flightSessionId,
+                altitudeDiscipline,
+                averageAltitude,
+                minimumAltitude,
+                maximumAltitude
             );
         }
     }

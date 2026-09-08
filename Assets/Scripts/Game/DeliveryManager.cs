@@ -22,7 +22,7 @@ public class DeliveryManager : MonoBehaviour
     {
         if (GameManager.hasActiveDeliveryCount)
         {
-            totalDeliveries = Mathf.Max(1, GameManager.activeDeliveryCount);
+            totalDeliveries = Mathf.Max(5, GameManager.activeDeliveryCount);
         }
     }
 
