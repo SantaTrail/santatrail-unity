@@ -22,147 +22,86 @@ public static class PromptBuilder
         }
 
         StringBuilder sb = new StringBuilder();
-
-        //--------------------------------------------------------
-        // ROLE
-        //--------------------------------------------------------
-
-        sb.AppendLine("You are writing a believable Christmas letter from a child to Santa.");
-        sb.AppendLine();
-
-        //--------------------------------------------------------
-        // WRITING RULES
-        //--------------------------------------------------------
-
-        sb.AppendLine("RULES:");
-        sb.AppendLine("- The letter must sound like it was written by a REAL child.");
-        sb.AppendLine("- The entire letter must be between 35 and 50 words.");
-        sb.AppendLine("- Never exceed 50 words.");  // change from 80 to 50
-        sb.AppendLine("- Never reveal the exact toy name.");
-        // sb.AppendLine("- Naturally include ALL 3 clues.");
-        sb.AppendLine("- Mention the child's good deed.");
-        sb.AppendLine("- Mention the child's feelings naturally.");
-        sb.AppendLine("- Mention family, friends, or school if it fits naturally.");
-        sb.AppendLine("- Do NOT list clues like a checklist.");
-
-        sb.AppendLine();
-        sb.AppendLine("- End with 'Love,' followed by the child's name.");
-        sb.AppendLine();
-
-        //--------------------------------------------------------
-        // AGE WRITING STYLE
-        //--------------------------------------------------------
-
-        sb.AppendLine("WRITING STYLE:");
-
-        if(child.age <= 4)
+        string[] storyShapes =
         {
-            sb.AppendLine(
-                "Write exactly like a 3-4 year old child.");
+            "Tell a small moment from school or home, then connect it to Christmas.",
+            "Start with the good deed, then share a funny or happy little moment.",
+            "Write about a feeling first, then a memory from this week.",
+            "Make it a cheerful thank-you note with one specific detail about the child's day.",
+            "Start with something the child is looking forward to, then mention the good deed.",
+            "Tell a tiny beginning-middle-ending story from the child's week.",
+            "Make it sound like the child is chatting excitedly about their Christmas plans.",
+            "Begin with a question for Santa, then tell a warm little story."
+        };
 
-            sb.AppendLine(
-                "Maximum 25 words.");
+        string[] greetings =
+        {
+            "Dear Santa,",
+            "Hi Santa,",
+            "Hello Santa,",
+            "Dear Santa Claus,"
+        };
 
-            sb.AppendLine(
-                "Use very short sentences.");
+        string[] signOffs =
+        {
+            "Love,",
+            "From,",
+            "Merry Christmas from,",
+            "Your friend,"
+        };
 
-            sb.AppendLine(
-                "Use extremely simple vocabulary.");
+        sb.AppendLine("Write one short, warm Christmas letter from a real child to Santa.");
+        sb.AppendLine("This is a guessing-game letter: the desired present must stay secret.");
+        sb.AppendLine("Never write the toy name, a synonym, its category, or an obvious answer.");
+        sb.AppendLine("Never say 'I want', 'I would love', or 'please bring me' followed by a present.");
+        sb.AppendLine("Use only 1-2 clues as background details, not as a list or a description of the item.");
+        sb.AppendLine("Return only the letter: no title, explanation, bullets, or labels.");
+        sb.AppendLine("Story shape: " + storyShapes[UnityEngine.Random.Range(0, storyShapes.Length)]);
+        sb.AppendLine("Greeting: " + greetings[UnityEngine.Random.Range(0, greetings.Length)]);
+        sb.AppendLine("Sign-off: " + signOffs[UnityEngine.Random.Range(0, signOffs.Length)] + " followed by the child's name.");
+
+        sb.AppendLine();
+
+        sb.AppendLine("Child: " + (string.IsNullOrWhiteSpace(child.name) ? "a child" : child.name) + ", age " + child.age + ".");
+        sb.AppendLine("Personality: " + (child.personality != null ? child.personality.description : "cheerful and playful") + ".");
+        sb.AppendLine("Feeling: " + (child.emotion != null ? child.emotion.description : "very excited") + ".");
+        sb.AppendLine("Good deed: " + (child.goodDeed != null ? child.goodDeed.description : "being kind and helpful") + ".");
+        sb.AppendLine("Private clue details (weave in subtly):");
+
+        if (clues != null)
+        {
+            foreach (string clue in clues)
+            {
+                if (!string.IsNullOrWhiteSpace(clue))
+                {
+                    sb.AppendLine(
+                        "- " + clue
+                    );
+                }
+            }
         }
-        else if(child.age <= 6)
+
+        sb.AppendLine();
+
+        if (child.age <= 4)
         {
-            sb.AppendLine(
-                "Write like a 5-6 year old child.");
-
-            sb.AppendLine(
-                "Maximum 40 words.");
-
-            sb.AppendLine(
-                "The child can explain one reason.");
+            sb.AppendLine("Style: authentic 3-4-year-old voice; simple words; 40-50 words.");
         }
-        else if(child.age <= 8)
+        else if (child.age <= 6)
         {
-            sb.AppendLine(
-                "Write like a 7-8 year old child.");
-
-            sb.AppendLine(
-                "Maximum 55 words.");
-
-            sb.AppendLine(
-                "Show excitement naturally.");
+            sb.AppendLine("Style: authentic 5-6-year-old voice; simple and excited; 50-65 words.");
+        }
+        else if (child.age <= 8)
+        {
+            sb.AppendLine("Style: authentic 7-8-year-old voice; natural and playful; 60-75 words.");
         }
         else
         {
-            sb.AppendLine(
-                "Write like a thoughtful 9-11 year old.");
-            sb.AppendLine("- Mention the child's feelings naturally.");
-
-            sb.AppendLine(
-                "Maximum 70 words.");
-
-            sb.AppendLine(
-                "The child reflects on why the gift matters.");
+            sb.AppendLine("Style: authentic 9-13-year-old voice; natural but clearly child-like; 70-85 words.");
         }
 
         sb.AppendLine();
-
-        //--------------------------------------------------------
-        // CHILD PROFILE
-        //--------------------------------------------------------
-
-        sb.AppendLine("CHILD PROFILE");
-        sb.AppendLine($"Name: {child.name}");
-        sb.AppendLine($"Age: {child.age}");
-        sb.AppendLine($"Personality: {child.personality.description}");
-        sb.AppendLine($"Emotion: {child.emotion.description}");
-        sb.AppendLine($"Good Deed: {child.goodDeed.description}");
-        sb.AppendLine();
-
-        sb.AppendLine("TARGET GIFT");
-        sb.AppendLine($"Category: {child.targetToy.category}");
-        sb.AppendLine($"Description: {child.targetToy.description}");
-        sb.AppendLine($"Why children like it: {child.targetToy.whyChildrenLikeIt}");
-        sb.AppendLine($"Reason the child wants it: {child.targetToy.christmasWishReason}");
-
-        sb.AppendLine();
-
-        //--------------------------------------------------------
-        // GIFT INFORMATION
-        //--------------------------------------------------------
-
-        sb.AppendLine("TARGET GIFT");
-        sb.AppendLine($"Category: {child.targetToy.category}");
-        sb.AppendLine($"Description: {child.targetToy.description}");
-        sb.AppendLine($"Why children like it: {child.targetToy.whyChildrenLikeIt}");
-        sb.AppendLine();
-
-        sb.AppendLine("Gift Information");
-        sb.AppendLine($"Gift Category: {child.targetToy.category}");
-        sb.AppendLine($"Reason for wanting this gift:");
-        sb.AppendLine(child.targetToy.christmasWishReason);
-        sb.AppendLine();
-
-        //--------------------------------------------------------
-        // HIDDEN CLUES
-        //--------------------------------------------------------
-
-        sb.AppendLine("HIDDEN GIFT CLUES");
-
-        foreach (string clue in clues)
-        {
-            sb.AppendLine("- " + clue);
-        }
-
-        sb.AppendLine();
-
-        //--------------------------------------------------------
-        // FINAL INSTRUCTION
-        //--------------------------------------------------------
-
-        sb.AppendLine("Return ONLY the letter.");
-        sb.AppendLine("Do not explain anything.");
-        sb.AppendLine("Do not use bullet points.");
-        sb.AppendLine("Do not include a title.");
+        sb.AppendLine("Silently verify the secret present is not named before replying.");
 
         return sb.ToString();
     }

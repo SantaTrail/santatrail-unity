@@ -20,23 +20,28 @@ public class SantaLetterGameManager : MonoBehaviour
     public HintPanel hintPanel;
     public DeliveryManager deliveryManager;
     public ToyLoader toyLoader;
+
     private ToyData[] allToys;
+
+    private ChildData currentChild;
+    private ToyData selectedToy;
+
+    private int wrongAttempts = 0;
+    private int totalDeliveries;
+
+    public Difficulty difficulty;
 
     [Header("Gift Buttons")]
     public GiftButton[] giftButtons;
 
     [Header("Toy Database")]
-    // public ToyData[] allToys;
     public ResultPopup resultPopup;
-    [SerializeField] private string level1SceneName = "PreviewLV";
-    [SerializeField] private float correctAnswerTransitionDelay = 2f;
 
-    private ChildData currentChild;
+    [SerializeField]
+    private string level1SceneName = "PreviewLV";
 
-    private int wrongAttempts = 0;
-    public Difficulty difficulty;
-    private int totalDeliveries;
-    private ToyData selectedToy;
+    [SerializeField]
+    private float correctAnswerTransitionDelay = 2f;
 
     [Header("Mission UI")]
     public MissionProgressUI missionUI;
@@ -45,13 +50,47 @@ public class SantaLetterGameManager : MonoBehaviour
     public Button packPresentButton;
     public Button retryButton;
 
-    //----------------------------------------------------
+    [Header("Background AI")]
+    [SerializeField]
+    private bool preloadNextLetter = true;
 
-    void Start()
+    private Task<PreparedDelivery> nextDeliveryTask;
+    private PreparedDelivery preparedNextDelivery;
+
+    private bool isPreparingNextDelivery;
+    private bool isAdvancing;
+
+    // ============================================================
+    // PREPARED DELIVERY
+    // ============================================================
+
+    private class PreparedDelivery
+    {
+        public ChildData child;
+        public string letter;
+        public ToyData[] giftChoices;
+
+        public PreparedDelivery(
+            ChildData child,
+            string letter,
+            ToyData[] giftChoices)
+        {
+            this.child = child;
+            this.letter = letter;
+            this.giftChoices = giftChoices;
+        }
+    }
+
+    // ============================================================
+    // START
+    // ============================================================
+
+    private async void Start()
     {
         allToys = toyLoader.toys;
 
-        if (letterGenerator != null && letterUI != null)
+        if (letterGenerator != null &&
+            letterUI != null)
         {
             letterGenerator.ui = letterUI;
         }
@@ -63,151 +102,533 @@ public class SantaLetterGameManager : MonoBehaviour
 
         if (GameManager.hasActiveLevelSettings)
         {
-            difficulty = (Difficulty)GameManager.activeMissionDifficulty;
+            difficulty =
+                (Difficulty)GameManager.activeMissionDifficulty;
         }
 
-        totalDeliveries = GetDeliveryCount();
+        totalDeliveries =
+            GetDeliveryCount();
+
         if (deliveryManager != null)
         {
-            deliveryManager.totalDeliveries = totalDeliveries;
+            deliveryManager.totalDeliveries =
+                totalDeliveries;
         }
-        missionUI.SetupMission(totalDeliveries);
 
-        Debug.Log("Number of Toys = " + allToys.Length);
+        if (missionUI != null)
+        {
+            missionUI.SetupMission(
+                totalDeliveries
+            );
+        }
+
+        Debug.Log(
+            "Number of Toys = " +
+            allToys.Length
+        );
 
         foreach (ToyData toy in allToys)
         {
-            Debug.Log("Loaded Toy: " + toy.name);
+            Debug.Log(
+                "Loaded Toy: " +
+                toy.name
+            );
         }
 
-        if (SantaLetterPreloadSession.IsPreparing)
+        // --------------------------------------------------------
+        // FIRST DELIVERY
+        // --------------------------------------------------------
+
+        PreparedDelivery firstDelivery =
+            await CreateDeliveryAsync();
+
+        if (firstDelivery == null)
         {
-            Debug.Log("SantaLetterGameManager: waiting for LoadingScene to prepare the first delivery.");
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "could not prepare first delivery."
+            );
+
             return;
         }
 
-        StartNewDelivery();
+        ShowDelivery(
+            firstDelivery
+        );
+
+        // --------------------------------------------------------
+        // START PREPARING NEXT LETTER IMMEDIATELY
+        // --------------------------------------------------------
+
+        StartPreparingNextDelivery();
     }
+
+    // ============================================================
+    // CREATE DELIVERY
+    // ============================================================
+
+    private async Task<PreparedDelivery>
+        CreateDeliveryAsync()
+    {
+        Debug.Log(
+            "===== Creating Delivery ====="
+        );
+
+        if (toyLoader == null ||
+            childGenerator == null ||
+            letterGenerator == null)
+        {
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "required references are missing."
+            );
+
+            return null;
+        }
+
+        if (allToys == null ||
+            allToys.Length == 0)
+        {
+            allToys =
+                toyLoader.toys;
+        }
+
+        if (allToys == null ||
+            allToys.Length == 0)
+        {
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "no toys are available."
+            );
+
+            return null;
+        }
+
+        ToyData targetToy =
+            toyLoader.GetRandomToy();
+
+        if (targetToy == null)
+        {
+            return null;
+        }
+
+        ChildData child =
+            childGenerator.Generate(
+                targetToy
+            );
+
+        if (child == null)
+        {
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "child generation failed."
+            );
+
+            return null;
+        }
+
+        Debug.Log(
+            "Child Generated: " +
+            child.name
+        );
+
+        // --------------------------------------------------------
+        // AI GENERATION
+        // --------------------------------------------------------
+
+        string letter =
+            await letterGenerator.GenerateLetterText(
+                child
+            );
+
+        if (string.IsNullOrWhiteSpace(letter))
+        {
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "letter generation failed."
+            );
+
+            return null;
+        }
+
+        // --------------------------------------------------------
+        // GIFT CHOICES ARE GENERATED BEFORE THE DELIVERY STARTS
+        // --------------------------------------------------------
+
+        ToyData[] giftChoices =
+            GenerateGiftChoicesForChild(
+                child
+            );
+
+        if (giftChoices == null ||
+            giftChoices.Length == 0)
+        {
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "gift choices could not be generated."
+            );
+
+            return null;
+        }
+
+        return new PreparedDelivery(
+            child,
+            letter,
+            giftChoices
+        );
+    }
+
+    // ============================================================
+    // SHOW DELIVERY
+    // ============================================================
+
+    private void ShowDelivery(
+        PreparedDelivery delivery)
+    {
+        if (delivery == null ||
+            delivery.child == null)
+        {
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "invalid delivery."
+            );
+
+            return;
+        }
+
+        currentChild =
+            delivery.child;
+
+        selectedToy = null;
+        wrongAttempts = 0;
+
+        if (packPresentButton != null)
+        {
+            packPresentButton.interactable =
+                false;
+        }
+
+        if (letterUI != null)
+        {
+            letterUI.UpdateUI(
+                delivery.child,
+                delivery.letter
+            );
+        }
+
+        ApplyGiftChoices(
+            delivery.giftChoices
+        );
+
+        Debug.Log(
+            "===== DELIVERY READY ====="
+        );
+
+        Debug.Log(
+            "Child: " +
+            currentChild.name
+        );
+
+        Debug.Log(
+            "Target Toy: " +
+            currentChild.targetToy.name
+        );
+    }
+
+    // ============================================================
+    // START BACKGROUND PREPARATION
+    // ============================================================
+
+    private void StartPreparingNextDelivery()
+    {
+        if (!preloadNextLetter)
+        {
+            return;
+        }
+
+        if (isPreparingNextDelivery)
+        {
+            return;
+        }
+
+        isPreparingNextDelivery = true;
+
+        Debug.Log(
+            "===== START BACKGROUND LETTER GENERATION ====="
+        );
+
+        nextDeliveryTask =
+            CreateDeliveryAsync();
+
+        _ = FinishPreparingNextDeliveryAsync(
+            nextDeliveryTask
+        );
+    }
+
+    // ============================================================
+    // FINISH BACKGROUND PREPARATION
+    // ============================================================
+
+    private async Task FinishPreparingNextDeliveryAsync(
+        Task<PreparedDelivery> task)
+    {
+        try
+        {
+            PreparedDelivery delivery =
+                await task;
+
+            preparedNextDelivery =
+                delivery;
+
+            if (delivery != null)
+            {
+                Debug.Log(
+                    "===== NEXT DELIVERY READY ====="
+                );
+            }
+            else
+            {
+                Debug.LogWarning(
+                    "SantaLetterGameManager: " +
+                    "next delivery preparation failed."
+                );
+            }
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogException(
+                exception
+            );
+
+            preparedNextDelivery =
+                null;
+        }
+        finally
+        {
+            isPreparingNextDelivery =
+                false;
+        }
+    }
+
+    // ============================================================
+    // START NEW DELIVERY
+    // ============================================================
 
     public async void StartNewDelivery()
     {
-        bool prepared = await PrepareNewDeliveryAsync();
-        if (!prepared)
+        PreparedDelivery delivery =
+            await GetNextDeliveryAsync();
+
+        if (delivery == null)
         {
-            Debug.LogError("SantaLetterGameManager: could not prepare a new delivery.");
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "could not prepare a new delivery."
+            );
+
+            return;
         }
+
+        ShowDelivery(
+            delivery
+        );
+
+        StartPreparingNextDelivery();
     }
 
-    /// <summary>
-    /// Generates all data needed by the letter screen and completes only when
-    /// the letter UI and every gift button have been populated.
-    /// </summary>
-    public async Task<bool> PrepareNewDeliveryAsync()
+    // ============================================================
+    // GET NEXT DELIVERY
+    // ============================================================
+
+    private async Task<PreparedDelivery>
+        GetNextDeliveryAsync()
     {
-        Debug.Log("===== Prepare New Delivery =====");
+        // --------------------------------------------------------
+        // NEXT LETTER ALREADY FINISHED
+        // --------------------------------------------------------
 
-        Debug.Log("hintPanel = " + hintPanel);
-        Debug.Log("childGenerator = " + childGenerator);
-        Debug.Log("letterGenerator = " + letterGenerator);
-
-        if (toyLoader == null || childGenerator == null || letterGenerator == null)
+        if (preparedNextDelivery != null)
         {
-            Debug.LogError("SantaLetterGameManager: letter-generation references are incomplete.");
+            PreparedDelivery delivery =
+                preparedNextDelivery;
+
+            preparedNextDelivery =
+                null;
+
+            nextDeliveryTask =
+                null;
+
+            return delivery;
+        }
+
+        // --------------------------------------------------------
+        // NEXT LETTER IS STILL GENERATING
+        // --------------------------------------------------------
+
+        if (isPreparingNextDelivery &&
+            nextDeliveryTask != null)
+        {
+            Debug.Log(
+                "Next letter is still generating..."
+            );
+
+            PreparedDelivery delivery =
+                await nextDeliveryTask;
+
+            preparedNextDelivery =
+                null;
+
+            nextDeliveryTask =
+                null;
+
+            isPreparingNextDelivery =
+                false;
+
+            return delivery;
+        }
+
+        // --------------------------------------------------------
+        // NO BACKGROUND GENERATION
+        // --------------------------------------------------------
+
+        return await CreateDeliveryAsync();
+    }
+
+    // ============================================================
+    // COMPATIBILITY WITH OLD CODE
+    // ============================================================
+
+    public async Task<bool>
+        PrepareNewDeliveryAsync()
+    {
+        PreparedDelivery delivery =
+            await GetNextDeliveryAsync();
+
+        if (delivery == null)
+        {
             return false;
         }
 
-        if (allToys == null || allToys.Length == 0)
-        {
-            allToys = toyLoader.toys;
-        }
+        ShowDelivery(
+            delivery
+        );
 
-        if (allToys == null || allToys.Length == 0)
-        {
-            Debug.LogError("SantaLetterGameManager: no toys are available for the letter.");
-            return false;
-        }
+        StartPreparingNextDelivery();
 
-        wrongAttempts = 0;
-        selectedToy = null;
-        if (packPresentButton != null)
-        {
-            packPresentButton.interactable = false;
-        }
-
-        ToyData targetToy = toyLoader.GetRandomToy();
-        if (targetToy == null)
-        {
-            return false;
-        }
-
-        currentChild = childGenerator.Generate(targetToy);
-        if (currentChild == null)
-        {
-            Debug.LogError("SantaLetterGameManager: child generation returned no child.");
-            return false;
-        }
-
-        Debug.Log("Child Generated: " + currentChild.name);
-
-        bool letterGenerated = await letterGenerator.GenerateLetter(currentChild);
-        if (!letterGenerated)
-        {
-            Debug.LogError("SantaLetterGameManager: letter generation failed.");
-            return false;
-        }
-
-        GenerateGiftChoices();
         return true;
     }
 
-    //----------------------------------------------------
+    // ============================================================
+    // GIFT CHOICES
+    // ============================================================
 
-    void GenerateGiftChoices()
+    private ToyData[] GenerateGiftChoicesForChild(
+        ChildData child)
     {
-        Debug.Log("GenerateGiftChoices()");
-
-        List<ToyData> pool = new List<ToyData>();
-
-        foreach(ToyData toy in allToys)
+        if (child == null ||
+            child.targetToy == null ||
+            giftButtons == null ||
+            giftButtons.Length == 0)
         {
-            if(toy.minAge <= currentChild.age &&
-            toy.maxAge >= currentChild.age)
+            return null;
+        }
+
+        List<ToyData> pool =
+            new List<ToyData>();
+
+        foreach (ToyData toy in allToys)
+        {
+            if (toy == null)
+            {
+                continue;
+            }
+
+            if (toy.minAge <= child.age &&
+                toy.maxAge >= child.age)
             {
                 pool.Add(toy);
             }
         }
 
-        if(pool.Count < giftButtons.Length)
+        if (pool.Count <
+            giftButtons.Length)
         {
-            pool = new List<ToyData>(allToys);
+            pool =
+                new List<ToyData>(
+                    allToys
+                );
         }
 
         List<ToyData> choices =
             new List<ToyData>();
 
-        choices.Add(currentChild.targetToy);
+        choices.Add(
+            child.targetToy
+        );
 
-        pool.Remove(currentChild.targetToy);
+        pool.Remove(
+            child.targetToy
+        );
 
-        while (choices.Count < giftButtons.Length)
+        while (
+            choices.Count <
+            giftButtons.Length &&
+            pool.Count > 0
+        )
         {
             int index =
-                Random.Range(0, pool.Count);
+                Random.Range(
+                    0,
+                    pool.Count
+                );
 
-            ToyData toy = pool[index];
-            if(!choices.Contains(toy))
+            ToyData toy =
+                pool[index];
+
+            if (!choices.Contains(toy))
             {
                 choices.Add(toy);
             }
 
-            pool.RemoveAt(index);
+            pool.RemoveAt(
+                index
+            );
         }
 
-        Shuffle(choices);
+        Shuffle(
+            choices
+        );
 
-        for (int i = 0; i < giftButtons.Length; i++)
+        return choices.ToArray();
+    }
+
+    private void ApplyGiftChoices(
+        ToyData[] choices)
+    {
+        if (choices == null ||
+            giftButtons == null)
         {
-            Debug.Log($"Button {i + 1}: {choices[i].name}");
+            return;
+        }
+
+        int count =
+            Mathf.Min(
+                choices.Length,
+                giftButtons.Length
+            );
+
+        for (int i = 0; i < count; i++)
+        {
+            if (giftButtons[i] == null ||
+                choices[i] == null)
+            {
+                continue;
+            }
+
+            Debug.Log(
+                $"Button {i + 1}: " +
+                choices[i].name
+            );
 
             giftButtons[i].Setup(
                 choices[i],
@@ -216,34 +637,72 @@ public class SantaLetterGameManager : MonoBehaviour
         }
     }
 
-    public void SelectGift(ToyData toy)
+    // ============================================================
+    // SELECT GIFT
+    // ============================================================
+
+    public void SelectGift(
+        ToyData toy)
     {
-        selectedToy = toy;
+        if (toy == null)
+        {
+            return;
+        }
 
-        Debug.Log("Selected " + toy.name);
+        selectedToy =
+            toy;
 
-        // Enable Pack Present button
+        Debug.Log(
+            "Selected " +
+            toy.name
+        );
+
         if (packPresentButton != null)
         {
-            packPresentButton.interactable = true;
+            packPresentButton.interactable =
+                true;
         }
     }
 
+    // ============================================================
+    // PACK PRESENT
+    // ============================================================
+
     public void PackPresent()
     {
-        if (selectedToy == null)
-        return;
-
-        if(selectedToy.id == currentChild.targetToy.id)
+        if (selectedToy == null ||
+            currentChild == null)
         {
-            AudioManager.Instance.PlayCorrect();
+            return;
+        }
 
-            resultPopup.ShowCorrect();
-            packPresentButton.interactable = false;
+        if (
+            selectedToy.id ==
+            currentChild.targetToy.id
+        )
+        {
+            if (AudioManager.Instance != null)
+            {
+                AudioManager.Instance.PlayCorrect();
+            }
+
+            if (resultPopup != null)
+            {
+                resultPopup.ShowCorrect();
+            }
+
+            if (packPresentButton != null)
+            {
+                packPresentButton.interactable =
+                    false;
+            }
 
             if (correctAnswerTransitionDelay > 0f)
             {
-                Invoke(nameof(AdvanceCorrectDelivery), correctAnswerTransitionDelay);
+                Invoke(
+                    nameof(AdvanceCorrectDelivery),
+                    correctAnswerTransitionDelay
+                );
             }
             else
             {
@@ -252,71 +711,130 @@ public class SantaLetterGameManager : MonoBehaviour
         }
         else
         {
-            AudioManager.Instance.PlayWrong();
+            if (AudioManager.Instance != null)
+            {
+                AudioManager.Instance.PlayWrong();
+            }
 
-            resultPopup.ShowWrong();
+            if (resultPopup != null)
+            {
+                resultPopup.ShowWrong();
+            }
 
             ShowNextHint();
         }
     }
 
-    private void AdvanceCorrectDelivery()
+    // ============================================================
+    // ADVANCE DELIVERY
+    // ============================================================
+
+    private async void AdvanceCorrectDelivery()
     {
+        if (isAdvancing)
+        {
+            return;
+        }
+
+        isAdvancing = true;
+
         if (deliveryManager != null)
         {
             deliveryManager.CompleteDelivery();
+
+            isAdvancing = false;
             return;
         }
 
-        LoadLevel1Scene();
-    }
+        PreparedDelivery next =
+            await GetNextDeliveryAsync();
 
-    private void LoadLevel1Scene()
-    {
-        if (string.IsNullOrWhiteSpace(level1SceneName))
+        if (next == null)
         {
-            Debug.LogError("SantaLetterGameManager: level1SceneName is empty.");
+            Debug.LogError(
+                "SantaLetterGameManager: " +
+                "no next delivery available."
+            );
+
+            isAdvancing = false;
             return;
         }
 
-        SceneManager.LoadScene(level1SceneName);
+        ShowDelivery(
+            next
+        );
+
+        StartPreparingNextDelivery();
+
+        isAdvancing = false;
     }
 
-    void ShowNextHint()
-{
-    string[] clues;
+    // ============================================================
+    // HINT
+    // ============================================================
 
-    switch(currentChild.difficulty)
+    private void ShowNextHint()
     {
-        case "medium":
-            clues = currentChild.targetToy.mediumClues;
-            break;
+        if (currentChild == null ||
+            currentChild.targetToy == null ||
+            hintPanel == null)
+        {
+            return;
+        }
 
-        case "hard":
-            clues = currentChild.targetToy.hardClues;
-            break;
+        string[] clues;
 
-        default:
-            clues = currentChild.targetToy.easyClues;
-            break;
+        switch (currentChild.difficulty)
+        {
+            case "medium":
+                clues =
+                    currentChild.targetToy.mediumClues;
+                break;
+
+            case "hard":
+                clues =
+                    currentChild.targetToy.hardClues;
+                break;
+
+            default:
+                clues =
+                    currentChild.targetToy.easyClues;
+                break;
+        }
+
+        if (clues == null)
+        {
+            return;
+        }
+
+        if (wrongAttempts < clues.Length)
+        {
+            hintPanel.ShowHint(
+                clues[wrongAttempts]
+            );
+        }
+
+        wrongAttempts++;
     }
 
-    if(wrongAttempts < clues.Length)
+    // ============================================================
+    // SHUFFLE
+    // ============================================================
+
+    private void Shuffle(
+        List<ToyData> list)
     {
-        hintPanel.ShowHint(clues[wrongAttempts]);
-    }
-
-    wrongAttempts++;
-}
-
-    //----------------------------------------------------
-
-    void Shuffle(List<ToyData> list)
-    {
-        for(int i=0;i<list.Count;i++)
+        for (
+            int i = 0;
+            i < list.Count;
+            i++
+        )
         {
             int r =
-                Random.Range(i,list.Count);
+                Random.Range(
+                    i,
+                    list.Count
+                );
 
             ToyData temp =
                 list[i];
@@ -329,11 +847,21 @@ public class SantaLetterGameManager : MonoBehaviour
         }
     }
 
-    int GetDeliveryCount()
+    // ============================================================
+    // DELIVERY COUNT
+    // ============================================================
+
+    private int GetDeliveryCount()
     {
-        if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
+        if (
+            GameManager.hasActiveDeliveryCount &&
+            GameManager.activeDeliveryCount > 0
+        )
         {
-            return Mathf.Max(5, GameManager.activeDeliveryCount);
+            return Mathf.Max(
+                1,
+                GameManager.activeDeliveryCount
+            );
         }
 
         switch (difficulty)
@@ -352,14 +880,30 @@ public class SantaLetterGameManager : MonoBehaviour
         }
     }
 
+    // ============================================================
+    // RETRY
+    // ============================================================
+
     public void Retry()
     {
-        AudioManager.Instance.PlayClick();
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayClick();
+        }
 
         selectedToy = null;
 
-        hintPanel.Hide();
+        wrongAttempts = 0;
 
-        // StartNewDelivery();
+        if (packPresentButton != null)
+        {
+            packPresentButton.interactable =
+                false;
+        }
+
+        if (hintPanel != null)
+        {
+            hintPanel.Hide();
+        }
     }
 }
