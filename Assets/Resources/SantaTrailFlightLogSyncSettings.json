@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "telemetryOptIn": true,
+  "apiBaseUrl": "http://localhost:8000",
+  "uploadCompletedFlightsOnly": true
+}

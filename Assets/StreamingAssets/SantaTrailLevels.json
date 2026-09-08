@@ -1,0 +1,85 @@
+{
+  "levels": [
+    {
+      "id": "level-1",
+      "label": "Level 1 - Guided Tutorial",
+      "sceneName": "LV1",
+      "homeLatitude": 52.155719,
+      "homeLongitude": 4.964212,
+      "homeAltitude": 0,
+      "homeYaw": 0,
+      "missionDifficulty": 0,
+      "deliveryCount": 5,
+      "showTutorial": true,
+      "previewMissionType": "TUTORIAL MISSION",
+      "previewMissionTitle": "PORTENGEN FIRST FLIGHT",
+      "previewLocation": "Portengen, Netherlands",
+      "previewDifficulty": "Easy",
+      "previewReward": "500 XP",
+      "previewTimeWindow": "21.00 - 23.30",
+      "mainGoal": "Deliver 5 presents with the guided route",
+      "previewChecklist": [
+        "Deliver 5 presents with the guided route",
+        "Land the drone safely",
+        "Complete the guided first delivery"
+      ],
+      "autoLoadNextScene": false,
+      "nextSceneName": "",
+      "nextSceneDelaySeconds": 2
+    },
+    {
+      "id": "level-2",
+      "label": "Level 2 - Demo",
+      "sceneName": "DroneSimulateDemo",
+      "homeLatitude": 13.8455,
+      "homeLongitude": 100.5688,
+      "homeAltitude": 10,
+      "homeYaw": 0,
+      "missionDifficulty": 0,
+      "deliveryCount": 5,
+      "showTutorial": true,
+      "previewMissionType": "DEMO MISSION",
+      "previewMissionTitle": "BANGKOK DELIVERY RUN",
+      "previewLocation": "Bangkok, Thailand",
+      "previewDifficulty": "Easy",
+      "previewReward": "750 XP",
+      "previewTimeWindow": "18.00 - 22.00",
+      "mainGoal": "Deliver 5 presents across the demo route",
+      "previewChecklist": [
+        "Deliver 5 presents across the demo route",
+        "Keep the drone within the safe altitude",
+        "Land the drone safely"
+      ],
+      "autoLoadNextScene": false,
+      "nextSceneName": "",
+      "nextSceneDelaySeconds": 2
+    },
+    {
+      "id": "level-3",
+      "label": "Level 3 - Sandbox",
+      "sceneName": "SampleScene",
+      "homeLatitude": 13.8455,
+      "homeLongitude": 100.5688,
+      "homeAltitude": 10,
+      "homeYaw": 0,
+      "missionDifficulty": 0,
+      "deliveryCount": 5,
+      "showTutorial": true,
+      "previewMissionType": "SANDBOX MISSION",
+      "previewMissionTitle": "SANDBOX SANTA RUN",
+      "previewLocation": "Bangkok, Thailand",
+      "previewDifficulty": "Easy",
+      "previewReward": "1000 XP",
+      "previewTimeWindow": "Any time",
+      "mainGoal": "Deliver 5 presents anywhere in the sandbox",
+      "previewChecklist": [
+        "Deliver 5 presents anywhere in the sandbox",
+        "Plan a safe route to every home",
+        "Complete the delivery route"
+      ],
+      "autoLoadNextScene": false,
+      "nextSceneName": "",
+      "nextSceneDelaySeconds": 2
+    }
+  ]
+}

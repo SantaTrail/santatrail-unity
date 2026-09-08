@@ -1,0 +1,2 @@
+# SantaTrail's bundled backend uses only Python's standard library.
+# Keeping this file documents that no pip installation is required.
