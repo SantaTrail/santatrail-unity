@@ -1,4 +1,7 @@
 # Unity/QGC training profile: avoid unexpected mid-route stops in SITL
+# Explicit motor layout is required by current ArduCopter builds after --wipe.
+FRAME_CLASS 1
+FRAME_TYPE 1
 AVOID_ENABLE 0
 OA_TYPE 0
 FENCE_ENABLE 0
@@ -16,5 +19,10 @@ FLTMODE_CH 0
 RC7_OPTION 0
 EK3_IMU_MASK 1
 EK3_PRIMARY 0
+# Make both directed UDP outputs explicit after --wipe. SERIAL0 feeds QGC on
+# 14550 and SERIAL1 feeds the Unity receiver on 14551.
+SERIAL0_PROTOCOL 2
+SERIAL1_PROTOCOL 2
+SR0_POSITION 10
 # Unity uses SERIAL1 (UDP 14551); stream the position it needs to mirror QGC.
 SR1_POSITION 10

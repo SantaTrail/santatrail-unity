@@ -14,15 +14,17 @@ using Unity.Mathematics;
 
 public partial class SceneLoaderArcgis
 {
-    void GenerateSceneSafe(Result result)
+    bool GenerateSceneSafe(Result result)
     {
         try
         {
             GenerateScene(result);
+            return true;
         }
         catch (System.Exception e)
         {
             Debug.LogException(e);
+            return false;
         }
     }
 

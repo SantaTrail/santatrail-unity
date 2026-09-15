@@ -3,9 +3,7 @@ using System.Collections;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
 
 /// <summary>
 /// Adds a small in-game control for placing the separately-running QGroundControl
@@ -16,9 +14,6 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
 {
     private const float OverlaySizePercent = 0.30f;
     private const int WindowMarginPixels = 18;
-    private const int ButtonWidth = 210;
-    private const int ButtonHeight = 54;
-
     private static readonly IntPtr HwndTopmost = new IntPtr(-1);
     private static readonly IntPtr HwndBottom = new IntPtr(1);
     private const uint SwpNoSize = 0x0001;
@@ -26,10 +21,18 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpShowWindow = 0x0040;
 
-    private Button toggleButton;
-    private Text buttonLabel;
     private bool overlayIsVisible;
+    private bool isFlightLevel;
     private FullScreenMode fullscreenModeBeforeOverlay;
+
+    public static QGroundControlOverlayController Active { get; private set; }
+    public bool OverlayIsVisible => overlayIsVisible;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetState()
+    {
+        Active = null;
+    }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void CreateForRuntime()
@@ -47,6 +50,13 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
 
     private void Awake()
     {
+        if (Active != null && Active != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        Active = this;
         SceneManager.sceneLoaded += OnSceneLoaded;
         Application.quitting += ReturnQGroundControlToBackground;
     }
@@ -62,6 +72,10 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
     {
         SceneManager.sceneLoaded -= OnSceneLoaded;
         Application.quitting -= ReturnQGroundControlToBackground;
+        if (Active == this)
+        {
+            Active = null;
+        }
     }
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -82,80 +96,23 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
 
     private void RefreshForActiveScene()
     {
-        bool isFlightLevel = LevelConfigLoader.TryFindLevel(
+        isFlightLevel = LevelConfigLoader.TryFindLevel(
             SceneManager.GetActiveScene().name,
             out LevelConfig unusedLevel);
-
-        if (isFlightLevel)
-        {
-            EnsureButton();
-        }
-
-        if (toggleButton != null)
-        {
-            toggleButton.gameObject.SetActive(isFlightLevel);
-        }
+        RefreshButtonComponents();
     }
 
-    private void EnsureButton()
+    public void RefreshButtonComponents()
     {
-        if (toggleButton != null)
+        QGroundControlButtonUI[] buttons = FindObjectsByType<QGroundControlButtonUI>(
+            FindObjectsInactive.Include,
+            FindObjectsSortMode.None);
+
+        for (int i = 0; i < buttons.Length; i++)
         {
-            return;
+            buttons[i].SetAvailable(isFlightLevel);
+            buttons[i].SetOpen(overlayIsVisible);
         }
-
-        if (EventSystem.current == null)
-        {
-            GameObject eventSystem = new GameObject("QGC Overlay EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
-            DontDestroyOnLoad(eventSystem);
-        }
-
-        GameObject canvasObject = new GameObject("QGC Overlay Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-        DontDestroyOnLoad(canvasObject);
-
-        Canvas canvas = canvasObject.GetComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = short.MaxValue;
-
-        CanvasScaler scaler = canvasObject.GetComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
-        scaler.matchWidthOrHeight = 0.5f;
-
-        GameObject buttonObject = new GameObject("Toggle QGroundControl", typeof(RectTransform), typeof(Image), typeof(Button));
-        buttonObject.transform.SetParent(canvasObject.transform, false);
-
-        RectTransform buttonRect = buttonObject.GetComponent<RectTransform>();
-        buttonRect.anchorMin = new Vector2(1f, 1f);
-        buttonRect.anchorMax = new Vector2(1f, 1f);
-        buttonRect.pivot = new Vector2(1f, 1f);
-        buttonRect.anchoredPosition = new Vector2(-24f, -24f);
-        buttonRect.sizeDelta = new Vector2(ButtonWidth, ButtonHeight);
-
-        Image buttonImage = buttonObject.GetComponent<Image>();
-        buttonImage.color = new Color(0.05f, 0.19f, 0.30f, 0.94f);
-
-        toggleButton = buttonObject.GetComponent<Button>();
-        ColorBlock colors = toggleButton.colors;
-        colors.highlightedColor = new Color(0.12f, 0.36f, 0.54f, 1f);
-        colors.pressedColor = new Color(0.03f, 0.11f, 0.18f, 1f);
-        toggleButton.colors = colors;
-        toggleButton.onClick.AddListener(ToggleOverlay);
-
-        GameObject labelObject = new GameObject("Label", typeof(RectTransform), typeof(Text));
-        labelObject.transform.SetParent(buttonObject.transform, false);
-        RectTransform labelRect = labelObject.GetComponent<RectTransform>();
-        labelRect.anchorMin = Vector2.zero;
-        labelRect.anchorMax = Vector2.one;
-        labelRect.offsetMin = Vector2.zero;
-        labelRect.offsetMax = Vector2.zero;
-
-        buttonLabel = labelObject.GetComponent<Text>();
-        buttonLabel.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        buttonLabel.fontSize = 20;
-        buttonLabel.alignment = TextAnchor.MiddleCenter;
-        buttonLabel.color = Color.white;
-        UpdateButtonLabel();
     }
 
     public void ToggleOverlay()
@@ -191,7 +148,7 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
         }
 
         overlayIsVisible = true;
-        UpdateButtonLabel();
+        RefreshButtonComponents();
     }
 
     public void ReturnQGroundControlToBackground()
@@ -201,28 +158,41 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
             return;
         }
 
+        KeepQGroundControlBehindGame();
+
+        Screen.fullScreenMode = fullscreenModeBeforeOverlay;
+        overlayIsVisible = false;
+        RefreshButtonComponents();
+    }
+
+    /// <summary>
+    /// Places QGroundControl behind Unity without changing overlay state. This
+    /// is also used while QGC starts underneath the game's loading screen.
+    /// </summary>
+    public bool KeepQGroundControlBehindGame()
+    {
         if (IsWindowsRuntime())
         {
             IntPtr qgcWindow = FindQGroundControlWindow();
-            if (qgcWindow != IntPtr.Zero)
+            if (qgcWindow == IntPtr.Zero)
             {
-                SetWindowPos(qgcWindow, HwndBottom, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+                return false;
             }
+
+            SetWindowPos(qgcWindow, HwndBottom, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
 
             IntPtr unityWindow = Process.GetCurrentProcess().MainWindowHandle;
             if (unityWindow != IntPtr.Zero)
             {
                 SetForegroundWindow(unityWindow);
             }
-        }
-        else
-        {
-            RunAppleScript("tell application \"System Events\" to set visible of process \"QGroundControl\" to false");
+
+            return true;
         }
 
-        Screen.fullScreenMode = fullscreenModeBeforeOverlay;
-        overlayIsVisible = false;
-        UpdateButtonLabel();
+        return RunAppleScript(
+            "tell application \"System Events\" to set visible of process \"QGroundControl\" to false"
+        );
     }
 
     private static bool ShowWindowsOverlay()
@@ -329,14 +299,6 @@ public sealed class QGroundControlOverlayController : MonoBehaviour
     {
         return Application.platform == RuntimePlatform.WindowsEditor ||
                Application.platform == RuntimePlatform.WindowsPlayer;
-    }
-
-    private void UpdateButtonLabel()
-    {
-        if (buttonLabel != null)
-        {
-            buttonLabel.text = overlayIsVisible ? "Hide Flight Planner" : "Show Flight Planner";
-        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

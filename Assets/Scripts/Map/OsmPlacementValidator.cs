@@ -19,7 +19,7 @@ public class OsmPlacementValidator : MonoBehaviour
         "touch or overlap. Enable only when matching the map shadows is more " +
         "important than keeping generated houses visually separate."
     )]
-    [SerializeField] bool useExactOsmFootprints = false;
+    [SerializeField] bool useExactOsmFootprints = true;
 
     [Range(0.15f, 1f)]
     [Tooltip(

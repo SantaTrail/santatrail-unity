@@ -18,6 +18,9 @@ public class DeliveryManager : MonoBehaviour
 
     private int completedDeliveries = 0;
 
+    public bool NeedsAnotherPreparedDelivery =>
+        completedDeliveries + 1 < totalDeliveries;
+
     private void Awake()
     {
         if (GameManager.hasActiveDeliveryCount)

@@ -1146,6 +1146,23 @@ MonoBehaviour:
   enableGuidedRepositionNudge: 0
   guidedStallSecondsBeforeNudge: 2
   guidedNudgeIntervalSeconds: 0.5
+  enforceMapGeofence: 1
+  useSceneMapExtentForGeofence: 1
+  useFallbackGeofenceRadius: 0
+  fallbackGeofenceRadiusMeters: 500
+  geofenceBufferMeters: 20
+  geofenceCommandIntervalSeconds: 1
+  preserveGuidedModeOnMapBoundary: 1
+  enforceBuildingCollision: 1
+  droneCollisionRadiusMeters: 0.35
+  buildingCollisionLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  preserveGuidedModeOnBuildingCollision: 1
+  buildingCollisionRetreatMeters: 1
+  enforceMaximumAltitude: 1
+  maximumRelativeAltitudeMeters: 45
+  altitudeLimitBufferMeters: 3
 --- !u!1 &9137221485817806833
 GameObject:
   m_ObjectHideFlags: 0

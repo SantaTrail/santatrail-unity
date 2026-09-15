@@ -7,13 +7,22 @@ using System.Collections;
 
 public class ArcGISConverter : MonoBehaviour
 {
+    [Header("Visible Map Readiness")]
+    [Min(0f)]
+    [Tooltip(
+        "Minimum settling time after ArcGIS first reports DrawStatus.Completed " +
+        "before the level may hide its loading screen. The final readiness " +
+        "sample must also be Completed."
+    )]
+    [SerializeField] float requiredStableDrawSeconds = 2f;
+
     private ArcGISMapComponent arcGISMap;
     private string lastProbeError = "";
     private bool hasLoggedCameraState = false;
 
-    private bool isReady = false;
     private bool hasLoggedReady = false;
     private float nextMapRetryAt = 0f;
+    private float drawCompletedSinceRealtime = -1f;
 
     void Awake()
     {
@@ -52,13 +61,8 @@ public class ArcGISConverter : MonoBehaviour
                 yield break;
             }
 
-            if (arcGISMap.View != null &&
-                CanConvertProbePoint() &&
-                IsMapContentLoaded() &&
-                IsMapDrawComplete())
+            if (HasStableVisibleMap())
             {
-                isReady = true;
-
                 if (!hasLoggedReady)
                 {
                     Debug.Log("✅ ArcGIS FULLY READY");
@@ -92,6 +96,18 @@ if (arcGISMap?.View != null)
     Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
 }
         Debug.LogError($"❌ ArcGIS readiness timeout (90s). {GetDiagnosticSummary()}");
+    }
+
+    void Update()
+    {
+        // Lose the completion observation only if the map itself unloads.
+        // A live ArcGIS camera can alternate between Completed and InProgress
+        // as adjacent tiles stream, so resetting on every InProgress frame can
+        // otherwise keep a completely usable map behind the loading screen.
+        if (!IsMapContentLoaded())
+        {
+            drawCompletedSinceRealtime = -1f;
+        }
     }
 
     void LogRuntimeEnvironment()
@@ -198,12 +214,62 @@ if (arcGISMap?.View != null)
             $"GPU={SystemInfo.graphicsDeviceName} | " +
             $"OS={SystemInfo.operatingSystem} | " +
             $"ProbeError={probeError} | " +
+            $"StableDraw={(drawCompletedSinceRealtime >= 0f ? (Time.realtimeSinceStartup - drawCompletedSinceRealtime).ToString("0.0") + "s" : "waiting")} | " +
             $"Log={Application.consoleLogPath}";
     }
 
     public bool IsReady()
     {
-        return isReady;
+        // Evaluate the live view every time because the level loader can reach
+        // this final phase before the startup coroutine observes completion.
+        bool visibleMapReady = HasStableVisibleMap();
+        return visibleMapReady;
+    }
+
+    public bool CanProjectCoordinates()
+    {
+        // Coordinate conversion becomes usable before the renderer finishes
+        // streaming every visible tile. Level generation may safely start at
+        // this point, while IsReady() continues to guard removal of the
+        // loading screen until the ArcGIS view has actually completed a draw.
+        return arcGISMap != null &&
+               arcGISMap.View != null &&
+               IsMapContentLoaded() &&
+               CanConvertProbePoint();
+    }
+
+    public void RequireFreshDrawCompletion()
+    {
+        // Object generation and drone placement change the streaming camera's
+        // final view. Require ArcGIS to complete that view instead of reusing
+        // the earlier startup-ready result.
+        drawCompletedSinceRealtime = -1f;
+    }
+
+    bool HasStableVisibleMap()
+    {
+        if (!CanProjectCoordinates())
+        {
+            drawCompletedSinceRealtime = -1f;
+            return false;
+        }
+
+        // Completed is sampled again at the moment readiness is returned, but
+        // intervening InProgress frames do not restart the whole settling
+        // period. Those frames are normal while a moving camera streams tiles.
+        if (!IsMapDrawComplete())
+        {
+            return false;
+        }
+
+        float now = Time.realtimeSinceStartup;
+        if (drawCompletedSinceRealtime < 0f)
+        {
+            drawCompletedSinceRealtime = now;
+        }
+
+        return now - drawCompletedSinceRealtime >=
+            Mathf.Max(0f, requiredStableDrawSeconds);
     }
 
     bool CanConvertProbePoint()
@@ -222,13 +288,16 @@ if (arcGISMap?.View != null)
                 GameManager.homeAlt,
                 ArcGISSpatialReference.WGS84()
             );
-            var world = arcGISMap.View.GeographicToWorld(probe);
+            Vector3 enginePosition = arcGISMap.GeographicToEngine(probe);
 
-            if (double.IsNaN(world.x) || double.IsInfinity(world.x) ||
-                double.IsNaN(world.y) || double.IsInfinity(world.y) ||
-                double.IsNaN(world.z) || double.IsInfinity(world.z))
+            if (float.IsNaN(enginePosition.x) ||
+                float.IsInfinity(enginePosition.x) ||
+                float.IsNaN(enginePosition.y) ||
+                float.IsInfinity(enginePosition.y) ||
+                float.IsNaN(enginePosition.z) ||
+                float.IsInfinity(enginePosition.z))
             {
-                lastProbeError = "World result NaN/Infinity";
+                lastProbeError = "Engine result NaN/Infinity";
                 return false;
             }
 
@@ -303,9 +372,9 @@ if (arcGISMap?.View != null)
 
     public Vector3 GPSToUnity(double lat, double lon, double alt)
     {
-        if (!isReady)
+        if (!CanProjectCoordinates())
         {
-            Debug.LogWarning($"⚠️ ArcGIS not ready yet → skipping conversion ({lat}, {lon})");
+            Debug.LogWarning($"⚠️ ArcGIS projection is not ready yet → skipping conversion ({lat}, {lon})");
             return Vector3.zero;
         }
 
@@ -326,13 +395,13 @@ if (arcGISMap?.View != null)
                 ArcGISSpatialReference.WGS84()
             );
 
-            var world = arcGISMap.View.GeographicToWorld(geo);
-
-            Vector3 pos = new Vector3(
-                (float)world.x,
-                (float)world.y,
-                (float)world.z
-            );
+            // GeographicToWorld returns ArcGIS's high-precision Cartesian
+            // coordinate (ECEF for a global map), not a Unity scene position.
+            // Casting that million-unit value to float loses footprint detail
+            // and placing a Transform at it bypasses the HP root entirely.
+            // GeographicToEngine applies the map's high-precision world matrix
+            // and returns the correct Unity-space position near the map origin.
+            Vector3 pos = arcGISMap.GeographicToEngine(geo);
 
             // 🔥 VALIDATION CHECK
             if (float.IsNaN(pos.x) || float.IsInfinity(pos.x) ||
@@ -343,10 +412,10 @@ if (arcGISMap?.View != null)
                 return Vector3.zero;
             }
 
-            // 🔥 SAFETY: ignore absurd values
+            // Engine coordinates should remain local to the ArcGIS map origin.
             if (pos.magnitude > 10000000f)
             {
-                Debug.LogError($"❌ ArcGIS position too large → likely not initialized properly ({pos})");
+                Debug.LogError($"❌ ArcGIS engine position is unexpectedly large ({pos})");
                 return Vector3.zero;
             }
 

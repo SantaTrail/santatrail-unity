@@ -3080,7 +3080,6 @@ MonoBehaviour:
   - {fileID: 1501655060}
   - {fileID: 1035004510}
   resultPopup: {fileID: 631720810}
-  level1SceneName: LV1
   correctAnswerTransitionDelay: 2
   difficulty: 0
   missionUI: {fileID: 1275462587}
@@ -4262,6 +4261,8 @@ MonoBehaviour:
   deliveryText: {fileID: 1280941166}
   openPresentSprite: {fileID: 21300000, guid: 4cae37443906f4989a118501382366a2, type: 3}
   closedPresentSprite: {fileID: 21300000, guid: 85e2a3aede0e54b27891c90e18a60b48, type: 3}
+  pendingPresentColor: {r: 0.38, g: 0.38, b: 0.38, a: 0.72}
+  deliveredPresentColor: {r: 1, g: 1, b: 1, a: 1}
   presentIcons: []
   presentIconSizes:
   - {x: 0, y: 0}

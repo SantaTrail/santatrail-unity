@@ -38,9 +38,6 @@ public class SantaLetterGameManager : MonoBehaviour
     public ResultPopup resultPopup;
 
     [SerializeField]
-    private string level1SceneName = "PreviewLV";
-
-    [SerializeField]
     private float correctAnswerTransitionDelay = 2f;
 
     [Header("Mission UI")]
@@ -133,6 +130,17 @@ public class SantaLetterGameManager : MonoBehaviour
                 "Loaded Toy: " +
                 toy.name
             );
+        }
+
+        // LoadingScene owns the first delivery while it is preloading the
+        // letter scene. Starting another delivery here would send two prompts
+        // to the same one-slot native LLMAgent at the same time.
+        if (SantaLetterPreloadSession.IsPreparing)
+        {
+            Debug.Log(
+                "SantaLetterGameManager: first delivery is owned by LoadingScene."
+            );
+            return;
         }
 
         // --------------------------------------------------------
@@ -342,6 +350,12 @@ public class SantaLetterGameManager : MonoBehaviour
     private void StartPreparingNextDelivery()
     {
         if (!preloadNextLetter)
+        {
+            return;
+        }
+
+        if (deliveryManager != null &&
+            !deliveryManager.NeedsAnotherPreparedDelivery)
         {
             return;
         }

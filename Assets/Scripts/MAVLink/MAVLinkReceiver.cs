@@ -172,6 +172,36 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("Minimum seconds between automatic BRAKE requests.")]
     [SerializeField] float geofenceCommandIntervalSeconds = 1f;
 
+    [Tooltip(
+        "When a GUIDED destination is outside the playable map, replace it " +
+        "with a hold at the boundary instead of switching to BRAKE."
+    )]
+    [SerializeField] bool preserveGuidedModeOnMapBoundary = true;
+
+    [Header("Building Collision")]
+    [Tooltip("Stop the visible drone before it enters a generated building.")]
+    [SerializeField] bool enforceBuildingCollision = true;
+
+    [Min(0.1f)]
+    [Tooltip("Collision radius around the drone in metres.")]
+    [SerializeField] float droneCollisionRadiusMeters = 0.35f;
+
+    [Tooltip("Physics layers checked for generated building colliders.")]
+    [SerializeField] LayerMask buildingCollisionLayers = ~0;
+
+    [Tooltip(
+        "When a GUIDED destination intersects a building, replace it with a " +
+        "short retreat from the last safe position instead of switching to BRAKE."
+    )]
+    [SerializeField] bool preserveGuidedModeOnBuildingCollision = true;
+
+    [Min(0f)]
+    [Tooltip(
+        "Move the replacement GUIDED target this far back from the impact " +
+        "so the physical vehicle clears the collider before control resumes."
+    )]
+    [SerializeField] float buildingCollisionRetreatMeters = 1f;
+
     [Header("Altitude Limit")]
     [Tooltip("Request BRAKE from ArduPilot when the drone reaches the maximum relative altitude.")]
     [SerializeField] bool enforceMaximumAltitude = true;
@@ -237,9 +267,21 @@ public class MAVLinkReceiver : MonoBehaviour
     private byte vehicleSystemId = 1;
     private byte vehicleComponentId = 1;
     private bool mapGeofenceTriggered;
+    private bool boundaryGuidedHoldSent;
     private double mapGeofenceDistanceMeters;
     private bool altitudeLimitTriggered;
     private float lastSafetyBrakeCommandTime = -1000f;
+    private bool hasLastSafePosition;
+    private double lastSafeLat;
+    private double lastSafeLon;
+    private double lastSafeAlt;
+    private Vector3 lastSafeWorldPosition;
+    private bool buildingCollisionTriggered;
+    private bool buildingGuidedHoldSent;
+    private double buildingCollisionContactLat;
+    private double buildingCollisionContactLon;
+    private double buildingCollisionContactAlt;
+    private Vector3 lastBlockedMovementWorldDirection;
 
     public bool IsGuidedArmed => hbGuided && hbArmed;
     public bool IsGuidedMode => hbGuided;
@@ -247,6 +289,9 @@ public class MAVLinkReceiver : MonoBehaviour
     public bool HasRecentTelemetry => lastAnyPacketTime > 0f && (Time.time - lastAnyPacketTime) <= 2f;
     public MAVLink.MAV_LANDED_STATE LandedState => landedState;
     public float RelativeAltitudeMeters => targetRelativeAlt;
+    public double CurrentLatitude => smoothLat;
+    public double CurrentLongitude => smoothLon;
+    public bool HasPosition => hasSmoothedPosition;
     public bool HasNavTargetDistance => hasNavTargetDist;
     public float NavTargetDistanceMeters => navTargetDistM;
     public Vector3 VelocityNed => new Vector3(velNorthMps, velEastMps, velDownMps);
@@ -255,6 +300,36 @@ public class MAVLinkReceiver : MonoBehaviour
     public bool MapGeofenceTriggered => mapGeofenceTriggered;
     public double MapGeofenceDistanceMeters => mapGeofenceDistanceMeters;
     public bool AltitudeLimitTriggered => altitudeLimitTriggered;
+    public bool BuildingCollisionTriggered => buildingCollisionTriggered;
+
+    public static void PrepareForSceneRestart()
+    {
+        MAVLinkReceiver receiver = Active;
+        if (receiver == null)
+        {
+            return;
+        }
+
+        // Disabling invokes OnDisable synchronously, which closes UDP 14551
+        // before the next scene starts its replacement receiver.
+        receiver.enabled = false;
+        Debug.Log("MAVLinkReceiver: released UDP 14551 for scene restart.");
+    }
+
+    public bool TryGetPlayableBoundaryRadius(out double radiusMeters)
+    {
+        if (!enforceMapGeofence || !TryGetGeofenceRadius(out radiusMeters))
+        {
+            radiusMeters = 0.0;
+            return false;
+        }
+
+        radiusMeters = System.Math.Max(
+            1.0,
+            radiusMeters - System.Math.Max(0.0, geofenceBufferMeters)
+        );
+        return true;
+    }
 
     string GetCopterModeName(uint customMode)
     {
@@ -327,6 +402,11 @@ public class MAVLinkReceiver : MonoBehaviour
         if (locationComponent == null)
         {
             Debug.LogError("❌ ArcGISLocationComponent NOT FOUND");
+        }
+
+        if (GetComponent<DroneBoundaryWarning>() == null)
+        {
+            gameObject.AddComponent<DroneBoundaryWarning>();
         }
 
         if (alignToMapOriginOnStart && locationComponent != null)
@@ -552,14 +632,29 @@ public class MAVLinkReceiver : MonoBehaviour
             radiusMeters - System.Math.Max(0.0, geofenceBufferMeters)
         );
 
+        double boundaryResetRadiusMeters = System.Math.Max(
+            1.0,
+            triggerRadiusMeters - System.Math.Max(2.0, geofenceBufferMeters * 0.1)
+        );
+
         if (mapGeofenceTriggered &&
-            mapGeofenceDistanceMeters <= radiusMeters * 0.85)
+            mapGeofenceDistanceMeters <= boundaryResetRadiusMeters)
         {
             mapGeofenceTriggered = false;
+            boundaryGuidedHoldSent = false;
         }
 
         if (mapGeofenceDistanceMeters < triggerRadiusMeters || !hbArmed)
         {
+            return;
+        }
+
+        // LateUpdate clamps the visible location to the edge and replaces the
+        // unreachable destination with that clamped position. Do not enter
+        // BRAKE first, otherwise Guided input remains locked behind BRAKE.
+        if (CanPreserveGuidedControl(preserveGuidedModeOnMapBoundary))
+        {
+            mapGeofenceTriggered = true;
             return;
         }
 
@@ -662,6 +757,468 @@ public class MAVLinkReceiver : MonoBehaviour
 
         radiusMeters = System.Math.Max(1.0, fallbackGeofenceRadiusMeters);
         return true;
+    }
+
+    bool ClampToPlayableMap(ref double latitude, ref double longitude)
+    {
+        if (!enforceMapGeofence ||
+            !GameManager.hasHomeLocation ||
+            !TryGetGeofenceRadius(out double radiusMeters))
+        {
+            return false;
+        }
+
+        const double metersPerDegreeLatitude = 111320.0;
+        double metersPerDegreeLongitude =
+            metersPerDegreeLatitude *
+            System.Math.Max(
+                0.0001,
+                System.Math.Cos(GameManager.homeLat * System.Math.PI / 180.0)
+            );
+
+        double northMeters =
+            (latitude - GameManager.homeLat) * metersPerDegreeLatitude;
+        double eastMeters =
+            (longitude - GameManager.homeLon) * metersPerDegreeLongitude;
+        double distanceMeters = System.Math.Sqrt(
+            northMeters * northMeters + eastMeters * eastMeters
+        );
+        double allowedRadiusMeters = System.Math.Max(
+            1.0,
+            radiusMeters - System.Math.Max(0.0, geofenceBufferMeters)
+        );
+
+        mapGeofenceDistanceMeters = distanceMeters;
+        if (distanceMeters <= allowedRadiusMeters || distanceMeters <= 0.0001)
+        {
+            return false;
+        }
+
+        double scale = allowedRadiusMeters / distanceMeters;
+        latitude =
+            GameManager.homeLat +
+            (northMeters * scale) / metersPerDegreeLatitude;
+        longitude =
+            GameManager.homeLon +
+            (eastMeters * scale) / metersPerDegreeLongitude;
+        mapGeofenceTriggered = true;
+
+        if (TryHoldGuidedAtMapBoundary(latitude, longitude, smoothAlt))
+        {
+            return true;
+        }
+
+        RequestSafetyBrake(
+            $"MAP BOUNDARY: movement was limited to the {allowedRadiusMeters:F1}m playable radius."
+        );
+        return true;
+    }
+
+    bool TryHoldGuidedAtMapBoundary(
+        double latitude,
+        double longitude,
+        double absoluteAltitude)
+    {
+        if (!CanPreserveGuidedControl(preserveGuidedModeOnMapBoundary))
+        {
+            return false;
+        }
+
+        hasNavTargetDist = false;
+        navTargetDistM = 0f;
+        navTargetBearingDeg = 0f;
+
+        if (boundaryGuidedHoldSent)
+        {
+            return true;
+        }
+
+        boundaryGuidedHoldSent = true;
+        float safeRelativeAltitude = Mathf.Max(
+            0f,
+            targetRelativeAlt + (float)(absoluteAltitude - targetAlt)
+        );
+
+        if (SendGuidedHoldPosition(
+            latitude,
+            longitude,
+            safeRelativeAltitude))
+        {
+            lastStatusText =
+                "Map boundary: GUIDED target replaced with boundary hold";
+            Debug.LogWarning(
+                "MAP BOUNDARY: outside GUIDED destination was replaced " +
+                "with a hold at the playable edge."
+            );
+        }
+
+        // Returning true after the first hold prevents a fallback BRAKE request
+        // from taking control away during the same boundary contact.
+        return true;
+    }
+
+    bool CanPreserveGuidedControl(bool enabledForSafetyLimit)
+    {
+        return enabledForSafetyLimit &&
+               hbArmed &&
+               (hbGuided || hbCustomMode == 4u);
+    }
+
+    bool WouldHitBuilding(double latitude, double longitude, double altitude)
+    {
+        if (!enforceBuildingCollision || !hasLastSafePosition)
+        {
+            return false;
+        }
+
+        const double metersPerDegreeLatitude = 111320.0;
+        double metersPerDegreeLongitude =
+            metersPerDegreeLatitude *
+            System.Math.Max(
+                0.0001,
+                System.Math.Cos(lastSafeLat * System.Math.PI / 180.0)
+            );
+
+        Vector3 candidateWorldPosition = lastSafeWorldPosition + new Vector3(
+            (float)((longitude - lastSafeLon) * metersPerDegreeLongitude),
+            (float)(altitude - lastSafeAlt),
+            (float)((latitude - lastSafeLat) * metersPerDegreeLatitude)
+        );
+        Vector3 movement = candidateWorldPosition - lastSafeWorldPosition;
+        float distance = movement.magnitude;
+        float radius = Mathf.Max(0.1f, droneCollisionRadiusMeters);
+
+        if (distance > 0.0001f)
+        {
+            Vector3 movementDirection = movement / distance;
+            RaycastHit[] hits = Physics.SphereCastAll(
+                lastSafeWorldPosition,
+                radius,
+                movementDirection,
+                distance,
+                buildingCollisionLayers,
+                QueryTriggerInteraction.Ignore
+            );
+
+            for (int i = 0; i < hits.Length; i++)
+            {
+                if (IsGeneratedBuildingCollider(hits[i].collider))
+                {
+                    // A sphere cast can report a collider that the start point
+                    // is merely touching. Permit travel away from that surface;
+                    // otherwise one impact can permanently trap the drone.
+                    Vector3 closestStartPoint =
+                        hits[i].collider.ClosestPoint(lastSafeWorldPosition);
+                    Vector3 awayFromCollider =
+                        lastSafeWorldPosition - closestStartPoint;
+
+                    if (awayFromCollider.sqrMagnitude > 0.0001f &&
+                        Vector3.Dot(
+                            movementDirection,
+                            awayFromCollider.normalized) > 0.05f)
+                    {
+                        continue;
+                    }
+
+                    lastBlockedMovementWorldDirection = movementDirection;
+                    return true;
+                }
+            }
+        }
+
+        Collider[] overlaps = Physics.OverlapSphere(
+            candidateWorldPosition,
+            radius,
+            buildingCollisionLayers,
+            QueryTriggerInteraction.Ignore
+        );
+        for (int i = 0; i < overlaps.Length; i++)
+        {
+            if (IsGeneratedBuildingCollider(overlaps[i]))
+            {
+                if (movement.sqrMagnitude > 0.0001f)
+                {
+                    // If numerical/ArcGIS timing leaves the saved point just
+                    // inside a collider, allow candidates that increase their
+                    // distance from its centre. This guarantees an escape path.
+                    Bounds colliderBounds = overlaps[i].bounds;
+                    float startDistanceSqr =
+                        (lastSafeWorldPosition - colliderBounds.center).sqrMagnitude;
+                    float candidateDistanceSqr =
+                        (candidateWorldPosition - colliderBounds.center).sqrMagnitude;
+
+                    if (candidateDistanceSqr > startDistanceSqr + 0.0001f)
+                    {
+                        continue;
+                    }
+
+                    lastBlockedMovementWorldDirection = movement.normalized;
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool IsGeneratedBuildingCollider(Collider candidate)
+    {
+        if (candidate == null ||
+            candidate.transform == transform ||
+            candidate.transform.IsChildOf(transform))
+        {
+            return false;
+        }
+
+        Transform current = candidate.transform;
+        while (current != null)
+        {
+            if (current.name.Contains("_ArcGISBuilding_") ||
+                current.name.StartsWith("VisibleBuilding_") ||
+                current.name.StartsWith("ModularHouse_"))
+            {
+                return true;
+            }
+
+            current = current.parent;
+        }
+
+        return false;
+    }
+
+    void RejectBuildingMovement()
+    {
+        bool isNewCollision = !buildingCollisionTriggered;
+        double holdLatitude = lastSafeLat;
+        double holdLongitude = lastSafeLon;
+        double holdAltitude = lastSafeAlt;
+        Vector3 holdWorldPosition = lastSafeWorldPosition;
+
+        if (isNewCollision)
+        {
+            buildingGuidedHoldSent = false;
+            buildingCollisionContactLat = lastSafeLat;
+            buildingCollisionContactLon = lastSafeLon;
+            buildingCollisionContactAlt = lastSafeAlt;
+
+            GetBuildingCollisionRetreatPosition(
+                out holdLatitude,
+                out holdLongitude,
+                out holdAltitude,
+                out holdWorldPosition
+            );
+
+            // Move the presentation back immediately. Waiting for the SITL
+            // vehicle to return left the visible drone pressed against the
+            // collider and made every escape command look unresponsive.
+            lastSafeLat = holdLatitude;
+            lastSafeLon = holdLongitude;
+            lastSafeAlt = holdAltitude;
+            lastSafeWorldPosition = holdWorldPosition;
+        }
+
+        smoothLat = holdLatitude;
+        smoothLon = holdLongitude;
+        smoothAlt = holdAltitude;
+        usingGuidedAssist = false;
+        guidedStallTimer = 0f;
+        buildingCollisionTriggered = true;
+
+        locationComponent.Position = new ArcGISPoint(
+            holdLongitude,
+            holdLatitude,
+            holdAltitude,
+            ArcGISSpatialReference.WGS84()
+        );
+
+        // BRAKE cancels stick/guided control and used to leave the old Guided
+        // destination waiting behind it. Holding at the last collision-free
+        // point replaces that unreachable destination while keeping the pilot
+        // in GUIDED so another target can be selected immediately.
+        bool canKeepGuidedControl =
+            preserveGuidedModeOnBuildingCollision &&
+            hbArmed &&
+            (hbGuided || hbCustomMode == 4u || hbCustomMode == 17u);
+
+        if (canKeepGuidedControl)
+        {
+            hasNavTargetDist = false;
+            navTargetDistM = 0f;
+            navTargetBearingDeg = 0f;
+
+            // Send exactly once for this contact. Repeating the hold used to
+            // overwrite every new QGC command and made control appear stuck.
+            if (!buildingGuidedHoldSent)
+            {
+                buildingGuidedHoldSent = true;
+                float safeRelativeAltitude = Mathf.Max(
+                    0f,
+                    targetRelativeAlt + (float)(holdAltitude - targetAlt)
+                );
+
+                if (SendGuidedHoldPosition(
+                    holdLatitude,
+                    holdLongitude,
+                    safeRelativeAltitude))
+                {
+                    lastStatusText =
+                        "Building collision: target cancelled; retreating to safety";
+                    Debug.LogWarning(
+                        "BUILDING COLLISION: unreachable GUIDED destination " +
+                        "was cancelled. The drone is retreating to a safe " +
+                        "position and remains in GUIDED."
+                    );
+                }
+            }
+
+            return;
+        }
+
+        // A Unity-only building must never force a flight-mode change. In a
+        // non-Guided mode the visible movement is rejected, but the pilot's
+        // current mode and controls are left untouched so they can move away.
+        if (isNewCollision)
+        {
+            lastStatusText =
+                "Building collision: movement blocked; flight mode unchanged";
+            Debug.LogWarning(
+                "BUILDING COLLISION: movement was stopped before the " +
+                "building. Flight mode was left unchanged."
+            );
+        }
+    }
+
+    void GetBuildingCollisionRetreatPosition(
+        out double latitude,
+        out double longitude,
+        out double altitude,
+        out Vector3 worldPosition)
+    {
+        latitude = lastSafeLat;
+        longitude = lastSafeLon;
+        altitude = lastSafeAlt;
+        worldPosition = lastSafeWorldPosition;
+
+        float retreatMeters = Mathf.Max(0f, buildingCollisionRetreatMeters);
+        Vector3 blockedDirection = lastBlockedMovementWorldDirection;
+
+        if (retreatMeters <= 0.001f ||
+            blockedDirection.sqrMagnitude <= 0.0001f)
+        {
+            return;
+        }
+
+        blockedDirection.Normalize();
+        const double metersPerDegreeLatitude = 111320.0;
+        double metersPerDegreeLongitude =
+            metersPerDegreeLatitude *
+            System.Math.Max(
+                0.0001,
+                System.Math.Cos(lastSafeLat * System.Math.PI / 180.0)
+            );
+
+        latitude -=
+            blockedDirection.z * retreatMeters / metersPerDegreeLatitude;
+        longitude -=
+            blockedDirection.x * retreatMeters / metersPerDegreeLongitude;
+        altitude -= blockedDirection.y * retreatMeters;
+        ClampToPlayableMap(ref latitude, ref longitude);
+
+        worldPosition = lastSafeWorldPosition + new Vector3(
+            (float)((longitude - lastSafeLon) * metersPerDegreeLongitude),
+            (float)(altitude - lastSafeAlt),
+            (float)((latitude - lastSafeLat) * metersPerDegreeLatitude)
+        );
+    }
+
+    bool SendGuidedHoldPosition(
+        double latitude,
+        double longitude,
+        float relativeAltitude)
+    {
+        if (client == null ||
+            endPoint == null ||
+            txParser == null ||
+            !IsValidGeo(latitude, longitude, lastSafeAlt) ||
+            !IsFinite(relativeAltitude))
+        {
+            return false;
+        }
+
+        const ushort positionOnlyTypeMask =
+            (1 << 3) | (1 << 4) | (1 << 5) |
+            (1 << 6) | (1 << 7) | (1 << 8) |
+            (1 << 10) | (1 << 11);
+
+        int latitudeE7 = (int)System.Math.Round(latitude * 1e7);
+        int longitudeE7 = (int)System.Math.Round(longitude * 1e7);
+
+        var holdPosition =
+            new MAVLink.mavlink_set_position_target_global_int_t(
+                (uint)(Time.realtimeSinceStartup * 1000f),
+                latitudeE7,
+                longitudeE7,
+                relativeAltitude,
+                0f, 0f, 0f,
+                0f, 0f, 0f,
+                0f, 0f,
+                positionOnlyTypeMask,
+                vehicleSystemId,
+                vehicleComponentId,
+                (byte)MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT
+            );
+
+        byte[] holdPositionPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.SET_POSITION_TARGET_GLOBAL_INT,
+            holdPosition,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        var replaceDestination = new MAVLink.mavlink_command_int_t(
+            -1f,
+            1f,
+            0f,
+            float.NaN,
+            latitudeE7,
+            longitudeE7,
+            relativeAltitude,
+            (ushort)MAVLink.MAV_CMD.DO_REPOSITION,
+            vehicleSystemId,
+            vehicleComponentId,
+            (byte)MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT,
+            0,
+            0
+        );
+
+        byte[] replaceDestinationPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_INT,
+            replaceDestination,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        bool sentHold = SendToVehicle(holdPositionPacket);
+        bool sentReplacement = SendToVehicle(replaceDestinationPacket);
+        return sentHold || sentReplacement;
+    }
+
+    void RequestSafetyBrake(string warning)
+    {
+        if (hbCustomMode == 17u ||
+            Time.time - lastSafetyBrakeCommandTime <
+            Mathf.Max(0.2f, geofenceCommandIntervalSeconds))
+        {
+            return;
+        }
+
+        lastSafetyBrakeCommandTime = Time.time;
+        if (SendBrakeMode())
+        {
+            Debug.LogWarning(warning + " BRAKE requested from ArduPilot.");
+        }
     }
 
     static double CalculateDistanceMeters(
@@ -1362,6 +1919,8 @@ public class MAVLinkReceiver : MonoBehaviour
         smoothAlt = predictedAlt;
     }
 
+    ClampToPlayableMap(ref smoothLat, ref smoothLon);
+
     if (!IsValidGeo((double)smoothLat, (double)smoothLon, (double)smoothAlt))
     {
         return;
@@ -1375,6 +1934,12 @@ public class MAVLinkReceiver : MonoBehaviour
         return;
     }
 
+    if (WouldHitBuilding(smoothLat, smoothLon, smoothAlt))
+    {
+        RejectBuildingMovement();
+        return;
+    }
+
     locationComponent.Position = new ArcGISPoint(
         smoothLon,
         smoothLat,
@@ -1382,6 +1947,35 @@ public class MAVLinkReceiver : MonoBehaviour
         ArcGISSpatialReference.WGS84()
     );
     hasAppliedLocation = true;
+    hasLastSafePosition = true;
+    lastSafeLat = smoothLat;
+    lastSafeLon = smoothLon;
+    lastSafeAlt = smoothAlt;
+    lastSafeWorldPosition = locationComponent.transform.position;
+
+    if (buildingCollisionTriggered)
+    {
+        double horizontalClearanceMeters = CalculateDistanceMeters(
+            buildingCollisionContactLat,
+            buildingCollisionContactLon,
+            smoothLat,
+            smoothLon
+        );
+        double verticalClearanceMeters =
+            smoothAlt - buildingCollisionContactAlt;
+        double totalClearanceMeters = System.Math.Sqrt(
+            horizontalClearanceMeters * horizontalClearanceMeters +
+            verticalClearanceMeters * verticalClearanceMeters
+        );
+
+        if (totalClearanceMeters >= System.Math.Max(
+                0.25,
+                droneCollisionRadiusMeters))
+        {
+            buildingCollisionTriggered = false;
+            buildingGuidedHoldSent = false;
+        }
+    }
 }
 
     void SendGuidedRepositionNudge()
@@ -1613,5 +2207,14 @@ public class MAVLinkReceiver : MonoBehaviour
             Mathf.Max(0.001f, zeroHeadingSafetyEpsilon);
         rotationWriteThresholdDegrees =
             Mathf.Max(0f, rotationWriteThresholdDegrees);
+        fallbackGeofenceRadiusMeters =
+            Mathf.Max(1f, fallbackGeofenceRadiusMeters);
+        geofenceBufferMeters = Mathf.Max(0f, geofenceBufferMeters);
+        geofenceCommandIntervalSeconds =
+            Mathf.Max(0.2f, geofenceCommandIntervalSeconds);
+        droneCollisionRadiusMeters =
+            Mathf.Max(0.1f, droneCollisionRadiusMeters);
+        buildingCollisionRetreatMeters =
+            Mathf.Max(0f, buildingCollisionRetreatMeters);
     }
 }

@@ -153,139 +153,212 @@ public static class SantaTrailWindowsFirstRunSetup
     private static async Task EnsureWindowsRuntimesAsync()
     {
         LastError = null;
+        ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
 
+        string dataDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SantaTrail"
+        );
+        string downloadDirectory = Path.Combine(dataDirectory, "Downloads");
+        Directory.CreateDirectory(downloadDirectory);
+
+        List<string> setupErrors = new List<string>();
+
+        // Prepare independent components separately. A declined installer or
+        // blocked download must not prevent SITL, QGC, or Python from being
+        // prepared when the other sources are still reachable.
+        await TrySetupComponentAsync(
+            "portable Python",
+            () => EnsurePythonAsync(dataDirectory, downloadDirectory),
+            setupErrors
+        );
+        await TrySetupComponentAsync(
+            "ArduPilot SITL",
+            () => EnsureNativeSitlAsync(dataDirectory),
+            setupErrors
+        );
+        await TrySetupComponentAsync(
+            "Microsoft map runtime",
+            () => EnsureVisualCppRuntimeAsync(downloadDirectory),
+            setupErrors
+        );
+
+        // Seed QGC's UDP defaults before its installer is allowed to launch
+        // the application. This avoids a first-run race where QGC starts with
+        // an old disabled AutoConnect setting and never listens for SITL.
+        AutoArduPilotOnPlay.ConfigureWindowsQgcSettings();
+        await TrySetupComponentAsync(
+            "QGroundControl",
+            () => EnsureQGroundControlAsync(downloadDirectory),
+            setupErrors
+        );
+
+        LastError = setupErrors.Count == 0
+            ? null
+            : string.Join(" ", setupErrors);
+
+        if (FindQGroundControl() == null)
+        {
+            UnityEngine.Debug.LogWarning(
+                "SantaTrail: QGroundControl is still not available after setup."
+            );
+        }
+
+        if (FindNativeSitl() == null)
+        {
+            UnityEngine.Debug.LogWarning(
+                "SantaTrail: ArduPilot SITL could not be prepared. " +
+                "QGroundControl and the game will not receive vehicle telemetry."
+            );
+        }
+    }
+
+    private static async Task TrySetupComponentAsync(
+        string description,
+        Func<Task> setupAction,
+        List<string> errors
+    )
+    {
         try
         {
-            string dataDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "SantaTrail"
-            );
-            string downloadDirectory = Path.Combine(dataDirectory, "Downloads");
-            Directory.CreateDirectory(downloadDirectory);
-
-            Version visualCppVersion = GetVisualCppRuntimeVersion();
-            if (visualCppVersion == null ||
-                visualCppVersion.CompareTo(MinimumVisualCppVersion) < 0)
-            {
-                string cachedInstaller = Path.Combine(
-                    GetGameRoot(),
-                    "InstallerCache",
-                    "vc_redist.x64.exe"
-                );
-                string installer = File.Exists(cachedInstaller)
-                    ? cachedInstaller
-                    : Path.Combine(downloadDirectory, "vc_redist.x64.exe");
-
-                if (!File.Exists(cachedInstaller))
-                {
-                    await DownloadFileAsync(
-                        VisualCppUrl,
-                        installer,
-                        "Microsoft map runtime"
-                    );
-                }
-
-                UnityEngine.Debug.Log(
-                    "SantaTrail: opening the official Microsoft map runtime installer. " +
-                    "Accept the Windows permission prompt once; setup then continues automatically."
-                );
-
-                int exitCode = await RunInstallerAndWaitAsync(
-                    installer,
-                    "/install /passive /norestart",
-                    "runas"
-                );
-                if (exitCode == 3010)
-                {
-                    throw new InvalidOperationException(
-                        "Windows must restart once to finish the Microsoft map runtime."
-                    );
-                }
-                if (exitCode != 0 && exitCode != 1638)
-                {
-                    throw new InvalidOperationException(
-                        "Microsoft map runtime installer returned code " + exitCode + "."
-                    );
-                }
-
-                visualCppVersion = GetVisualCppRuntimeVersion();
-                if (visualCppVersion == null ||
-                    visualCppVersion.CompareTo(MinimumVisualCppVersion) < 0)
-                {
-                    throw new InvalidOperationException(
-                        "Microsoft map runtime installation did not complete."
-                    );
-                }
-            }
-
-            if (FindPython() == null)
-            {
-                string pythonArchive = Path.Combine(
-                    downloadDirectory,
-                    "python-3.12.10-embed-amd64.zip"
-                );
-                await DownloadFileAsync(
-                    PythonUrl,
-                    pythonArchive,
-                    "portable Python"
-                );
-
-                string pythonDirectory = Path.Combine(dataDirectory, "Python");
-                Directory.CreateDirectory(pythonDirectory);
-                await Task.Run(() =>
-                    ZipFile.ExtractToDirectory(pythonArchive, pythonDirectory, true)
-                );
-            }
-
-            if (FindQGroundControl() == null)
-            {
-                string installer = Path.Combine(
-                    downloadDirectory,
-                    "QGroundControl-installer-AMD64.exe"
-                );
-                await DownloadFileAsync(
-                    QGroundControlUrl,
-                    installer,
-                    "QGroundControl"
-                );
-
-                UnityEngine.Debug.Log(
-                    "SantaTrail: QGroundControl is not installed. " +
-                    "Opening the official installer; finish it once, then SantaTrail will continue."
-                );
-                await RunInstallerAndWaitAsync(installer);
-            }
-
-            if (FindNativeSitl() == null)
-            {
-                await InstallNativeSitlAsync(
-                    Path.Combine(dataDirectory, "NativeSITL")
-                );
-            }
-
-            if (FindQGroundControl() == null)
-            {
-                UnityEngine.Debug.LogWarning(
-                    "SantaTrail: QGroundControl is still not available after setup. " +
-                    "The game can run, but flight connection will remain unavailable."
-                );
-            }
-
-            if (FindNativeSitl() == null)
-            {
-                UnityEngine.Debug.LogWarning(
-                    "SantaTrail: ArduPilot SITL could not be prepared. " +
-                    "QGroundControl and the game will not receive vehicle telemetry."
-                );
-            }
+            await setupAction();
         }
         catch (Exception exception)
         {
-            LastError = exception.Message;
-            UnityEngine.Debug.LogError(
-                "SantaTrail first-run setup failed: " + exception.Message
+            string error = description + ": " + exception.Message;
+            errors.Add(error);
+            UnityEngine.Debug.LogError("SantaTrail setup could not prepare " + error);
+        }
+    }
+
+    private static async Task EnsurePythonAsync(
+        string dataDirectory,
+        string downloadDirectory
+    )
+    {
+        if (FindPython() != null) return;
+
+        string pythonArchive = Path.Combine(
+            downloadDirectory,
+            "python-3.12.10-embed-amd64.zip"
+        );
+        await DownloadFileAsync(
+            PythonUrl,
+            pythonArchive,
+            "portable Python"
+        );
+
+        string pythonDirectory = Path.Combine(dataDirectory, "Python");
+        Directory.CreateDirectory(pythonDirectory);
+        await Task.Run(() =>
+            ZipFile.ExtractToDirectory(pythonArchive, pythonDirectory, true)
+        );
+    }
+
+    private static Task EnsureNativeSitlAsync(string dataDirectory)
+    {
+        return FindNativeSitl() != null
+            ? Task.CompletedTask
+            : InstallNativeSitlAsync(Path.Combine(dataDirectory, "NativeSITL"));
+    }
+
+    private static async Task EnsureVisualCppRuntimeAsync(string downloadDirectory)
+    {
+        Version visualCppVersion = GetVisualCppRuntimeVersion();
+        if (visualCppVersion != null &&
+            visualCppVersion.CompareTo(MinimumVisualCppVersion) >= 0)
+        {
+            return;
+        }
+
+        string cachedInstaller = Path.Combine(
+            GetGameRoot(),
+            "InstallerCache",
+            "vc_redist.x64.exe"
+        );
+        string installer = File.Exists(cachedInstaller)
+            ? cachedInstaller
+            : Path.Combine(downloadDirectory, "vc_redist.x64.exe");
+
+        if (!File.Exists(cachedInstaller))
+        {
+            await DownloadFileAsync(
+                VisualCppUrl,
+                installer,
+                "Microsoft map runtime"
             );
         }
+
+        UnityEngine.Debug.Log(
+            "SantaTrail: opening the official Microsoft map runtime installer. " +
+            "Accept the Windows permission prompt once; setup then continues automatically."
+        );
+
+        int exitCode = await RunInstallerAndWaitAsync(
+            installer,
+            "/install /passive /norestart",
+            "runas"
+        );
+        if (exitCode == 3010)
+        {
+            throw new InvalidOperationException(
+                "Windows must restart once to finish the Microsoft map runtime."
+            );
+        }
+        if (exitCode != 0 && exitCode != 1638)
+        {
+            throw new InvalidOperationException(
+                "installer returned code " + exitCode + "."
+            );
+        }
+
+        visualCppVersion = GetVisualCppRuntimeVersion();
+        if (visualCppVersion == null ||
+            visualCppVersion.CompareTo(MinimumVisualCppVersion) < 0)
+        {
+            throw new InvalidOperationException("installation did not complete.");
+        }
+    }
+
+    private static async Task EnsureQGroundControlAsync(string downloadDirectory)
+    {
+        if (FindQGroundControl() != null) return;
+
+        string installer = Path.Combine(
+            downloadDirectory,
+            "QGroundControl-installer-AMD64.exe"
+        );
+        await DownloadFileAsync(
+            QGroundControlUrl,
+            installer,
+            "QGroundControl"
+        );
+
+        UnityEngine.Debug.Log(
+            "SantaTrail: QGroundControl is not installed. " +
+            "Running the official installer; accept the Windows permission prompt if shown."
+        );
+        int exitCode = await RunInstallerAndWaitAsync(installer, "/S");
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException(
+                "installer returned code " + exitCode + "."
+            );
+        }
+
+        for (int attempt = 0; attempt < 60; attempt++)
+        {
+            if (FindQGroundControl() != null)
+            {
+                return;
+            }
+
+            await Task.Delay(500);
+        }
+
+        throw new FileNotFoundException(
+            "installation finished, but QGroundControl.exe was not found."
+        );
     }
 
     private static async Task InstallNativeSitlAsync(string destinationDirectory)
@@ -477,14 +550,14 @@ public static class SantaTrailWindowsFirstRunSetup
         return FindShortcutTarget("QGroundControl.lnk");
     }
 
-    private static string FindPython()
+    public static string FindPython()
     {
         string bundledPython = Path.Combine(
             Application.streamingAssetsPath,
             "Python",
             "python.exe"
         );
-        if (File.Exists(bundledPython))
+        if (IsPythonRuntimeComplete(bundledPython))
         {
             return bundledPython;
         }
@@ -495,7 +568,7 @@ public static class SantaTrailWindowsFirstRunSetup
             "Python",
             "python.exe"
         );
-        return File.Exists(installedPython) ? installedPython : null;
+        return IsPythonRuntimeComplete(installedPython) ? installedPython : null;
     }
 
     public static string FindNativeSitl()
@@ -508,7 +581,7 @@ public static class SantaTrailWindowsFirstRunSetup
             Path.Combine(gameRoot, "NativeSITL"),
             "ArduCopter.exe"
         );
-        if (packagedExecutable != null)
+        if (HasNativeSitlSupportFiles(packagedExecutable))
         {
             return packagedExecutable;
         }
@@ -527,18 +600,45 @@ public static class SantaTrailWindowsFirstRunSetup
             return null;
         }
 
+        return HasNativeSitlSupportFiles(downloadedExecutable)
+            ? downloadedExecutable
+            : null;
+    }
+
+    private static bool IsPythonRuntimeComplete(string executable)
+    {
+        if (string.IsNullOrEmpty(executable) || !File.Exists(executable))
+        {
+            return false;
+        }
+
+        string directory = Path.GetDirectoryName(executable);
+        return File.Exists(Path.Combine(directory, "python312.dll")) &&
+               File.Exists(Path.Combine(directory, "python312.zip"));
+    }
+
+    private static bool HasNativeSitlSupportFiles(string executable)
+    {
+        if (string.IsNullOrEmpty(executable) ||
+            !File.Exists(executable) ||
+            new FileInfo(executable).Length < 1024 * 1024)
+        {
+            return false;
+        }
+
+        string directory = Path.GetDirectoryName(executable);
         for (int i = 0; i < NativeSitlSupportFiles.Length; i++)
         {
             if (!File.Exists(Path.Combine(
-                    downloadedDirectory,
+                    directory,
                     NativeSitlSupportFiles[i]
                 )))
             {
-                return null;
+                return false;
             }
         }
 
-        return downloadedExecutable;
+        return true;
     }
 
     private static string FindFile(string directory, string fileName)

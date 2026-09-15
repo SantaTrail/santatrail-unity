@@ -140,10 +140,11 @@ public sealed class TitleSceneStartupController : MonoBehaviour
             yield break;
         }
 
-        // Other scene transitions can reuse this loading screen without
-        // repeating first-run flight setup. The title entry is the only path
-        // that performs the dependency check below.
-        if (hasRequestedDestination)
+        // Reuse completed setup for normal transitions. A direct Windows
+        // level shortcut must finish missing dependencies before activating
+        // the level, otherwise its Python and SITL launches race the downloads.
+        if (hasRequestedDestination &&
+            !SantaTrailWindowsFirstRunSetup.IsNeeded())
         {
             yield return StartCoroutine(OpenRequestedScene());
             yield break;
@@ -261,6 +262,12 @@ public sealed class TitleSceneStartupController : MonoBehaviour
             yield break;
         }
 
+        if (hasRequestedDestination)
+        {
+            yield return StartCoroutine(OpenRequestedScene());
+            yield break;
+        }
+
         SetProgress(0.92f, "Santa is opening the present delivery desk...");
         if (!loadMainPageAfterSetup)
         {
@@ -341,6 +348,25 @@ public sealed class TitleSceneStartupController : MonoBehaviour
 
     private IEnumerator OpenLevelSceneAndWaitForReady()
     {
+        SetProgress(0.08f, "Starting QGroundControl and warming its map...");
+
+        Task qgcPreloadTask = AutoArduPilotOnPlay.PreloadQgcDuringLoadingScreenAsync();
+        float qgcHeadStart = 0f;
+        const float qgcHeadStartLimit = 1.5f;
+        while (!qgcPreloadTask.IsCompleted && qgcHeadStart < qgcHeadStartLimit)
+        {
+            qgcHeadStart += 0.1f;
+            yield return new WaitForSecondsRealtime(0.1f);
+        }
+
+        if (qgcPreloadTask.IsFaulted)
+        {
+            Debug.LogWarning(
+                "SantaTrail startup: QGroundControl preload did not complete, " +
+                "so level loading will continue without waiting for it."
+            );
+        }
+
         SetProgress(0.08f, "Santa is loading the LV1 present route...");
 
         AsyncOperation loadOperation;

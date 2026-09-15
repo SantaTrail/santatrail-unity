@@ -63,12 +63,23 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     float loadingScreenShownAt;
     [Header("Fallback")]
     [SerializeField] bool allowLocalGpsFallback = true;
+    [Min(5f)]
+    [Tooltip("Wait this long for ArcGIS before allowing the offline terrain fallback.")]
+    [SerializeField] float arcGISStartupGraceSeconds = 45f;
     [Header("Generation Mode")]
     [SerializeField] bool useArcGISTerrainOnly = true;
     [Header("Building Spawn")]
     [Tooltip("Enable this to generate building prefabs from OSM footprints. Disable it in levels that use manually placed building assets.")]
     [SerializeField] bool spawnOsmBuildings = true;
     [SerializeField] float buildingSpawnRadius = 500f;
+    [Tooltip("Limit drone travel to the outer edge of the generated village.")]
+    [SerializeField] bool fitDroneBoundaryToGeneratedVillage = true;
+    [Min(0f)]
+    [Tooltip("Extra flight space beyond the last generated house. The MAVLink edge buffer is applied inside this value.")]
+    [SerializeField] float droneBoundaryPastLastHouseMeters = 25f;
+    [Min(1f)]
+    [Tooltip("Smallest flight radius when the generated village is compact.")]
+    [SerializeField] float minimumGeneratedVillageBoundaryMeters = 60f;
     [SerializeField] bool filterBuildingsByDroneDistance = false;
     [SerializeField] bool showSpawnRadius = true;
     [SerializeField] bool hideOsmBuildingLayer = true;
@@ -291,6 +302,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         "targets available without weakening normal road, water, or overlap checks."
     )]
     [SerializeField] bool spawnFallbackVillageWhenNoOsmBuildings = true;
+    [Min(1f)]
+    [Tooltip(
+        "Empty flight space kept between the drone spawn point and the " +
+        "nearest edge of any generated house."
+    )]
+    [SerializeField] float droneSpawnBuildingClearanceMeters = 10f;
     [SerializeField] float smallBuildingAreaMax = 120f;
     [SerializeField] float mediumBuildingAreaMax = 900f;
     [System.Serializable]
@@ -340,6 +357,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     }
 
     Terrain terrain;
+    bool localTerrainFallbackActive;
     bool fallbackOriginSet;
     double fallbackOriginLat;
     double fallbackOriginLon;
@@ -348,7 +366,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     Transform generatedBuildingsRoot;
     Transform droneTransform;
     int visibleBuildingCounter;
+    bool nearbyDeliveryVillageSpawned;
     Transform generatedEnvironmentRoot;
+    double farthestGeneratedHouseEdgeMeters;
 
     static SceneLoaderArcgis configuredMapExtentSource;
     static bool hasConfiguredMapExtent;
@@ -358,6 +378,100 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     {
         radiusMeters = configuredMapExtentRadiusMeters;
         return hasConfiguredMapExtent && radiusMeters > 0.0;
+    }
+
+    public bool TrySpawnNearbyDeliveryVillage()
+    {
+        if (!enabled || nearbyDeliveryVillageSpawned ||
+            string.IsNullOrWhiteSpace(validatedJsonContent))
+        {
+            return false;
+        }
+
+        Result result;
+        try
+        {
+            result = JsonUtility.FromJson<Result>(validatedJsonContent);
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogWarning(
+                $"SceneLoaderArcgis could not prepare a nearby delivery village: {exception.Message}");
+            return false;
+        }
+
+        if (result == null)
+        {
+            return false;
+        }
+
+        nearbyDeliveryVillageSpawned = true;
+        SpawnVisibleVillageCluster(result);
+        Debug.Log("🏘 Spawned a delivery village beside the drone because no nearby OSM houses were available.");
+        return true;
+    }
+
+    void ResetGeneratedVillageBoundary()
+    {
+        farthestGeneratedHouseEdgeMeters = 0.0;
+    }
+
+    void RegisterGeneratedHouseBoundary(
+        double latitude,
+        double longitude,
+        float footprintWidth,
+        float footprintDepth)
+    {
+        if (!fitDroneBoundaryToGeneratedVillage ||
+            !GameManager.hasHomeLocation)
+        {
+            return;
+        }
+
+        double centerDistanceMeters = CalculateGeographicDistanceMeters(
+            GameManager.homeLat,
+            GameManager.homeLon,
+            latitude,
+            longitude
+        );
+        double footprintRadiusMeters =
+            0.5 * System.Math.Sqrt(
+                footprintWidth * footprintWidth +
+                footprintDepth * footprintDepth
+            );
+
+        farthestGeneratedHouseEdgeMeters = System.Math.Max(
+            farthestGeneratedHouseEdgeMeters,
+            centerDistanceMeters + footprintRadiusMeters
+        );
+    }
+
+    void PublishGeneratedVillageBoundary()
+    {
+        if (!fitDroneBoundaryToGeneratedVillage ||
+            farthestGeneratedHouseEdgeMeters <= 0.0 ||
+            configuredMapExtentSource != this)
+        {
+            return;
+        }
+
+        double mapRadiusMeters = System.Math.Max(1.0, mapExtentSizeMeters);
+        double requestedRadiusMeters = System.Math.Max(
+            minimumGeneratedVillageBoundaryMeters,
+            farthestGeneratedHouseEdgeMeters +
+            System.Math.Max(0f, droneBoundaryPastLastHouseMeters)
+        );
+
+        configuredMapExtentRadiusMeters = limitMapExtent
+            ? System.Math.Min(mapRadiusMeters, requestedRadiusMeters)
+            : requestedRadiusMeters;
+        hasConfiguredMapExtent = true;
+
+        Debug.Log(
+            $"🛑 Drone boundary matched to generated houses: " +
+            $"last house edge={farthestGeneratedHouseEdgeMeters:F1}m, " +
+            $"boundary radius={configuredMapExtentRadiusMeters:F1}m."
+        );
     }
 
     // The current level bootstrap lives in SceneLoaderArcgis.Bootstrap.cs.
@@ -1267,7 +1381,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         // when a level switches between ArcGIS and Unity terrain.
         SpawnStreetLightsAlongRoads(result);
 
-        if (useArcGISTerrainOnly)
+        if (useArcGISTerrainOnly && !localTerrainFallbackActive)
         {
             SpawnVillageBuildings(result);
             SpawnEnvironmentDetail(result);
@@ -2205,6 +2319,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     void SpawnVillageBuildings(Result result)
     {
+        ResetGeneratedVillageBoundary();
+
         if (!spawnOsmBuildings)
         {
             Debug.Log("🏠 OSM building prefab spawning is disabled for this level. Manually placed buildings will remain unchanged.");
@@ -2226,6 +2342,18 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
 
         Debug.Log($"Building count = {result.buildings.Length}");
+
+        if ((arcGISConverter == null ||
+             !arcGISConverter.CanProjectCoordinates()) &&
+            CanUseFallbackProjection())
+        {
+            Debug.LogWarning(
+                "⚠️ ArcGIS anchors are unavailable. Spawning a local fallback " +
+                "village so buildings remain visible on this device."
+            );
+            SpawnVisibleVillageCluster(result);
+            return;
+        }
 
         if (spawnVisibleVillageClusterOnly)
         {
@@ -2480,6 +2608,21 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 ? Mathf.Clamp(osmWallFootprintScale, 1f, 1.5f)
                 : 1f;
 
+            if (!IsBuildingClearOfDroneSpawn(
+                    placementLatitude,
+                    placementLongitude,
+                    center,
+                    width,
+                    depth,
+                    requestedFootprintScale))
+            {
+                Debug.LogWarning(
+                    $"⚠️ Skipping building {i}: its footprint overlaps the " +
+                    $"{droneSpawnBuildingClearanceMeters:0.#}m drone spawn clearance."
+                );
+                continue;
+            }
+
             if (!placementValidator.CanPlaceBuilding(
                     footprintPoints,
                     building.points,
@@ -2640,6 +2783,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     footprintPoints,
                     placementFootprintScale
                 );
+                RegisterGeneratedHouseBoundary(
+                    placementLatitude,
+                    placementLongitude,
+                    width,
+                    depth
+                );
                 spawned++;
                 continue;
             }
@@ -2799,6 +2948,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 footprintPoints,
                 placementFootprintScale
             );
+            RegisterGeneratedHouseBoundary(
+                placementLatitude,
+                placementLongitude,
+                width,
+                depth
+            );
             spawned++;
             }
             catch (System.Exception e)
@@ -2820,6 +2975,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             return;
         }
 
+        PublishGeneratedVillageBoundary();
         Debug.Log("🏙 Village buildings spawned: " + spawned);
     }
 
@@ -3271,7 +3427,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             clusterRoot.transform.SetParent(clusterParent, false);
         }
 
-        if (TryGetVisibleVillageGeoAnchor(result, out double anchorLatitude, out double anchorLongitude))
+        if (arcGISConverter != null &&
+            arcGISConverter.CanProjectCoordinates() &&
+            TryGetVisibleVillageGeoAnchor(result, out double anchorLatitude, out double anchorLongitude))
         {
             ArcGISLocationComponent clusterLocation =
                 clusterRoot.AddComponent<ArcGISLocationComponent>();
@@ -3305,14 +3463,27 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             );
         }
 
-        Vector3 heroLocalPosition = forward * 4f + Vector3.down * 0.5f;
+        float heroWidth = radius * 1.05f;
+        float heroDepth = radius * 0.85f;
+        float heroScale = 1.5f;
+        float heroFootprintRadius = CalculateFootprintRadius(
+            heroWidth,
+            heroDepth,
+            heroScale
+        );
+        Vector3 heroLocalPosition =
+            forward * GetMinimumBuildingCenterDistance(heroFootprintRadius) +
+            Vector3.down * 0.5f;
+        float clusterOuterRadiusMeters =
+            new Vector2(heroLocalPosition.x, heroLocalPosition.z).magnitude +
+            heroFootprintRadius;
         SpawnVisibleFallbackBuilding(
             clusterRoot.transform,
             heroLocalPosition,
             forward,
-            radius * 1.05f,
-            radius * 0.85f,
-            1.5f,
+            heroWidth,
+            heroDepth,
+            heroScale,
             count * 1000 + 1,
             "Hero"
         );
@@ -3338,14 +3509,38 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                  forward * Mathf.Sin(angle * Mathf.Deg2Rad)) *
                 distance;
 
-            Vector3 spawnLocalPosition =
-                forward * 4f +
-                offset +
-                Vector3.down * 0.5f;
-
             float footprintWidth = UnityEngine.Random.Range(4.5f, 9.5f);
             float footprintDepth = UnityEngine.Random.Range(3.5f, 7.5f);
             float scaleMultiplier = UnityEngine.Random.Range(0.95f, 1.25f);
+            float footprintRadius = CalculateFootprintRadius(
+                footprintWidth,
+                footprintDepth,
+                scaleMultiplier
+            );
+
+            Vector3 horizontalOffset = forward * 4f + offset;
+            horizontalOffset.y = 0f;
+            if (horizontalOffset.sqrMagnitude < 0.0001f)
+            {
+                horizontalOffset = forward;
+            }
+
+            float minimumCenterDistance =
+                GetMinimumBuildingCenterDistance(footprintRadius);
+            if (horizontalOffset.magnitude < minimumCenterDistance)
+            {
+                horizontalOffset =
+                    horizontalOffset.normalized * minimumCenterDistance;
+            }
+
+            Vector3 spawnLocalPosition =
+                horizontalOffset + Vector3.down * 0.5f;
+
+            clusterOuterRadiusMeters = Mathf.Max(
+                clusterOuterRadiusMeters,
+                horizontalOffset.magnitude + footprintRadius
+            );
+
             float yaw = UnityEngine.Random.Range(0f, 360f);
             Vector3 buildingForward =
                 Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
@@ -3371,6 +3566,21 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             "🏙 Visible fallback village cluster spawned as fixed " +
             "delivery buildings."
         );
+
+        if (TryGetVisibleVillageGeoAnchor(
+                result,
+                out double boundaryLatitude,
+                out double boundaryLongitude))
+        {
+            float clusterDiameter = clusterOuterRadiusMeters * 2f;
+            RegisterGeneratedHouseBoundary(
+                boundaryLatitude,
+                boundaryLongitude,
+                clusterDiameter,
+                clusterDiameter
+            );
+            PublishGeneratedVillageBoundary();
+        }
     }
 
     void SpawnVisibleFallbackBuilding(
@@ -3455,10 +3665,88 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         visibleBuilding.transform.localPosition = Vector3.zero;
     }
 
+    float CalculateFootprintRadius(
+        float footprintWidth,
+        float footprintDepth,
+        float scaleMultiplier)
+    {
+        float halfWidth =
+            Mathf.Max(0.1f, footprintWidth) *
+            Mathf.Max(0.1f, scaleMultiplier) * 0.5f;
+        float halfDepth =
+            Mathf.Max(0.1f, footprintDepth) *
+            Mathf.Max(0.1f, scaleMultiplier) * 0.5f;
+
+        return Mathf.Sqrt(
+            halfWidth * halfWidth + halfDepth * halfDepth
+        );
+    }
+
+    float GetMinimumBuildingCenterDistance(float footprintRadius)
+    {
+        return Mathf.Max(1f, droneSpawnBuildingClearanceMeters) +
+               Mathf.Max(0f, footprintRadius);
+    }
+
+    bool IsBuildingClearOfDroneSpawn(
+        double latitude,
+        double longitude,
+        Vector3 worldCenter,
+        float footprintWidth,
+        float footprintDepth,
+        float footprintScale)
+    {
+        float minimumCenterDistance = GetMinimumBuildingCenterDistance(
+            CalculateFootprintRadius(
+                footprintWidth,
+                footprintDepth,
+                footprintScale
+            )
+        );
+
+        if (GameManager.hasHomeLocation)
+        {
+            double geographicDistance = CalculateGeographicDistanceMeters(
+                GameManager.homeLat,
+                GameManager.homeLon,
+                latitude,
+                longitude
+            );
+            return geographicDistance >= minimumCenterDistance;
+        }
+
+        if (droneTransform == null)
+        {
+            return true;
+        }
+
+        Vector2 dronePosition = new Vector2(
+            droneTransform.position.x,
+            droneTransform.position.z
+        );
+        Vector2 buildingPosition = new Vector2(
+            worldCenter.x,
+            worldCenter.z
+        );
+
+        return Vector2.Distance(dronePosition, buildingPosition) >=
+               minimumCenterDistance;
+    }
+
     bool TryGetVisibleVillageAnchor(Result result, out Vector3 center, out Vector3 forward)
     {
         center = Vector3.zero;
         forward = Vector3.forward;
+
+        Transform droneAnchor = droneTransform != null
+            ? droneTransform
+            : GameObject.FindGameObjectWithTag("Drone")?.transform;
+        if (droneAnchor != null)
+        {
+            center = droneAnchor.position;
+            forward = droneAnchor.forward;
+            return true;
+        }
 
         if (result == null || result.waypoints == null || result.waypoints.Length == 0)
         {
@@ -3505,6 +3793,13 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     {
         latitude = 0.0;
         longitude = 0.0;
+
+        if (GameManager.hasHomeLocation)
+        {
+            latitude = GameManager.homeLat;
+            longitude = GameManager.homeLon;
+            return true;
+        }
 
         if (result == null || result.waypoints == null || result.waypoints.Length == 0)
         {
@@ -4653,7 +4948,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         // visualBounds is already measured in buildingRoot local space.
         boxCollider.center = visualBounds.center;
-        boxCollider.size = visualBounds.size;
+        boxCollider.size = new Vector3(
+            Mathf.Max(0.1f, visualBounds.size.x),
+            Mathf.Max(0.1f, visualBounds.size.y),
+            Mathf.Max(0.1f, visualBounds.size.z)
+        );
+        boxCollider.isTrigger = false;
     }
 
     Vector3[] GetRendererWorldCorners(Renderer renderer)
@@ -4847,6 +5147,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             $"--custom-location {customLocation}";
 
         arguments += $" --radius-meters {radiusArgument}";
+        arguments += $" --output-path \"{outputPath}\"";
 
         ProcessStartInfo psi = new ProcessStartInfo
         {
@@ -4982,19 +5283,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         if (useWindowsRuntime)
         {
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
-            candidates.Add(Path.Combine(
-                Application.streamingAssetsPath,
-                "Python",
-                "python.exe"
-            ));
-            candidates.Add(Path.Combine(
-                System.Environment.GetFolderPath(
-                    System.Environment.SpecialFolder.LocalApplicationData
-                ),
-                "SantaTrail",
-                "Python",
-                "python.exe"
-            ));
+            string preparedPython = SantaTrailWindowsFirstRunSetup.FindPython();
+            if (!string.IsNullOrEmpty(preparedPython))
+            {
+                candidates.Add(preparedPython);
+            }
 #endif
         }
         else
@@ -5027,7 +5320,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     {
         pos = Vector3.zero;
 
-        if (arcGISConverter != null && arcGISConverter.IsReady())
+        if (arcGISConverter != null &&
+            arcGISConverter.CanProjectCoordinates())
         {
             pos = arcGISConverter.GPSToUnity(lat, lon, alt);
 
@@ -5076,13 +5370,37 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             return;
 
         var wp0 = result.waypoints[0];
-        if (!TryConvertGPS(wp0.lat, wp0.lon, wp0.alt, out Vector3 pos))
-            return;
+        ArcGISLocationComponent droneLocation =
+            droneTransform.GetComponent<ArcGISLocationComponent>();
 
-        // The first waypoint is the vehicle's resting position. Do not add a
-        // takeoff-height offset here; MAVLink telemetry supplies altitude once
-        // the pilot actually takes off.
-        droneTransform.position = pos;
+        if (droneLocation == null)
+        {
+            droneLocation =
+                droneTransform.GetComponentInParent<ArcGISLocationComponent>();
+        }
+
+        // The first waypoint is the vehicle's resting geographic position.
+        // Write through ArcGISLocationComponent so its HPTransform receives a
+        // valid high-precision universe position on first load and restart.
+        // Directly assigning the ECEF result to Transform.position caused the
+        // drone to alternate between two incorrect coordinate systems.
+        if (droneLocation != null &&
+            droneLocation.GetComponentInParent<ArcGISMapComponent>() != null)
+        {
+            droneLocation.Position = new ArcGISPoint(
+                wp0.lon,
+                wp0.lat,
+                wp0.alt,
+                ArcGISSpatialReference.WGS84()
+            );
+        }
+        else
+        {
+            if (!TryConvertGPS(wp0.lat, wp0.lon, wp0.alt, out Vector3 pos))
+                return;
+
+            droneTransform.position = pos;
+        }
 
         Rigidbody rb = droneTransform.GetComponent<Rigidbody>();
         if (rb == null)
@@ -5096,8 +5414,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
 
         Debug.Log(
-    $"Drone Unity Pos = {pos}"
-);
+            "Drone spawn set through ArcGISLocationComponent"
+        );
         Debug.Log(
             $"Drone GPS = {wp0.lat}, {wp0.lon}"
         );
@@ -5135,7 +5453,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         while (true)
         {
-            if (arcGISConverter != null && arcGISConverter.IsReady())
+            if (arcGISConverter != null &&
+                arcGISConverter.CanProjectCoordinates())
             {
                 Debug.Log("✅ ArcGIS READY");
                 LoadAndGenerateSafe();
@@ -5367,8 +5686,20 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         mapExtentSizeMeters =
             System.Math.Max(1.0, mapExtentSizeMeters);
 
+        arcGISStartupGraceSeconds =
+            Mathf.Max(5f, arcGISStartupGraceSeconds);
+
         buildingSpawnRadius =
             Mathf.Max(1f, buildingSpawnRadius);
+
+        droneSpawnBuildingClearanceMeters =
+            Mathf.Max(1f, droneSpawnBuildingClearanceMeters);
+
+        droneBoundaryPastLastHouseMeters =
+            Mathf.Max(0f, droneBoundaryPastLastHouseMeters);
+
+        minimumGeneratedVillageBoundaryMeters =
+            Mathf.Max(1f, minimumGeneratedVillageBoundaryMeters);
 
         roadsideStreetLightSpacingMeters =
             Mathf.Max(5f, roadsideStreetLightSpacingMeters);

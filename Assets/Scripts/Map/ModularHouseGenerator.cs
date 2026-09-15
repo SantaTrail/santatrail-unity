@@ -755,6 +755,7 @@ public class ModularHouseGenerator : MonoBehaviour
                 Mathf.Max(0.05f, targetHeight),
                 Mathf.Max(0.05f, wallThickness)
             );
+            wallCollider.isTrigger = false;
         }
 
         if (selectedPrefab == null)
@@ -1623,6 +1624,13 @@ public class ModularHouseGenerator : MonoBehaviour
         {
             ApplyRoofMaterial(renderer);
         }
+
+        if (addWallColliders)
+        {
+            MeshCollider fillCollider =
+                fillObject.AddComponent<MeshCollider>();
+            fillCollider.sharedMesh = mesh;
+        }
     }
 
     void CreateGableWallFill(
@@ -1824,6 +1832,13 @@ public class ModularHouseGenerator : MonoBehaviour
         else
         {
             ApplyRoofMaterial(renderer);
+        }
+
+        if (addWallColliders)
+        {
+            MeshCollider fillCollider =
+                triangleObject.AddComponent<MeshCollider>();
+            fillCollider.sharedMesh = mesh;
         }
     }
 

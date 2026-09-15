@@ -5,10 +5,14 @@
 using UnityEngine;
 using LLMUnity;
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 public class LetterGenerator : MonoBehaviour
 {
+    private static readonly SemaphoreSlim GenerationGate =
+        new SemaphoreSlim(1, 1);
+
     public LLMAgent agent;
     public LetterUI ui;
 
@@ -30,92 +34,104 @@ public class LetterGenerator : MonoBehaviour
             return null;
         }
 
-        bool modelReady = await IsLocalModelReady();
-
-        if (!modelReady)
-        {
-            if (!useOfflineFallback)
-            {
-                Debug.LogError(
-                    "LetterGenerator: local model is unavailable."
-                );
-
-                return null;
-            }
-
-            Debug.LogWarning(
-                "LetterGenerator: local model unavailable. " +
-                "Using offline Christmas letter."
-            );
-
-            return BuildOfflineLetter(child);
-        }
+        // LlamaLib's local agent is configured with one prompt slot. Entering
+        // Chat from two scene-start tasks at once can crash inside native
+        // tokenization instead of returning a managed exception.
+        await GenerationGate.WaitAsync();
 
         try
         {
-            string prompt = PromptBuilder.Build(child);
+            bool modelReady = await IsLocalModelReady();
 
-            Debug.Log(
-                $"LetterGenerator: generating letter for {child.name}..."
-            );
-
-            float startTime =
-                Time.realtimeSinceStartup;
-
-            string generatedLetter =
-                await agent.Chat(prompt);
-
-            float elapsed =
-                Time.realtimeSinceStartup - startTime;
-
-            Debug.Log(
-                $"LetterGenerator: AI Chat took {elapsed:F2}s"
-            );
-
-            if (string.IsNullOrWhiteSpace(generatedLetter))
+            if (!modelReady)
             {
                 if (!useOfflineFallback)
                 {
                     Debug.LogError(
-                        "LetterGenerator: AI returned an empty letter."
+                        "LetterGenerator: local model is unavailable."
                     );
 
                     return null;
                 }
 
                 Debug.LogWarning(
-                    "LetterGenerator: AI returned an empty letter. " +
-                    "Using offline letter."
+                    "LetterGenerator: local model unavailable. " +
+                    "Using offline Christmas letter."
                 );
 
                 return BuildOfflineLetter(child);
             }
 
-            generatedLetter = generatedLetter.Trim();
-            if (ContainsToyName(generatedLetter, child.targetToy))
+            try
             {
+                string prompt = PromptBuilder.Build(child);
+
+                Debug.Log(
+                    $"LetterGenerator: generating letter for {child.name}..."
+                );
+
+                float startTime =
+                    Time.realtimeSinceStartup;
+
+                string generatedLetter =
+                    await agent.Chat(prompt);
+
+                float elapsed =
+                    Time.realtimeSinceStartup - startTime;
+
+                Debug.Log(
+                    $"LetterGenerator: AI Chat took {elapsed:F2}s"
+                );
+
+                if (string.IsNullOrWhiteSpace(generatedLetter))
+                {
+                    if (!useOfflineFallback)
+                    {
+                        Debug.LogError(
+                            "LetterGenerator: AI returned an empty letter."
+                        );
+
+                        return null;
+                    }
+
+                    Debug.LogWarning(
+                        "LetterGenerator: AI returned an empty letter. " +
+                        "Using offline letter."
+                    );
+
+                    return BuildOfflineLetter(child);
+                }
+
+                generatedLetter = generatedLetter.Trim();
+                if (ContainsToyName(generatedLetter, child.targetToy))
+                {
+                    Debug.LogWarning(
+                        "LetterGenerator: generated letter revealed the toy name. Using the safe offline letter."
+                    );
+                    return BuildOfflineLetter(child);
+                }
+
+                return generatedLetter;
+            }
+            catch (Exception e)
+            {
+                if (!useOfflineFallback)
+                {
+                    Debug.LogException(e);
+                    return null;
+                }
+
                 Debug.LogWarning(
-                    "LetterGenerator: generated letter revealed the toy name. Using the safe offline letter."
+                    $"LetterGenerator: AI generation failed " +
+                    $"({e.Message}). Using offline letter."
                 );
+
                 return BuildOfflineLetter(child);
             }
-
-            return generatedLetter;
         }
-        catch (Exception e)
+        finally
         {
-            if (!useOfflineFallback)
-            {
-                Debug.LogException(e);
-                return null;
-            }
-
-            Debug.LogWarning(
-                $"LetterGenerator: AI generation failed " +
-                $"({e.Message}). Using offline letter."
-            );
-
-            return BuildOfflineLetter(child);
+            GenerationGate.Release();
         }
     }
 

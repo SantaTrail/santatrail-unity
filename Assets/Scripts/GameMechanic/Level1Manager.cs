@@ -24,6 +24,7 @@ public class Level1Manager : MonoBehaviour
     public TextMeshProUGUI levelStatusText;
     public string objectivePrefix = "Present Delivered: ";
     public string completedMessage = "Nice work! You finished the guided-flight tutorial.";
+    public DeliveryPresentProgressUI presentProgressUI;
 
     [Header("Beginner Tutorial")]
     public bool showTutorial = true;
@@ -75,6 +76,7 @@ public class Level1Manager : MonoBehaviour
         }
 
         ResolveMavlinkReceiver();
+        ResolvePresentProgressUI();
 
         if (deliveryScoreManager == null)
         {
@@ -428,6 +430,40 @@ public class Level1Manager : MonoBehaviour
 
         objectiveText.text =
             $"{GetObjectiveLabel()}: {completedTargets}/{Mathf.Max(1, totalTargets)}";
+
+        ResolvePresentProgressUI();
+        if (presentProgressUI != null)
+        {
+            presentProgressUI.SetProgress(completedTargets, Mathf.Max(1, totalTargets));
+        }
+    }
+
+    private void ResolvePresentProgressUI()
+    {
+        if (presentProgressUI != null)
+        {
+            return;
+        }
+
+        presentProgressUI = FindFirstObjectByType<DeliveryPresentProgressUI>(
+            FindObjectsInactive.Include);
+        if (presentProgressUI != null || objectiveText == null)
+        {
+            return;
+        }
+
+        GameObject progressObject = new GameObject(
+            "DeliveryPresentProgress",
+            typeof(RectTransform),
+            typeof(DeliveryPresentProgressUI));
+        RectTransform progressRect = progressObject.GetComponent<RectTransform>();
+        progressRect.SetParent(objectiveText.rectTransform.parent, false);
+        progressRect.anchorMin = new Vector2(1f, 1f);
+        progressRect.anchorMax = new Vector2(1f, 1f);
+        progressRect.pivot = new Vector2(0.5f, 0.5f);
+        progressRect.anchoredPosition = new Vector2(-174f, -170f);
+        progressRect.sizeDelta = new Vector2(224f, 40f);
+        presentProgressUI = progressObject.GetComponent<DeliveryPresentProgressUI>();
     }
 
     private string GetObjectiveLabel()

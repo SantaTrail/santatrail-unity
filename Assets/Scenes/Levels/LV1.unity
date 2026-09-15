@@ -1071,6 +1071,7 @@ MonoBehaviour:
   levelStatusText: {fileID: 1267712440}
   objectivePrefix: Deliver presents
   completedMessage: Nice work! You finished the guided-flight tutorial.
+  presentProgressUI: {fileID: 2113456702}
   showTutorial: 1
   welcomeMessage: Welcome! First, open QGroundControl and make sure the drone is
     connected.
@@ -4313,7 +4314,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &1111008507
 RectTransform:
   m_ObjectHideFlags: 0
@@ -4630,6 +4631,14 @@ MonoBehaviour:
   fallbackGeofenceRadiusMeters: 500
   geofenceBufferMeters: 20
   geofenceCommandIntervalSeconds: 1
+  preserveGuidedModeOnMapBoundary: 1
+  enforceBuildingCollision: 1
+  droneCollisionRadiusMeters: 0.8
+  buildingCollisionLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  preserveGuidedModeOnBuildingCollision: 1
+  buildingCollisionRetreatMeters: 1
   enforceMaximumAltitude: 1
   maximumRelativeAltitudeMeters: 45
   altitudeLimitBufferMeters: 3
@@ -6323,6 +6332,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 17c6f8e81f47f4776880b2751b1dfcb4, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ArcGISConverter
+  requiredStableDrawSeconds: 2
 --- !u!4 &1663710038
 Transform:
   m_ObjectHideFlags: 0
@@ -7387,7 +7397,7 @@ MonoBehaviour:
   minBuildingHeight: 0.1
   minBuildingFootprint: 3
   includeInactiveRenderers: 0
-  deliveryRadius: 6
+  deliveryRadius: 4
   requireDroneAboveRoofForDelivery: 1
   deliveryRoofPadding: 0.35
   maxHoverSpeed: 100
@@ -7398,7 +7408,7 @@ MonoBehaviour:
   logAcceptedBuildingRoots: 0
   verboseDebugLogs: 0
   deliveryRingVerticalOffset: 0.35
-  deliveryRingSegments: 48
+  deliveryRingSegments: 62
   deliveryRingWidth: 0.35
   deliveryRingReadyColor: {r: 0.2, g: 1, b: 0.3, a: 0.9}
   deliveryRingSearchColor: {r: 1, g: 0.9, b: 0.2, a: 0.9}
@@ -7705,9 +7715,13 @@ MonoBehaviour:
   finalLevelReadyTimeoutSeconds: 90
   finalRenderFrameCount: 3
   allowLocalGpsFallback: 1
+  arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
   buildingSpawnRadius: 1000
+  fitDroneBoundaryToGeneratedVillage: 1
+  droneBoundaryPastLastHouseMeters: 25
+  minimumGeneratedVillageBoundaryMeters: 60
   filterBuildingsByDroneDistance: 0
   showSpawnRadius: 1
   hideOsmBuildingLayer: 1
@@ -7849,6 +7863,7 @@ MonoBehaviour:
   - {fileID: 1401966042494842254, guid: 9d609ccce0bfc499ca214c6aa78955ed, type: 3}
   spawnVisibleVillageClusterOnly: 0
   spawnFallbackVillageWhenNoOsmBuildings: 1
+  droneSpawnBuildingClearanceMeters: 10
   smallBuildingAreaMax: 120
   mediumBuildingAreaMax: 900
   buildingReplacements: []
@@ -7887,9 +7902,13 @@ MonoBehaviour:
   finalLevelReadyTimeoutSeconds: 90
   finalRenderFrameCount: 3
   allowLocalGpsFallback: 1
+  arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
   buildingSpawnRadius: 50000
+  fitDroneBoundaryToGeneratedVillage: 1
+  droneBoundaryPastLastHouseMeters: 25
+  minimumGeneratedVillageBoundaryMeters: 60
   filterBuildingsByDroneDistance: 0
   showSpawnRadius: 1
   hideOsmBuildingLayer: 1
@@ -8031,6 +8050,7 @@ MonoBehaviour:
   - {fileID: 1401966042494842254, guid: 9d609ccce0bfc499ca214c6aa78955ed, type: 3}
   spawnVisibleVillageClusterOnly: 0
   spawnFallbackVillageWhenNoOsmBuildings: 1
+  droneSpawnBuildingClearanceMeters: 10
   smallBuildingAreaMax: 120
   mediumBuildingAreaMax: 900
   buildingReplacements: []
@@ -8876,6 +8896,9 @@ RectTransform:
   - {fileID: 1111008507}
   - {fileID: 785339297}
   - {fileID: 280792030}
+  - {fileID: 2113456701}
+  - {fileID: 2113456711}
+  - {fileID: 2113456721}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
@@ -9514,6 +9537,115 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2111809899}
   m_Mesh: {fileID: 1019386347547055254, guid: 77ec979c4a1053f4fb90fee3d17b240c, type: 3}
+--- !u!1 &2113456700
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2113456701}
+  - component: {fileID: 2113456702}
+  m_Layer: 5
+  m_Name: DeliveryPresentProgress
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &2113456701
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2113456700}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2055275841}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 1, y: 1}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: -232.4, y: -113}
+  m_SizeDelta: {x: 224, y: 40}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &2113456702
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2113456700}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 15dcc8a1185e44ae8462dcd2f586bb58, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DeliveryPresentProgressUI
+  presentIconPrefab: {fileID: 1001, guid: 51b1d1f96c9b4dd1a2a7c7cc2ab60e9d, type: 3}
+  pendingPresentColor: {r: 0.72, g: 0.72, b: 0.72, a: 0.72}
+  deliveredPresentColor: {r: 1, g: 1, b: 1, a: 1}
+  presentIconSize: {x: 80, y: 80}
+  presentIconSpacing: 6
+--- !u!1001 &2113456710
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 2055275841}
+    m_Modifications:
+    - target: {fileID: 622001001001001004, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+      propertyPath: m_Color.a
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 622001001001001004, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+      propertyPath: m_Color.b
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 622001001001001004, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+      propertyPath: m_Color.g
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 622001001001001004, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+      propertyPath: m_Color.r
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 622001001001001004, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+      propertyPath: m_Enabled
+      value: 1
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+--- !u!224 &2113456711 stripped
+RectTransform:
+  m_CorrespondingSourceObject: {fileID: 622001001001001002, guid: 9a67f8311a8d4fd5bdcd3c45b860dfaa, type: 3}
+  m_PrefabInstance: {fileID: 2113456710}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1001 &2113456720
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 2055275841}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: cfb026f466024c40b66382894e3836ee, type: 3}
+--- !u!224 &2113456721 stripped
+RectTransform:
+  m_CorrespondingSourceObject: {fileID: 733002002002002002, guid: cfb026f466024c40b66382894e3836ee, type: 3}
+  m_PrefabInstance: {fileID: 2113456720}
+  m_PrefabAsset: {fileID: 0}
 --- !u!4 &7958256208052114418 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
@@ -9625,35 +9757,35 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 0
+      value: -0
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 5.62
+      value: 9.27
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -11.34
+      value: -8.68
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0.99284405
+      value: 0.97373766
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.x
-      value: 0.11941857
+      value: 0.22767319
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.00000019645495
+      value: 0.000000009912242
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.z
-      value: -0.00000030438733
+      value: 0.000000082445155
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
-      value: -1426.283
+      value: -1413.68
       objectReference: {fileID: 0}
     - target: {fileID: 7121607210696579298, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalEulerAnglesHint.y

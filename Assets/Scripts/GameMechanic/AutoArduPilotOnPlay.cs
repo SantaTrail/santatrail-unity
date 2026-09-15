@@ -10,6 +10,7 @@ using UnityEngine.SceneManagement;
 public static class AutoArduPilotOnPlay
 {
     private const string QgcMapTypeAtStartup = "Satellite";
+    private const int QgcUdpListenPort = 14550;
     private static bool hasLaunchedThisSession;
     private static bool isLaunchInProgress;
     private static bool hasAttemptedWindowsFirstRunSetup;
@@ -17,6 +18,7 @@ public static class AutoArduPilotOnPlay
     private static Process ownedSitlProcess;
     private static SitlProcessPause sitlPause;
     private static int launchGeneration;
+    private static Task qgcPreloadTask;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetLaunchState()
@@ -26,18 +28,27 @@ public static class AutoArduPilotOnPlay
         isLaunchInProgress = false;
         hasAttemptedWindowsFirstRunSetup = false;
         pendingSceneName = null;
+        qgcPreloadTask = null;
         SceneManager.sceneLoaded -= OnSceneLoaded;
         Application.quitting -= StopOwnedSitl;
+        Application.quitting -= StopQgc;
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void InitializeAutoLaunch()
     {
+        // QGroundControl is a separate desktop app.  The standalone player must
+        // keep updating its MAVLink receiver and rendering while the pilot is
+        // interacting with QGroundControl's window.
+        Application.runInBackground = true;
+
 #if UNITY_EDITOR || UNITY_STANDALONE_OSX || UNITY_STANDALONE_WIN
         SceneManager.sceneLoaded -= OnSceneLoaded;
         SceneManager.sceneLoaded += OnSceneLoaded;
         Application.quitting -= StopOwnedSitl;
         Application.quitting += StopOwnedSitl;
+        Application.quitting -= StopQgc;
+        Application.quitting += StopQgc;
 #else
         UnityEngine.Debug.LogWarning(
             "AutoArduPilotOnPlay: auto-launch is configured for macOS and Windows standalone builds only."
@@ -572,6 +583,7 @@ public static class AutoArduPilotOnPlay
     public static void EndFlightSession()
     {
         launchGeneration++;
+        qgcPreloadTask = null;
         StopOwnedSitl();
         hasLaunchedThisSession = false;
         isLaunchInProgress = false;
@@ -624,6 +636,60 @@ public static class AutoArduPilotOnPlay
         }
     }
 
+    private static void StopQgc()
+    {
+#if UNITY_EDITOR || UNITY_STANDALONE_OSX || UNITY_STANDALONE_WIN
+        Process[] processes = null;
+        try
+        {
+            processes = Process.GetProcessesByName("QGroundControl");
+            if (processes == null || processes.Length == 0)
+            {
+                return;
+            }
+
+            for (int index = 0; index < processes.Length; index++)
+            {
+                Process process = processes[index];
+                if (process == null || process.HasExited)
+                {
+                    continue;
+                }
+
+                // Give QGC a chance to save its settings and map state before
+                // forcing the process closed during application shutdown.
+                bool closeRequested = process.CloseMainWindow();
+                if (!closeRequested || !process.WaitForExit(2000))
+                {
+                    process.Kill();
+                    process.WaitForExit(1000);
+                }
+            }
+
+            UnityEngine.Debug.Log(
+                "AutoArduPilotOnPlay: QGroundControl closed with SantaTrail."
+            );
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning(
+                "AutoArduPilotOnPlay: could not close QGroundControl. " +
+                exception.Message
+            );
+        }
+        finally
+        {
+            if (processes != null)
+            {
+                for (int index = 0; index < processes.Length; index++)
+                {
+                    processes[index]?.Dispose();
+                }
+            }
+        }
+#endif
+    }
+
     private static async Task LaunchQgcAfterSITLBootAsync(int generation)
     {
         await Task.Delay(5000);
@@ -631,11 +697,95 @@ public static class AutoArduPilotOnPlay
             await Task.Delay(250);
         if (generation != launchGeneration) return;
 
-        Process[] existingQgc = Process.GetProcessesByName("QGroundControl");
-        if (existingQgc != null && existingQgc.Length > 0)
+#if UNITY_EDITOR || UNITY_STANDALONE_OSX || UNITY_STANDALONE_WIN
+        EnsureQgcRunning();
+#endif
+    }
+
+    /// <summary>
+    /// Starts QGroundControl early enough for its UI and map engine to warm up
+    /// behind the Unity loading screen. Once LV1 starts SITL, QGC can begin
+    /// requesting map/terrain data as soon as it receives the vehicle position.
+    /// </summary>
+    public static Task PreloadQgcDuringLoadingScreenAsync()
+    {
+#if UNITY_EDITOR || UNITY_STANDALONE_OSX || UNITY_STANDALONE_WIN
+        if (qgcPreloadTask == null)
+        {
+            qgcPreloadTask = PreloadQgcDuringLoadingScreenCoreAsync(
+                launchGeneration
+            );
+        }
+
+        return qgcPreloadTask;
+#else
+        return Task.CompletedTask;
+#endif
+    }
+
+#if UNITY_EDITOR || UNITY_STANDALONE_OSX || UNITY_STANDALONE_WIN
+    private static async Task PreloadQgcDuringLoadingScreenCoreAsync(
+        int generation)
+    {
+        try
+        {
+            if (!EnsureQgcRunning())
+            {
+                return;
+            }
+
+            // A newly launched native app may need a few seconds before its
+            // main window exists. Keep retrying so it never covers Unity's
+            // loading screen when Windows gives QGC startup focus.
+            const int windowReadyAttempts = 50;
+            for (int attempt = 0; attempt < windowReadyAttempts; attempt++)
+            {
+                if (generation != launchGeneration)
+                {
+                    return;
+                }
+
+                QGroundControlOverlayController overlay =
+                    QGroundControlOverlayController.Active;
+                if (overlay != null && overlay.KeepQGroundControlBehindGame())
+                {
+                    UnityEngine.Debug.Log(
+                        "AutoArduPilotOnPlay: QGroundControl is warming up behind the loading screen."
+                    );
+                    return;
+                }
+
+                await Task.Delay(100);
+            }
+
+            UnityEngine.Debug.Log(
+                "AutoArduPilotOnPlay: QGroundControl is running; its window is still initializing."
+            );
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning(
+                "AutoArduPilotOnPlay: QGroundControl preload failed. " + exception.Message
+            );
+        }
+    }
+
+    private static bool EnsureQgcRunning()
+    {
+        if (IsWindowsRuntime())
+        {
+#if UNITY_EDITOR || UNITY_STANDALONE_WIN
+            // Write this before checking for an existing QGC process. The
+            // installer or Windows launcher may already have opened QGC, but
+            // the next QGC start must still retain SantaTrail's UDP endpoint.
+            ConfigureWindowsQgcSettings();
+#endif
+        }
+
+        if (IsQgcProcessRunning())
         {
             UnityEngine.Debug.Log("AutoArduPilotOnPlay: QGroundControl is already running.");
-            return;
+            return true;
         }
 
         if (IsWindowsRuntime())
@@ -647,10 +797,8 @@ public static class AutoArduPilotOnPlay
                 UnityEngine.Debug.LogWarning(
                     "AutoArduPilotOnPlay: QGroundControl was not found. Run Setup SantaTrail.bat once."
                 );
-                return;
+                return false;
             }
-
-            ConfigureWindowsQgcMapType();
 
             ProcessStartInfo qgcStartInfo = new ProcessStartInfo
             {
@@ -658,8 +806,12 @@ public static class AutoArduPilotOnPlay
                 UseShellExecute = qgcPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase),
                 CreateNoWindow = true
             };
-            Process.Start(qgcStartInfo);
+            Process startedProcess = Process.Start(qgcStartInfo);
+            startedProcess?.Dispose();
             UnityEngine.Debug.Log($"AutoArduPilotOnPlay: launched QGroundControl from {qgcPath}.");
+            return true;
+#else
+            return false;
 #endif
         }
         else
@@ -671,7 +823,7 @@ public static class AutoArduPilotOnPlay
                 UnityEngine.Debug.LogWarning(
                     "AutoArduPilotOnPlay: QGroundControl.app was not found beside the game or in /Applications."
                 );
-                return;
+                return false;
             }
 
             ProcessStartInfo qgcStartInfo = new ProcessStartInfo
@@ -682,14 +834,47 @@ public static class AutoArduPilotOnPlay
                 CreateNoWindow = true
             };
 
-            Process.Start(qgcStartInfo);
+            Process startedProcess = Process.Start(qgcStartInfo);
+            startedProcess?.Dispose();
             UnityEngine.Debug.Log($"AutoArduPilotOnPlay: launched QGroundControl from {qgcAppPath}.");
+            return true;
+#else
+            return false;
 #endif
         }
     }
 
+    private static bool IsQgcProcessRunning()
+    {
+        Process[] processes = null;
+        try
+        {
+            processes = Process.GetProcessesByName("QGroundControl");
+            return processes != null && processes.Length > 0;
+        }
+        catch (Exception exception)
+        {
+            UnityEngine.Debug.LogWarning(
+                "AutoArduPilotOnPlay: could not inspect QGroundControl processes. " +
+                exception.Message
+            );
+            return false;
+        }
+        finally
+        {
+            if (processes != null)
+            {
+                for (int index = 0; index < processes.Length; index++)
+                {
+                    processes[index]?.Dispose();
+                }
+            }
+        }
+    }
+#endif
+
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
-    private static void ConfigureWindowsQgcMapType()
+    public static void ConfigureWindowsQgcSettings()
     {
         try
         {
@@ -704,72 +889,21 @@ public static class AutoArduPilotOnPlay
                 ? new List<string>(File.ReadAllLines(settingsPath))
                 : new List<string>();
 
-            int flightMapSectionIndex = -1;
-            int nextSectionIndex = lines.Count;
-            bool insideFlightMapSection = false;
-            bool mapTypeWritten = false;
+            SetIniValue(lines, "FlightMap", "mapType", QgcMapTypeAtStartup);
 
-            for (int index = 0; index < lines.Count; index++)
-            {
-                string trimmedLine = lines[index].Trim();
-                if (trimmedLine.StartsWith("[", StringComparison.Ordinal) &&
-                    trimmedLine.EndsWith("]", StringComparison.Ordinal))
-                {
-                    insideFlightMapSection = string.Equals(
-                        trimmedLine,
-                        "[FlightMap]",
-                        StringComparison.OrdinalIgnoreCase
-                    );
-
-                    if (insideFlightMapSection)
-                    {
-                        flightMapSectionIndex = index;
-                    }
-                    else if (flightMapSectionIndex >= 0 && nextSectionIndex == lines.Count)
-                    {
-                        nextSectionIndex = index;
-                    }
-
-                    continue;
-                }
-
-                if (!insideFlightMapSection)
-                {
-                    continue;
-                }
-
-                int separatorIndex = trimmedLine.IndexOf('=');
-                if (separatorIndex <= 0)
-                {
-                    continue;
-                }
-
-                string key = trimmedLine.Substring(0, separatorIndex).Trim();
-                if (string.Equals(key, "mapType", StringComparison.OrdinalIgnoreCase))
-                {
-                    lines[index] = "mapType=" + QgcMapTypeAtStartup;
-                    mapTypeWritten = true;
-                }
-            }
-
-            if (flightMapSectionIndex < 0)
-            {
-                if (lines.Count > 0 && !string.IsNullOrWhiteSpace(lines[lines.Count - 1]))
-                {
-                    lines.Add(string.Empty);
-                }
-
-                lines.Add("[FlightMap]");
-                lines.Add("mapType=" + QgcMapTypeAtStartup);
-            }
-            else if (!mapTypeWritten)
-            {
-                lines.Insert(nextSectionIndex, "mapType=" + QgcMapTypeAtStartup);
-            }
+            // QGC 5 stores these under AutoConnect. QGC 4.x used LinkManager,
+            // and QGC 5 migrates that legacy group, so writing both keeps
+            // existing installations and newly downloaded releases working.
+            string udpPort = QgcUdpListenPort.ToString(CultureInfo.InvariantCulture);
+            SetIniValue(lines, "AutoConnect", "autoConnectUDP", "true");
+            SetIniValue(lines, "AutoConnect", "udpListenPort", udpPort);
+            SetIniValue(lines, "LinkManager", "autoConnectUDP", "true");
+            SetIniValue(lines, "LinkManager", "udpListenPort", udpPort);
 
             File.WriteAllLines(settingsPath, lines);
             UnityEngine.Debug.Log(
-                $"AutoArduPilotOnPlay: QGroundControl map type set to {QgcMapTypeAtStartup}."
+                $"AutoArduPilotOnPlay: QGroundControl map type set to " +
+                $"{QgcMapTypeAtStartup}; UDP auto-connect set to {QgcUdpListenPort}."
             );
         }
         catch (Exception exception)
@@ -779,6 +913,79 @@ public static class AutoArduPilotOnPlay
                 exception.Message
             );
         }
+    }
+
+    private static void SetIniValue(
+        List<string> lines,
+        string sectionName,
+        string key,
+        string value)
+    {
+        string sectionHeader = "[" + sectionName + "]";
+        int sectionIndex = -1;
+        int nextSectionIndex = lines.Count;
+
+        for (int index = 0; index < lines.Count; index++)
+        {
+            string trimmedLine = lines[index].Trim();
+            bool isSection =
+                trimmedLine.StartsWith("[", StringComparison.Ordinal) &&
+                trimmedLine.EndsWith("]", StringComparison.Ordinal);
+
+            if (!isSection)
+            {
+                continue;
+            }
+
+            if (sectionIndex >= 0)
+            {
+                nextSectionIndex = index;
+                break;
+            }
+
+            if (string.Equals(
+                    trimmedLine,
+                    sectionHeader,
+                    StringComparison.OrdinalIgnoreCase
+                ))
+            {
+                sectionIndex = index;
+            }
+        }
+
+        if (sectionIndex < 0)
+        {
+            if (lines.Count > 0 &&
+                !string.IsNullOrWhiteSpace(lines[lines.Count - 1]))
+            {
+                lines.Add(string.Empty);
+            }
+
+            lines.Add(sectionHeader);
+            lines.Add(key + "=" + value);
+            return;
+        }
+
+        for (int index = sectionIndex + 1;
+             index < nextSectionIndex;
+             index++)
+        {
+            string trimmedLine = lines[index].Trim();
+            int separatorIndex = trimmedLine.IndexOf('=');
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            string existingKey = trimmedLine.Substring(0, separatorIndex).Trim();
+            if (string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase))
+            {
+                lines[index] = key + "=" + value;
+                return;
+            }
+        }
+
+        lines.Insert(nextSectionIndex, key + "=" + value);
     }
 
     private static string ResolveWindowsQgcSettingsPath()

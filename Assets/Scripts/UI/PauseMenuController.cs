@@ -66,6 +66,17 @@ public sealed class PauseMenuController : MonoBehaviour
     private bool previousCursorVisible;
     private CursorLockMode previousCursorLock;
 
+    public static bool TryTogglePause()
+    {
+        if (instance == null)
+        {
+            return false;
+        }
+
+        instance.TogglePause();
+        return true;
+    }
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetState()
     {
@@ -214,6 +225,9 @@ public sealed class PauseMenuController : MonoBehaviour
         }
         SaveFlight();
         changingScene = true;
+        // Release Unity's telemetry port before killing and recreating SITL.
+        // The replacement scene receives a fresh MAVLink receiver in Start().
+        MAVLinkReceiver.PrepareForSceneRestart();
         AutoArduPilotOnPlay.EndFlightSession();
         simulatorPaused = false;
         RestoreGame();
@@ -315,7 +329,20 @@ public sealed class PauseMenuController : MonoBehaviour
 
     private void SetPauseButtonVisible(bool visible)
     {
-        if (pauseButton != null) pauseButton.gameObject.SetActive(visible && showPauseButton);
+        bool shouldShow = visible && showPauseButton;
+        PauseButtonUI[] componentButtons = FindObjectsByType<PauseButtonUI>(
+            FindObjectsInactive.Include,
+            FindObjectsSortMode.None);
+
+        for (int i = 0; i < componentButtons.Length; i++)
+        {
+            componentButtons[i].SetVisible(shouldShow);
+        }
+
+        if (pauseButton != null)
+        {
+            pauseButton.gameObject.SetActive(shouldShow && componentButtons.Length == 0);
+        }
     }
 
     private void BindButtons(bool bind)

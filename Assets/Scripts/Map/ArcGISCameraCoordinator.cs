@@ -28,15 +28,25 @@ public class ArcGISCameraCoordinator : MonoBehaviour
     private void OnEnable()
     {
         SceneManager.sceneLoaded += OnSceneLoaded;
+        SceneManager.activeSceneChanged += OnActiveSceneChanged;
     }
 
     private void OnDisable()
     {
         SceneManager.sceneLoaded -= OnSceneLoaded;
+        SceneManager.activeSceneChanged -= OnActiveSceneChanged;
     }
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
+        ApplyCameraPriority();
+    }
+
+    private void OnActiveSceneChanged(Scene previous, Scene current)
+    {
+        // LV1 is initially loaded additively behind LoadingScene. Re-apply the
+        // camera choice after LV1 becomes active so the cold-start map cannot
+        // keep the loading camera as its streaming viewpoint.
         ApplyCameraPriority();
     }
 
@@ -54,24 +64,50 @@ public class ArcGISCameraCoordinator : MonoBehaviour
                 ? droneCamera.GetComponent<ArcGISCameraComponent>()
                 : null;
 
-        ArcGISCameraComponent mapDriverArcGis =
-            EnsureMapDriver(arcGisMap, droneCamera);
-
         ArcGISCameraComponent minimapArcGis =
             minimapCamera != null
                 ? minimapCamera.GetComponent<ArcGISCameraComponent>()
                 : null;
 
-        // ArcGIS camera components only work below an ArcGISMapComponent. The
-        // drone camera is elsewhere in the hierarchy, so a hidden child camera
-        // mirrors it and supplies the map with the correct view.
-        SetArcGisCameraEnabled(
-            droneArcGis,
-            false,
-            "DroneCamera (not under ArcGISMap)"
-        );
+        bool canUseDroneCameraDirectly =
+            droneCamera != null &&
+            droneArcGis != null &&
+            arcGisMap != null &&
+            droneCamera.GetComponentInParent<ArcGISMapComponent>() == arcGisMap;
+
+        // Disable scene alternatives before creating/enabling a driver. The
+        // ArcGIS SDK warns and may select the wrong streaming view if two
+        // ArcGISCameraComponents are briefly enabled during a scene restart.
         SetArcGisCameraEnabled(minimapArcGis, false, "Minimap Camera");
-        SetArcGisCameraEnabled(mapDriverArcGis, true, "ArcGIS Drone Map Driver");
+
+        ArcGISCameraComponent streamingArcGisCamera;
+        string streamingCameraLabel;
+
+        if (canUseDroneCameraDirectly)
+        {
+            DisableAndRemoveMapDriver();
+            SetArcGisCameraEnabled(droneArcGis, true, "DroneCamera");
+            streamingArcGisCamera = droneArcGis;
+            streamingCameraLabel = "DroneCamera";
+        }
+        else
+        {
+            SetArcGisCameraEnabled(
+                droneArcGis,
+                false,
+                "DroneCamera (not under ArcGISMap)"
+            );
+
+            ArcGISCameraComponent mapDriverArcGis =
+                EnsureMapDriver(arcGisMap, droneCamera);
+            SetArcGisCameraEnabled(
+                mapDriverArcGis,
+                true,
+                "ArcGIS Drone Map Driver"
+            );
+            streamingArcGisCamera = mapDriverArcGis;
+            streamingCameraLabel = "ArcGIS Drone Map Driver";
+        }
 
         if (minimapCamera != null)
         {
@@ -119,7 +155,8 @@ public class ArcGISCameraCoordinator : MonoBehaviour
         Debug.Log(
             "🎥 ArcGIS camera priority set. " +
             $"DroneCamera={(droneCamera != null ? droneCamera.name : "missing")} " +
-            $"ArcGIS={(mapDriverArcGis != null ? mapDriverArcGis.enabled.ToString() : "missing")} | " +
+            $"Streaming={streamingCameraLabel} " +
+            $"ArcGIS={(streamingArcGisCamera != null ? streamingArcGisCamera.enabled.ToString() : "missing")} | " +
             $"MinimapCamera={(minimapCamera != null ? minimapCamera.name : "missing")} " +
             $"ArcGIS={(minimapArcGis != null ? minimapArcGis.enabled.ToString() : "missing")} " +
             $"Render={(minimapCamera != null && minimapCamera.enabled)}"
@@ -138,9 +175,16 @@ public class ArcGISCameraCoordinator : MonoBehaviour
         if (mapDriver == null ||
             mapDriver.transform.parent != arcGisMap.transform)
         {
+            mapDriver = arcGisMap.GetComponentInChildren<ArcGISDroneMapDriver>(
+                true
+            );
+        }
+
+        if (mapDriver == null ||
+            mapDriver.transform.parent != arcGisMap.transform)
+        {
             GameObject driverObject = new GameObject("ArcGIS Drone Map Driver");
             driverObject.transform.SetParent(arcGisMap.transform, false);
-            driverObject.hideFlags = HideFlags.DontSave;
 
             Camera driverCamera = driverObject.AddComponent<Camera>();
             driverCamera.enabled = false;
@@ -156,6 +200,44 @@ public class ArcGISCameraCoordinator : MonoBehaviour
 
         mapDriver.Configure(droneCamera);
         return mapDriver.ArcGisCamera;
+    }
+
+    private void DisableAndRemoveMapDriver()
+    {
+        if (mapDriver == null)
+        {
+            mapDriver = FindFirstObjectByType<ArcGISDroneMapDriver>(
+                FindObjectsInactive.Include
+            );
+        }
+
+        if (mapDriver == null)
+        {
+            return;
+        }
+
+        ArcGISCameraComponent driverArcGis =
+            mapDriver.ArcGisCamera != null
+                ? mapDriver.ArcGisCamera
+                : mapDriver.GetComponent<ArcGISCameraComponent>();
+
+        SetArcGisCameraEnabled(
+            driverArcGis,
+            false,
+            "unused ArcGIS Drone Map Driver"
+        );
+
+        GameObject driverObject = mapDriver.gameObject;
+        mapDriver = null;
+
+        if (Application.isPlaying)
+        {
+            Destroy(driverObject);
+        }
+        else
+        {
+            DestroyImmediate(driverObject);
+        }
     }
 
     private static void EnsureRenderTexture(Camera camera)

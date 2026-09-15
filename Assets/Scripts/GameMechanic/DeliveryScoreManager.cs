@@ -792,6 +792,24 @@ public class DeliveryScoreManager : MonoBehaviour
             eligibleCandidates.Count > 0 &&
             fallbackToNearestTargetsWhenRadiusEmpty)
         {
+            SceneLoaderArcgis[] sceneLoaders = FindObjectsByType<SceneLoaderArcgis>(
+                FindObjectsInactive.Exclude,
+                FindObjectsSortMode.None);
+            SceneLoaderArcgis activeSceneLoader = Array.Find(
+                sceneLoaders,
+                loader => loader != null && loader.isActiveAndEnabled);
+
+            if (activeSceneLoader != null &&
+                activeSceneLoader.TrySpawnNearbyDeliveryVillage())
+            {
+                Debug.LogWarning(
+                    $"No delivery houses were found inside " +
+                    $"{targetSpawnRadiusFromDroneStart:0.#}m. " +
+                    "A nearby delivery village is being generated beside the drone."
+                );
+                return;
+            }
+
             candidates = eligibleCandidates;
             usedNearestFallback = true;
 
@@ -876,14 +894,18 @@ public class DeliveryScoreManager : MonoBehaviour
             return float.MaxValue;
         }
 
-        if (TryGetUniverseDistanceFromHome(target, out float universeDistance))
-        {
-            return universeDistance;
-        }
-
+        // Generated ArcGIS houses receive their geographic position before the
+        // HPTransform is guaranteed to have completed its first update. Prefer
+        // GPS here so initialization cannot rank a temporarily unpositioned
+        // house as the closest delivery target.
         if (TryGetGeographicDistanceFromHome(target, out float geographicDistance))
         {
             return geographicDistance;
+        }
+
+        if (TryGetUniverseDistanceFromHome(target, out float universeDistance))
+        {
+            return universeDistance;
         }
 
         Vector3 origin =

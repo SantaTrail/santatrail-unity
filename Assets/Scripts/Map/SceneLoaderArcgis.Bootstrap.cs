@@ -28,7 +28,12 @@ public partial class SceneLoaderArcgis
         }
 
         configuredMapExtentSource = this;
-        hasConfiguredMapExtent = limitMapExtent;
+        // When the boundary follows the generated village, do not expose the
+        // map's raw radius to MAVLink before generation has finished. A cold
+        // OSM start can otherwise show (and enforce) the wrong boundary before
+        // the first house has been registered.
+        hasConfiguredMapExtent =
+            limitMapExtent && !fitDroneBoundaryToGeneratedVillage;
         configuredMapExtentRadiusMeters =
             System.Math.Max(1.0, mapExtentSizeMeters);
 
@@ -71,6 +76,10 @@ public partial class SceneLoaderArcgis
 
     void OnDisable()
     {
+        // A slow OSM request from the previous level must not overwrite the
+        // shared cache after a different level has started loading.
+        StopPythonForLocalFallback();
+
         if (configuredMapExtentSource != this)
         {
             return;
@@ -452,7 +461,37 @@ public partial class SceneLoaderArcgis
             return;
         }
 
-        outputPath = Path.Combine(backendPath, "output.json");
+        outputPath = Path.Combine(
+            backendPath,
+            BuildLocationCacheFileName()
+        );
+
+        // Carry forward a matching cache produced by older builds. New runs
+        // use a location-specific file so each level keeps its own buildings.
+        string legacyOutputPath = Path.Combine(backendPath, "output.json");
+        if (!File.Exists(outputPath) &&
+            File.Exists(legacyOutputPath) &&
+            TryReadCachedOutputForCurrentHome(
+                legacyOutputPath,
+                out string legacyJson
+            ))
+        {
+            validatedJsonContent = legacyJson;
+
+            try
+            {
+                File.WriteAllText(outputPath, legacyJson);
+                Debug.Log("📦 Migrated matching building data to the per-location cache");
+            }
+            catch (System.Exception exception)
+            {
+                // The in-memory copy is still safe to use for this load.
+                Debug.LogWarning(
+                    "⚠️ Building cache migration could not be saved: " +
+                    exception.Message
+                );
+            }
+        }
 
         if (fetchMoreOsmBuildings &&
             File.Exists(expandedScriptPath))
@@ -495,15 +534,24 @@ public partial class SceneLoaderArcgis
             return;
         }
 
-        if (File.Exists(outputPath) &&
-            !CanUseCachedOutputForCurrentHome(outputPath))
+        if (File.Exists(outputPath))
         {
-            File.Delete(outputPath);
-            Debug.Log("🧹 Old JSON deleted");
-        }
-        else if (File.Exists(outputPath))
-        {
-            Debug.Log("✅ Using cached map data while OSM refreshes in the background");
+            if (TryReadCachedOutputForCurrentHome(
+                    outputPath,
+                    out string cachedJson
+                ))
+            {
+                // Hold the verified content in memory before starting Python.
+                // The background refresh can now replace the disk file without
+                // changing which complete dataset this load uses.
+                validatedJsonContent = cachedJson;
+                Debug.Log("✅ Using cached map data while OSM refreshes in the background");
+            }
+            else
+            {
+                File.Delete(outputPath);
+                Debug.Log("🧹 Invalid, empty, or different-location JSON cache deleted");
+            }
         }
 
         SetupDroneReference();
@@ -596,6 +644,28 @@ public partial class SceneLoaderArcgis
                 destinationDirectory,
                 relativePath
             );
+
+            string destinationFileName = Path.GetFileName(destinationFile);
+            bool isLocationCache =
+                destinationFileName.StartsWith(
+                    "output_v2_",
+                    System.StringComparison.OrdinalIgnoreCase
+                ) &&
+                destinationFileName.EndsWith(
+                    ".json",
+                    System.StringComparison.OrdinalIgnoreCase
+                );
+
+            // StreamingAssets contains a known-good first-launch seed for
+            // configured levels. Never replace a newer live OSM refresh that
+            // is already stored in the writable backend directory.
+            if (isLocationCache &&
+                File.Exists(destinationFile) &&
+                HasReusableBuildingCache(destinationFile))
+            {
+                continue;
+            }
+
             string destinationParent = Path.GetDirectoryName(destinationFile);
 
             if (!string.IsNullOrEmpty(destinationParent))
@@ -604,6 +674,31 @@ public partial class SceneLoaderArcgis
             }
 
             File.Copy(sourceFile, destinationFile, true);
+        }
+    }
+
+    bool HasReusableBuildingCache(string path)
+    {
+        try
+        {
+            string json = File.ReadAllText(path);
+            if (!IsValidJson(json))
+            {
+                return false;
+            }
+
+            Result cached = JsonUtility.FromJson<Result>(json);
+            return cached != null &&
+                   cached.buildings != null &&
+                   cached.buildings.Length > 0;
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogWarning(
+                "⚠️ Existing building cache could not be validated: " +
+                exception.Message
+            );
+            return false;
         }
     }
 
@@ -618,15 +713,19 @@ public partial class SceneLoaderArcgis
         }
 
         RunPython();
+        int backendAttempt = 1;
+        const int maximumBackendAttempts = 2;
+        float backendAttemptStartedAt = Time.realtimeSinceStartup;
 
         Debug.Log("⏳ Waiting for JSON + ArcGIS (production-safe)...");
 
         float timeout = 120f;
         float timer = 0f;
 
-        bool jsonReady = false;
+        bool jsonReady = !string.IsNullOrWhiteSpace(validatedJsonContent);
         bool arcgisReady = false;
         bool pythonExitWarningLogged = false;
+        bool usingEmergencyLocalLevel = false;
 
         while (timer < timeout)
         {
@@ -644,12 +743,49 @@ public partial class SceneLoaderArcgis
                 {
                     string content = File.ReadAllText(outputPath);
 
-                    if (IsValidJson(content))
+                    if (CanUseJsonForCurrentHome(
+                            content,
+                            requireBuildingData: spawnOsmBuildings
+                        ))
                     {
                         validatedJsonContent = content;
                         jsonReady = true;
                         TrySetFallbackOriginFromJson(content);
                         Debug.Log("✅ JSON READY (validated)");
+                    }
+                    else if (spawnOsmBuildings &&
+                             pythonProcessCompleted &&
+                             pythonProcessExitCode == 0 &&
+                             CanUseJsonForCurrentHome(
+                                 content,
+                                 requireBuildingData: false
+                             ))
+                    {
+                        if (backendAttempt < maximumBackendAttempts)
+                        {
+                            backendAttempt++;
+                            Debug.LogWarning(
+                                "⚠️ The first OSM request returned no buildings. " +
+                                $"Retrying the cold-start request ({backendAttempt}/" +
+                                $"{maximumBackendAttempts}) before using the local village."
+                            );
+                            RunPython();
+                            backendAttemptStartedAt = Time.realtimeSinceStartup;
+                        }
+                        else
+                        {
+                            // Both network attempts completed normally but the
+                            // location still has no building data. Keep its
+                            // roads/terrain and let SpawnVillageBuildings build
+                            // the guaranteed local delivery village.
+                            validatedJsonContent = content;
+                            jsonReady = true;
+                            TrySetFallbackOriginFromJson(content);
+                            Debug.LogWarning(
+                                "⚠️ OSM returned no buildings after two attempts; " +
+                                "using the built-in delivery village."
+                            );
+                        }
                     }
                 }
                 catch (System.Exception e)
@@ -660,7 +796,8 @@ public partial class SceneLoaderArcgis
                 }
             }
 
-            if (pythonProcessCompleted &&
+            if (!usingEmergencyLocalLevel &&
+                pythonProcessCompleted &&
                 pythonProcessExitCode != 0)
             {
                 if (pythonProcessExitCode == 143)
@@ -686,18 +823,41 @@ public partial class SceneLoaderArcgis
                         pythonProcessExitCode + ". " + pythonDiagnostic
                     );
 
-                    if (loadingScreen != null)
+                    if (ActivateEmergencyLocalLevel(pythonDiagnostic))
                     {
-                        loadingScreen.ShowActionableError(
-                            "The building generator could not start. Extract the complete " +
-                            "game folder, install the Microsoft Visual C++ 2015-2022 x64 " +
-                            "runtime, then start with Start SantaTrail.bat. Diagnostic log: " +
-                            Application.consoleLogPath + ". Error: " + pythonDiagnostic
-                        );
+                        jsonReady = true;
+                        usingEmergencyLocalLevel = true;
+                        pythonProcessExitCode = 0;
+                        pythonExitWarningLogged = true;
                     }
+                    else
+                    {
+                        if (loadingScreen != null)
+                        {
+                            loadingScreen.ShowActionableError(
+                                "The building generator could not start. Diagnostic log: " +
+                                Application.consoleLogPath + ". Error: " + pythonDiagnostic
+                            );
+                        }
 
-                    yield break;
+                        yield break;
+                    }
                 }
+            }
+
+            // Security software can leave a child process alive without
+            // allowing it to read the packaged scripts or reach the network.
+            // Use an in-process level after a bounded wait so the player never
+            // remains on an empty loading screen.
+            if (!jsonReady &&
+                Time.realtimeSinceStartup - backendAttemptStartedAt >= 50f &&
+                ActivateEmergencyLocalLevel("backend startup timed out"))
+            {
+                StopPythonForLocalFallback();
+                jsonReady = true;
+                usingEmergencyLocalLevel = true;
+                pythonProcessExitCode = 0;
+                pythonProcessCompleted = true;
             }
 
             if (!arcgisReady &&
@@ -708,9 +868,16 @@ public partial class SceneLoaderArcgis
                 Debug.Log("✅ ArcGIS READY");
             }
 
+            bool arcGISProjectionReady =
+                arcGISConverter != null &&
+                arcGISConverter.CanProjectCoordinates();
+            bool fallbackProjectionReady =
+                !arcGISProjectionReady &&
+                CanUseFallbackProjection() &&
+                timer >= Mathf.Max(5f, arcGISStartupGraceSeconds);
             bool projectionReady =
-                arcgisReady ||
-                CanUseFallbackProjection();
+                arcGISProjectionReady ||
+                fallbackProjectionReady;
 
             if (loadingScreen != null)
             {
@@ -751,6 +918,14 @@ public partial class SceneLoaderArcgis
 
             if (jsonReady && projectionReady)
             {
+                if (arcGISProjectionReady && !arcgisReady)
+                {
+                    Debug.Log(
+                        "🗺 ArcGIS projection ready; generating level objects " +
+                        "while the final visible map tiles finish drawing."
+                    );
+                }
+
                 Debug.Log("🚀 ALL READY → Stabilizing...");
 
                 if (loadingScreen != null)
@@ -775,7 +950,29 @@ public partial class SceneLoaderArcgis
                 // running the synchronous generation work.
                 yield return null;
 
-                bool generationSucceeded = LoadAndGenerateSafe();
+                bool generationSucceeded = false;
+                const int maximumGenerationAttempts = 2;
+                for (int attempt = 1;
+                     attempt <= maximumGenerationAttempts;
+                     attempt++)
+                {
+                    generationSucceeded = LoadAndGenerateSafe();
+                    if (generationSucceeded)
+                    {
+                        break;
+                    }
+
+                    if (attempt < maximumGenerationAttempts)
+                    {
+                        Debug.LogWarning(
+                            "⚠️ Level object generation hit a transient map " +
+                            "startup error. Waiting for a fresh ArcGIS frame and retrying."
+                        );
+                        arcGISConverter?.RequireFreshDrawCompletion();
+                        yield return new WaitForSecondsRealtime(1f);
+                        yield return new WaitForEndOfFrame();
+                    }
+                }
 
                 if (!generationSucceeded)
                 {
@@ -803,10 +1000,25 @@ public partial class SceneLoaderArcgis
                     );
                 }
 
+                if (waitForArcGISBeforeHidingLoadingScreen &&
+                    arcGISConverter != null &&
+                    !localTerrainFallbackActive)
+                {
+                    // Generation just placed the drone and finalized the
+                    // streaming camera's view. Do not reuse the earlier draw
+                    // completion that occurred before those changes.
+                    arcGISConverter.RequireFreshDrawCompletion();
+
+                    // Let LateUpdate push the final visible-camera position to
+                    // ArcGIS before beginning the stable-draw wait below.
+                    yield return null;
+                }
+
                 float readyTimer = 0f;
                 bool mapReady =
                     !waitForArcGISBeforeHidingLoadingScreen ||
-                    (arcGISConverter != null && arcGISConverter.IsReady());
+                    (arcGISConverter != null && arcGISConverter.IsReady()) ||
+                    localTerrainFallbackActive;
                 bool deliveryReady =
                     !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
                     deliveryManager == null ||
@@ -837,7 +1049,8 @@ public partial class SceneLoaderArcgis
 
                     mapReady =
                         !waitForArcGISBeforeHidingLoadingScreen ||
-                        (arcGISConverter != null && arcGISConverter.IsReady());
+                        (arcGISConverter != null && arcGISConverter.IsReady()) ||
+                        localTerrainFallbackActive;
                     deliveryReady =
                         !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
                         deliveryManager == null ||
@@ -880,9 +1093,8 @@ public partial class SceneLoaderArcgis
                     {
                         loadingScreen.ShowActionableError(
                             "ArcGIS map did not finish loading. " +
-                            "On Windows, start the game with Start SantaTrail.bat, " +
-                            "install the Microsoft Visual C++ 2015-2022 x64 runtime, " +
-                            "and check your internet connection. Diagnostic log: " +
+                            "Check your internet connection and restart the level. " +
+                            "Diagnostic log: " +
                             Application.consoleLogPath
                         );
                     }
@@ -1021,6 +1233,75 @@ public partial class SceneLoaderArcgis
         return allowLocalGpsFallback && fallbackOriginSet;
     }
 
+    bool ActivateEmergencyLocalLevel(string reason)
+    {
+        InitializeFallbackOriginFromHome();
+        if (!CanUseFallbackProjection())
+        {
+            return false;
+        }
+
+        const int gridSize = 25;
+        Result fallbackResult = new Result
+        {
+            scene = "plain",
+            features = new Features
+            {
+                elevation_range = 4f,
+                building_density = 0f,
+                water_present = false,
+                vegetation_density = 12f
+            },
+            waypoints = new[]
+            {
+                new GPSWaypoint
+                {
+                    lat = (float)GameManager.homeLat,
+                    lon = (float)GameManager.homeLon,
+                    alt = (float)GameManager.homeAlt
+                }
+            },
+            rivers = new GPSWaypoint[0][],
+            elevation_data = new float[gridSize * gridSize],
+            grid_size = gridSize,
+            buildings = new Building[0],
+            roads = new Road[0]
+        };
+
+        validatedJsonContent = JsonUtility.ToJson(fallbackResult);
+        Debug.LogWarning(
+            "⚠️ Using the built-in local terrain and village because " + reason + "."
+        );
+
+        if (loadingScreen != null)
+        {
+            loadingScreen.SetProgress(
+                0.38f,
+                "Using the built-in delivery village on this device..."
+            );
+        }
+
+        return IsValidJson(validatedJsonContent);
+    }
+
+    void StopPythonForLocalFallback()
+    {
+        try
+        {
+            if (pythonProcess != null && !pythonProcess.HasExited)
+            {
+                pythonProcess.Kill();
+            }
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogWarning(
+                "⚠️ Could not stop the timed-out terrain backend: " +
+                exception.Message
+            );
+        }
+    }
+
     void InitializeFallbackOriginFromHome()
     {
         if (!allowLocalGpsFallback || fallbackOriginSet)
@@ -1048,21 +1329,91 @@ public partial class SceneLoaderArcgis
         fallbackOriginSet = true;
     }
 
-    bool CanUseCachedOutputForCurrentHome(string path)
+    bool TryReadCachedOutputForCurrentHome(
+        string path,
+        out string json)
     {
+        json = null;
+
         try
         {
-            string json = File.ReadAllText(path);
-            if (!IsValidJson(json))
+            string candidate = File.ReadAllText(path);
+            if (!CanUseJsonForCurrentHome(
+                    candidate,
+                    requireBuildingData: spawnOsmBuildings
+                ))
             {
                 return false;
             }
 
+            json = candidate;
+            return true;
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogWarning("⚠️ Cached map data could not be read: " + exception.Message);
+            return false;
+        }
+    }
+
+    string BuildLocationCacheFileName()
+    {
+        double latitude = GameManager.hasHomeLocation
+            ? GameManager.homeLat
+            : mapOriginLatitude;
+        double longitude = GameManager.hasHomeLocation
+            ? GameManager.homeLon
+            : mapOriginLongitude;
+
+        // Four decimal places are roughly an 11m latitude cell. This absorbs
+        // harmless GPS jitter while keeping neighboring level areas separate.
+        long latitudeKey = (long)System.Math.Round(
+            latitude * 10000.0,
+            System.MidpointRounding.AwayFromZero
+        );
+        long longitudeKey = (long)System.Math.Round(
+            longitude * 10000.0,
+            System.MidpointRounding.AwayFromZero
+        );
+        long radiusKey = (long)System.Math.Round(
+            System.Math.Max(1.0, osmQueryRadiusMeters),
+            System.MidpointRounding.AwayFromZero
+        );
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "output_v2_{0}_{1}_{2}.json",
+            latitudeKey,
+            longitudeKey,
+            radiusKey
+        );
+    }
+
+    bool CanUseJsonForCurrentHome(
+        string json,
+        bool requireBuildingData)
+    {
+        if (!IsValidJson(json) || !GameManager.hasHomeLocation)
+        {
+            return false;
+        }
+
+        try
+        {
             Result cached = JsonUtility.FromJson<Result>(json);
             if (cached == null ||
                 cached.waypoints == null ||
                 cached.waypoints.Length == 0)
             {
+                return false;
+            }
+
+            if (requireBuildingData &&
+                (cached.buildings == null || cached.buildings.Length == 0))
+            {
+                // Do not make a transient empty OSM response sticky. With no
+                // usable cache, this run will refresh and can still generate
+                // the built-in fallback village if the network remains down.
                 return false;
             }
 
@@ -1078,11 +1429,16 @@ public partial class SceneLoaderArcgis
                 longitudeMeters * longitudeMeters
             );
 
-            return distanceMeters <= System.Math.Max(250.0, osmQueryRadiusMeters);
+            double locationToleranceMeters = System.Math.Min(
+                25.0,
+                System.Math.Max(5.0, osmQueryRadiusMeters * 0.05)
+            );
+
+            return distanceMeters <= locationToleranceMeters;
         }
         catch (System.Exception exception)
         {
-            Debug.LogWarning("⚠️ Cached map data could not be read: " + exception.Message);
+            Debug.LogWarning("⚠️ Map data location could not be validated: " + exception.Message);
             return false;
         }
     }
@@ -1128,8 +1484,24 @@ public partial class SceneLoaderArcgis
         bool isManualBuildingLevel =
             lockSceneMapOriginForManualBuildings;
 
-        if (!useArcGISTerrainOnly)
+        bool hasArcGISProjection =
+            arcGISConverter != null &&
+            arcGISConverter.CanProjectCoordinates();
+        bool useLocalTerrainFallback =
+            useArcGISTerrainOnly &&
+            !hasArcGISProjection &&
+            CanUseFallbackProjection();
+        localTerrainFallbackActive = useLocalTerrainFallback;
+
+        if (!useArcGISTerrainOnly || useLocalTerrainFallback)
         {
+            if (useLocalTerrainFallback)
+            {
+                Debug.LogWarning(
+                    "⚠️ ArcGIS is unavailable; generating the local terrain fallback."
+                );
+            }
+
             GenerateTerrain(result);
 
             if (terrain == null)
@@ -1162,7 +1534,10 @@ public partial class SceneLoaderArcgis
             }
         }
 
-        GenerateSceneSafe(result);
+        if (!GenerateSceneSafe(result))
+        {
+            return false;
+        }
 
         if (isManualBuildingLevel &&
             skipGeneratedGpsObjectsInManualLevel)

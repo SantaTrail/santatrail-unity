@@ -14,6 +14,12 @@ public class MissionProgressUI : MonoBehaviour
     [FormerlySerializedAs("filledPresent")]
     public Sprite closedPresentSprite;
 
+    [Tooltip("Tint for a present that has not been delivered yet.")]
+    public Color pendingPresentColor = new Color(0.38f, 0.38f, 0.38f, 0.72f);
+
+    [Tooltip("Tint restored after the present is delivered.")]
+    public Color deliveredPresentColor = Color.white;
+
     [Tooltip("Status Image children on Gift1, Gift2, Gift3, and Gift4 in this order. They are created automatically.")]
     public Image[] presentIcons;
 
@@ -34,10 +40,19 @@ public class MissionProgressUI : MonoBehaviour
 
     private int totalDeliveries;
     private int currentDelivery;
+    private Material pendingPresentMaterial;
 
     private void Awake()
     {
         ResolveGiftBoxIcons();
+    }
+
+    private void OnDestroy()
+    {
+        if (pendingPresentMaterial != null)
+        {
+            Destroy(pendingPresentMaterial);
+        }
     }
 
     private void ResolveGiftBoxIcons()
@@ -167,13 +182,11 @@ public class MissionProgressUI : MonoBehaviour
                 continue;
             }
 
-            bool isClosed = i < activeDeliveryCount;
+            bool isDelivered = i < activeDeliveryCount;
             RectTransform iconRect = icon.rectTransform;
             if (iconRect != null)
             {
-                Vector2 iconSize = isClosed
-                    ? closedPresentIconSize
-                    : openPresentIconSize;
+                Vector2 iconSize = closedPresentIconSize;
 
                 if (iconSize.x <= 0f || iconSize.y <= 0f)
                 {
@@ -197,7 +210,7 @@ public class MissionProgressUI : MonoBehaviour
                 iconRect.anchoredPosition = presentIconPositions[i];
             }
 
-            Sprite nextSprite = isClosed
+            Sprite nextSprite = closedPresentSprite != null
                 ? closedPresentSprite
                 : openPresentSprite;
 
@@ -207,10 +220,35 @@ public class MissionProgressUI : MonoBehaviour
                 icon.enabled = true;
             }
 
+            icon.color = isDelivered
+                ? deliveredPresentColor
+                : pendingPresentColor;
+            icon.material = isDelivered ? null : GetPendingPresentMaterial();
             icon.preserveAspect = true;
             icon.raycastTarget = false;
             icon.transform.SetAsLastSibling();
         }
+    }
+
+    private Material GetPendingPresentMaterial()
+    {
+        if (pendingPresentMaterial != null)
+        {
+            return pendingPresentMaterial;
+        }
+
+        Shader grayscaleShader = Resources.Load<Shader>("SantaTrailUIGrayscale");
+        if (grayscaleShader == null)
+        {
+            return null;
+        }
+
+        pendingPresentMaterial = new Material(grayscaleShader)
+        {
+            name = "SantaTrail Pending Present (Runtime)"
+        };
+
+        return pendingPresentMaterial;
     }
 
 }
