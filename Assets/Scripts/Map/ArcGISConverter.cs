@@ -15,6 +15,18 @@ public class ArcGISConverter : MonoBehaviour
         "sample must also be Completed."
     )]
     [SerializeField] float requiredStableDrawSeconds = 2f;
+    [Tooltip(
+        "Allow the level to open when the map and basemap are loaded and " +
+        "coordinate projection has remained usable, even if ArcGIS keeps " +
+        "DrawStatus.InProgress because its streaming camera is moving."
+    )]
+    [SerializeField] bool allowLoadedMapFallback = false;
+    [Min(1f)]
+    [Tooltip(
+        "Continuous usable-map time required after the final camera placement " +
+        "before accepting a persistent DrawStatus.InProgress."
+    )]
+    [SerializeField] float loadedMapFallbackSeconds = 15f;
 
     private ArcGISMapComponent arcGISMap;
     private string lastProbeError = "";
@@ -23,6 +35,10 @@ public class ArcGISConverter : MonoBehaviour
     private bool hasLoggedReady = false;
     private float nextMapRetryAt = 0f;
     private float drawCompletedSinceRealtime = -1f;
+    private float projectableSinceRealtime = -1f;
+    private bool acceptedLoadedMapFallback = false;
+    private bool hasLoggedLoadedMapFallback = false;
+    private ArcGISDroneMapDriver heldMapDriver;
 
     void Awake()
     {
@@ -46,12 +62,11 @@ public class ArcGISConverter : MonoBehaviour
     {
         Debug.Log("⏳ Waiting for ArcGIS to fully initialize...");
         float timer = 0f;
-        const float timeout = 90f;
         float nextStateLogAt = 2f;
 
         EnsureMapIsLoading(0f);
 
-        while (timer < timeout)
+        while (true)
         {
             timer += 0.5f;
 
@@ -61,11 +76,15 @@ public class ArcGISConverter : MonoBehaviour
                 yield break;
             }
 
-            if (HasStableVisibleMap())
+            if (IsReady())
             {
                 if (!hasLoggedReady)
                 {
-                    Debug.Log("✅ ArcGIS FULLY READY");
+                    Debug.Log(
+                        acceptedLoadedMapFallback
+                            ? "✅ ArcGIS MAP READY FOR PLAY"
+                            : "✅ ArcGIS FULLY READY"
+                    );
                     LogRenderCameraState();
                     hasLoggedReady = true;
                 }
@@ -82,20 +101,12 @@ public class ArcGISConverter : MonoBehaviour
                 string probeErrorPart = string.IsNullOrEmpty(lastProbeError) ? "" : $" | ProbeError={lastProbeError}";
                 Debug.LogWarning($"⚠️ ArcGIS still loading... t={timer:0.0}s | View={viewState} | SpatialReference={srState} | {DescribeMapLoadState()} | ProbeConvert={(probe ? "OK" : "FAIL")}{probeErrorPart}");
                 LogArcGISCameraState($"t={timer:0.0}s");
-                nextStateLogAt += 5f;
+                nextStateLogAt += timer < 90f ? 5f : 15f;
             }
 
             // Map streaming must continue while menus or tutorial UI affect time scale.
             yield return new WaitForSecondsRealtime(0.5f);
         }
-Debug.Log($"MapComponent = {arcGISMap != null}");
-Debug.Log($"View = {arcGISMap?.View != null}");
-
-if (arcGISMap?.View != null)
-{
-    Debug.Log($"SpatialRef = {arcGISMap.View.SpatialReference}");
-}
-        Debug.LogError($"❌ ArcGIS readiness timeout (90s). {GetDiagnosticSummary()}");
     }
 
     void Update()
@@ -107,6 +118,8 @@ if (arcGISMap?.View != null)
         if (!IsMapContentLoaded())
         {
             drawCompletedSinceRealtime = -1f;
+            projectableSinceRealtime = -1f;
+            acceptedLoadedMapFallback = false;
         }
     }
 
@@ -215,6 +228,7 @@ if (arcGISMap?.View != null)
             $"OS={SystemInfo.operatingSystem} | " +
             $"ProbeError={probeError} | " +
             $"StableDraw={(drawCompletedSinceRealtime >= 0f ? (Time.realtimeSinceStartup - drawCompletedSinceRealtime).ToString("0.0") + "s" : "waiting")} | " +
+            $"UsableMap={(projectableSinceRealtime >= 0f ? (Time.realtimeSinceStartup - projectableSinceRealtime).ToString("0.0") + "s" : "waiting")} | " +
             $"Log={Application.consoleLogPath}";
     }
 
@@ -222,8 +236,13 @@ if (arcGISMap?.View != null)
     {
         // Evaluate the live view every time because the level loader can reach
         // this final phase before the startup coroutine observes completion.
-        bool visibleMapReady = HasStableVisibleMap();
-        return visibleMapReady;
+        if (HasStableVisibleMap())
+        {
+            acceptedLoadedMapFallback = false;
+            return true;
+        }
+
+        return HasSustainedUsableMap();
     }
 
     public bool CanProjectCoordinates()
@@ -231,7 +250,8 @@ if (arcGISMap?.View != null)
         // Coordinate conversion becomes usable before the renderer finishes
         // streaming every visible tile. Level generation may safely start at
         // this point, while IsReady() continues to guard removal of the
-        // loading screen until the ArcGIS view has actually completed a draw.
+        // loading screen until drawing completes or the loaded view has stayed
+        // continuously usable for the configured fallback window.
         return arcGISMap != null &&
                arcGISMap.View != null &&
                IsMapContentLoaded() &&
@@ -244,6 +264,64 @@ if (arcGISMap?.View != null)
         // final view. Require ArcGIS to complete that view instead of reusing
         // the earlier startup-ready result.
         drawCompletedSinceRealtime = -1f;
+        projectableSinceRealtime = -1f;
+        acceptedLoadedMapFallback = false;
+        hasLoggedLoadedMapFallback = false;
+
+        heldMapDriver = FindFirstObjectByType<ArcGISDroneMapDriver>(
+            FindObjectsInactive.Include
+        );
+        heldMapDriver?.HoldCurrentViewForReadiness();
+    }
+
+    public void ReleaseReadinessViewHold()
+    {
+        if (heldMapDriver == null)
+        {
+            heldMapDriver = FindFirstObjectByType<ArcGISDroneMapDriver>(
+                FindObjectsInactive.Include
+            );
+        }
+
+        heldMapDriver?.ReleaseReadinessHold();
+        heldMapDriver = null;
+    }
+
+    bool HasSustainedUsableMap()
+    {
+        if (!allowLoadedMapFallback || !CanProjectCoordinates())
+        {
+            projectableSinceRealtime = -1f;
+            acceptedLoadedMapFallback = false;
+            return false;
+        }
+
+        float now = Time.realtimeSinceStartup;
+        if (projectableSinceRealtime < 0f)
+        {
+            projectableSinceRealtime = now;
+            return false;
+        }
+
+        if (now - projectableSinceRealtime <
+            Mathf.Max(1f, loadedMapFallbackSeconds))
+        {
+            return false;
+        }
+
+        acceptedLoadedMapFallback = true;
+        if (!hasLoggedLoadedMapFallback)
+        {
+            Debug.LogWarning(
+                "⚠️ ArcGIS DrawStatus is still InProgress, but the map, " +
+                "basemap and coordinate projection have remained usable for " +
+                $"{loadedMapFallbackSeconds:0.#}s. Opening the level while " +
+                "background tile refinement continues."
+            );
+            hasLoggedLoadedMapFallback = true;
+        }
+
+        return true;
     }
 
     bool HasStableVisibleMap()
@@ -254,11 +332,12 @@ if (arcGISMap?.View != null)
             return false;
         }
 
-        // Completed is sampled again at the moment readiness is returned, but
-        // intervening InProgress frames do not restart the whole settling
-        // period. Those frames are normal while a moving camera streams tiles.
+        // The final streaming camera is held still while the loading screen is
+        // up, so require a genuinely continuous Completed interval. Any new
+        // InProgress sample means ArcGIS resumed work and restarts the timer.
         if (!IsMapDrawComplete())
         {
+            drawCompletedSinceRealtime = -1f;
             return false;
         }
 

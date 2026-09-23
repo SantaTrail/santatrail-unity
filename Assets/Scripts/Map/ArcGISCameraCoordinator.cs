@@ -69,37 +69,28 @@ public class ArcGISCameraCoordinator : MonoBehaviour
                 ? minimapCamera.GetComponent<ArcGISCameraComponent>()
                 : null;
 
-        bool canUseDroneCameraDirectly =
-            droneCamera != null &&
-            droneArcGis != null &&
-            arcGisMap != null &&
-            droneCamera.GetComponentInParent<ArcGISMapComponent>() == arcGisMap;
-
         // Disable scene alternatives before creating/enabling a driver. The
         // ArcGIS SDK warns and may select the wrong streaming view if two
         // ArcGISCameraComponents are briefly enabled during a scene restart.
         SetArcGisCameraEnabled(minimapArcGis, false, "Minimap Camera");
+        SetArcGisCameraEnabled(
+            droneArcGis,
+            false,
+            "DroneCamera (streamed through controlled map driver)"
+        );
 
         ArcGISCameraComponent streamingArcGisCamera;
         string streamingCameraLabel;
 
-        if (canUseDroneCameraDirectly)
-        {
-            DisableAndRemoveMapDriver();
-            SetArcGisCameraEnabled(droneArcGis, true, "DroneCamera");
-            streamingArcGisCamera = droneArcGis;
-            streamingCameraLabel = "DroneCamera";
-        }
-        else
-        {
-            SetArcGisCameraEnabled(
-                droneArcGis,
-                false,
-                "DroneCamera (not under ArcGISMap)"
-            );
+        // Always stream through the driver, even when the visible drone camera
+        // is already under ArcGISMap. This lets the driver ignore sub-metre
+        // telemetry jitter, request a lighter tile quality during play, and
+        // freeze the final loading viewpoint until DrawStatus is Completed.
+        ArcGISCameraComponent mapDriverArcGis =
+            EnsureMapDriver(arcGisMap, droneCamera);
 
-            ArcGISCameraComponent mapDriverArcGis =
-                EnsureMapDriver(arcGisMap, droneCamera);
+        if (mapDriverArcGis != null)
+        {
             SetArcGisCameraEnabled(
                 mapDriverArcGis,
                 true,
@@ -107,6 +98,18 @@ public class ArcGISCameraCoordinator : MonoBehaviour
             );
             streamingArcGisCamera = mapDriverArcGis;
             streamingCameraLabel = "ArcGIS Drone Map Driver";
+        }
+        else
+        {
+            // Preserve a usable map if the driver cannot be created because a
+            // required scene reference is missing.
+            SetArcGisCameraEnabled(
+                droneArcGis,
+                true,
+                "DroneCamera fallback"
+            );
+            streamingArcGisCamera = droneArcGis;
+            streamingCameraLabel = "DroneCamera fallback";
         }
 
         if (minimapCamera != null)

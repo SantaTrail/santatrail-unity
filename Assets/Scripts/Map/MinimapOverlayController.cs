@@ -33,6 +33,19 @@ public class MinimapOverlayController : MonoBehaviour
     [SerializeField] private bool clampMarkersToEdge = true;
     [SerializeField] private float edgePadding = 10f;
 
+    [Header("Current Target Guidance")]
+    [Tooltip("Draw a high-contrast ray from the drone to the closest remaining delivery house.")]
+    [SerializeField] private bool showTargetGuidanceRay = true;
+    [Tooltip("Draw a thin, hollow ring around the closest remaining delivery area.")]
+    [SerializeField] private bool showTargetGuidanceRing = true;
+    [SerializeField] private Color targetGuidanceColor = new Color(1f, 0.78f, 0.08f, 1f);
+    [SerializeField] private Color targetGuidanceOutlineColor = new Color(0.05f, 0.04f, 0.02f, 0.9f);
+    [Min(1f)] [SerializeField] private float targetGuidanceRayWidth = 3f;
+    [Min(8f)] [SerializeField] private float minimumTargetRingSize = 34f;
+    [Min(8f)] [SerializeField] private float maximumTargetRingSize = 72f;
+    [Range(0f, 0.25f)] [SerializeField] private float targetRingPulseAmount = 0.08f;
+    [Min(0f)] [SerializeField] private float targetRingPulseSpeed = 2.5f;
+
     [Header("Refresh")]
     [Min(0.1f)]
     [SerializeField] private float missionRefreshInterval = 1f;
@@ -40,6 +53,10 @@ public class MinimapOverlayController : MonoBehaviour
     private RectTransform rectTransform;
     private RectTransform markerLayer;
     private RectTransform playerMarker;
+    private RectTransform guidanceRayOutline;
+    private RectTransform guidanceRay;
+    private RectTransform guidanceRingOutline;
+    private RectTransform guidanceRing;
     private readonly Dictionary<Transform, RectTransform> missionMarkers =
         new Dictionary<Transform, RectTransform>();
     private readonly Dictionary<Transform, ManualDeliveryTarget> missionTargetSources =
@@ -49,7 +66,11 @@ public class MinimapOverlayController : MonoBehaviour
     private Sprite defaultSprite;
     private Sprite playerTextureSprite;
     private Sprite missionTextureSprite;
+    private Sprite guidanceRingSprite;
+    private Texture2D guidanceRingTexture;
     private float nextMissionRefreshTime;
+    private DeliveryScoreManager deliveryScoreManager;
+    private ManualDeliveryScoreManager manualDeliveryScoreManager;
 
     private void Awake()
     {
@@ -57,7 +78,9 @@ public class MinimapOverlayController : MonoBehaviour
         defaultSprite = CreateFallbackSprite();
         playerTextureSprite = CreateSpriteFromTexture(playerMarkerTexture);
         missionTextureSprite = CreateSpriteFromTexture(missionMarkerTexture);
+        guidanceRingSprite = CreateGuidanceRingSprite();
         EnsureMarkerLayer();
+        EnsureGuidanceVisuals();
     }
 
     private static Sprite CreateFallbackSprite()
@@ -89,6 +112,20 @@ public class MinimapOverlayController : MonoBehaviour
 
         UpdatePlayerMarker();
         UpdateMissionMarkers();
+        UpdateTargetGuidance();
+    }
+
+    private void OnDestroy()
+    {
+        if (guidanceRingSprite != null)
+        {
+            Destroy(guidanceRingSprite);
+        }
+
+        if (guidanceRingTexture != null)
+        {
+            Destroy(guidanceRingTexture);
+        }
     }
 
     private void EnsureMarkerLayer()
@@ -133,6 +170,73 @@ public class MinimapOverlayController : MonoBehaviour
 
         markerObject.AddComponent<MinimapDroneArrow>();
         playerMarker = markerRect;
+    }
+
+    private void EnsureGuidanceVisuals()
+    {
+        if (guidanceRayOutline != null &&
+            guidanceRay != null &&
+            guidanceRingOutline != null &&
+            guidanceRing != null)
+        {
+            return;
+        }
+
+        if (guidanceRayOutline == null)
+        {
+            guidanceRayOutline = CreateGuidanceImage(
+                "TargetGuidanceRayOutline",
+                targetGuidanceOutlineColor,
+                defaultSprite);
+            guidanceRayOutline.SetAsFirstSibling();
+        }
+
+        if (guidanceRay == null)
+        {
+            guidanceRay = CreateGuidanceImage(
+                "TargetGuidanceRay",
+                targetGuidanceColor,
+                defaultSprite);
+            guidanceRay.SetSiblingIndex(1);
+        }
+
+        if (guidanceRingOutline == null)
+        {
+            guidanceRingOutline = CreateGuidanceImage(
+                "TargetGuidanceRingOutline",
+                targetGuidanceOutlineColor,
+                guidanceRingSprite);
+        }
+
+        if (guidanceRing == null)
+        {
+            guidanceRing = CreateGuidanceImage(
+                "TargetGuidanceRing",
+                targetGuidanceColor,
+                guidanceRingSprite);
+        }
+
+        SetGuidanceVisualsActive(false);
+    }
+
+    private RectTransform CreateGuidanceImage(string objectName, Color color, Sprite sprite)
+    {
+        GameObject imageObject = CreateMarkerObject(
+            objectName,
+            color,
+            Vector2.zero,
+            sprite);
+        imageObject.transform.SetParent(markerLayer, false);
+
+        Image image = imageObject.GetComponent<Image>();
+        image.preserveAspect = sprite == guidanceRingSprite;
+
+        RectTransform imageRect = imageObject.GetComponent<RectTransform>();
+        imageRect.anchorMin = new Vector2(0.5f, 0.5f);
+        imageRect.anchorMax = new Vector2(0.5f, 0.5f);
+        imageRect.pivot = new Vector2(0.5f, 0.5f);
+        imageRect.anchoredPosition = Vector2.zero;
+        return imageRect;
     }
 
     private void RefreshMissionTargets(bool force)
@@ -408,6 +512,182 @@ public class MinimapOverlayController : MonoBehaviour
         }
     }
 
+    private void UpdateTargetGuidance()
+    {
+        EnsureGuidanceVisuals();
+
+        if ((!showTargetGuidanceRay && !showTargetGuidanceRing) ||
+            minimapCamera == null ||
+            !TryGetCurrentGuidanceTarget(out Vector3 targetWorldPosition, out float targetRadius))
+        {
+            SetGuidanceVisualsActive(false);
+            return;
+        }
+
+        Vector3 viewport = minimapCamera.WorldToViewportPoint(targetWorldPosition);
+        if (viewport.z < 0f)
+        {
+            SetGuidanceVisualsActive(false);
+            return;
+        }
+
+        Rect rect = rectTransform.rect;
+        Vector2 halfSize = rect.size * 0.5f;
+        float ringSize = CalculateTargetRingSize(targetRadius, rect.height);
+        float pulse = 1f + Mathf.Sin(Time.unscaledTime * targetRingPulseSpeed) * targetRingPulseAmount;
+        float pulsedRingSize = ringSize * pulse;
+
+        Vector2 targetPosition = new Vector2(
+            (viewport.x - 0.5f) * rect.width,
+            (viewport.y - 0.5f) * rect.height);
+
+        if (clampMarkersToEdge)
+        {
+            float padding = Mathf.Max(edgePadding, pulsedRingSize * 0.5f + 2f);
+            float horizontalLimit = Mathf.Max(0f, halfSize.x - padding);
+            float verticalLimit = Mathf.Max(0f, halfSize.y - padding);
+            targetPosition.x = Mathf.Clamp(targetPosition.x, -horizontalLimit, horizontalLimit);
+            targetPosition.y = Mathf.Clamp(targetPosition.y, -verticalLimit, verticalLimit);
+        }
+
+        guidanceRingOutline.gameObject.SetActive(showTargetGuidanceRing);
+        guidanceRing.gameObject.SetActive(showTargetGuidanceRing);
+        if (showTargetGuidanceRing)
+        {
+            guidanceRingOutline.anchoredPosition = targetPosition;
+            guidanceRing.anchoredPosition = targetPosition;
+            guidanceRingOutline.sizeDelta = Vector2.one * (pulsedRingSize + 3f);
+            guidanceRing.sizeDelta = Vector2.one * pulsedRingSize;
+        }
+
+        guidanceRayOutline.gameObject.SetActive(showTargetGuidanceRay);
+        guidanceRay.gameObject.SetActive(showTargetGuidanceRay);
+        if (showTargetGuidanceRay)
+        {
+            Vector2 start = playerMarker != null
+                ? playerMarker.anchoredPosition
+                : Vector2.zero;
+            Vector2 direction = targetPosition - start;
+            float distance = direction.magnitude;
+
+            if (distance > 0.001f)
+            {
+                direction /= distance;
+                float startInset = playerMarker != null
+                    ? Mathf.Max(playerMarker.rect.width, playerMarker.rect.height) * 0.35f
+                    : 0f;
+                float endInset = showTargetGuidanceRing ? pulsedRingSize * 0.42f : 0f;
+                float totalInset = Mathf.Min(distance * 0.8f, startInset + endInset);
+                float insetScale = startInset + endInset > 0f
+                    ? totalInset / (startInset + endInset)
+                    : 0f;
+
+                Vector2 rayStart = start + direction * startInset * insetScale;
+                Vector2 rayEnd = targetPosition - direction * endInset * insetScale;
+                SetUiLine(
+                    guidanceRayOutline,
+                    rayStart,
+                    rayEnd,
+                    targetGuidanceRayWidth + 4f);
+                SetUiLine(
+                    guidanceRay,
+                    rayStart,
+                    rayEnd,
+                    targetGuidanceRayWidth);
+            }
+            else
+            {
+                guidanceRayOutline.gameObject.SetActive(false);
+                guidanceRay.gameObject.SetActive(false);
+            }
+        }
+    }
+
+    private bool TryGetCurrentGuidanceTarget(
+        out Vector3 worldPosition,
+        out float targetRadius)
+    {
+        worldPosition = Vector3.zero;
+        targetRadius = 0f;
+
+        if (deliveryScoreManager == null)
+        {
+            deliveryScoreManager = Object.FindFirstObjectByType<DeliveryScoreManager>();
+        }
+
+        if (deliveryScoreManager != null &&
+            deliveryScoreManager.isActiveAndEnabled &&
+            deliveryScoreManager.TryGetGuidanceTarget(out worldPosition, out targetRadius))
+        {
+            return true;
+        }
+
+        if (manualDeliveryScoreManager == null)
+        {
+            manualDeliveryScoreManager = Object.FindFirstObjectByType<ManualDeliveryScoreManager>();
+        }
+
+        return manualDeliveryScoreManager != null &&
+               manualDeliveryScoreManager.isActiveAndEnabled &&
+               manualDeliveryScoreManager.TryGetGuidanceTarget(
+                   out worldPosition,
+                   out targetRadius);
+    }
+
+    private float CalculateTargetRingSize(float targetRadius, float minimapHeight)
+    {
+        float ringSize = minimumTargetRingSize;
+
+        if (minimapCamera != null && minimapCamera.orthographic && minimapCamera.orthographicSize > 0f)
+        {
+            float pixelsPerWorldUnit = minimapHeight / (minimapCamera.orthographicSize * 2f);
+            ringSize = targetRadius * 2f * pixelsPerWorldUnit;
+        }
+
+        float minimum = Mathf.Max(8f, minimumTargetRingSize);
+        float maximum = Mathf.Max(minimum, maximumTargetRingSize);
+        return Mathf.Clamp(ringSize, minimum, maximum);
+    }
+
+    private static void SetUiLine(
+        RectTransform line,
+        Vector2 start,
+        Vector2 end,
+        float width)
+    {
+        Vector2 delta = end - start;
+        float length = delta.magnitude;
+        line.anchoredPosition = (start + end) * 0.5f;
+        line.sizeDelta = new Vector2(length, Mathf.Max(1f, width));
+        line.localRotation = Quaternion.Euler(
+            0f,
+            0f,
+            Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg);
+    }
+
+    private void SetGuidanceVisualsActive(bool active)
+    {
+        if (guidanceRayOutline != null)
+        {
+            guidanceRayOutline.gameObject.SetActive(active && showTargetGuidanceRay);
+        }
+
+        if (guidanceRay != null)
+        {
+            guidanceRay.gameObject.SetActive(active && showTargetGuidanceRay);
+        }
+
+        if (guidanceRingOutline != null)
+        {
+            guidanceRingOutline.gameObject.SetActive(active && showTargetGuidanceRing);
+        }
+
+        if (guidanceRing != null)
+        {
+            guidanceRing.gameObject.SetActive(active && showTargetGuidanceRing);
+        }
+    }
+
     private bool TryResolveCamera()
     {
         if (minimapCamera != null)
@@ -540,5 +820,52 @@ public class MinimapOverlayController : MonoBehaviour
             new Vector2(0.5f, 0.5f),
             100f
         );
+    }
+
+    private Sprite CreateGuidanceRingSprite()
+    {
+        const int textureSize = 64;
+        const float outerRadius = 30f;
+        // Keep the center completely transparent so streets, roofs and the
+        // target marker remain readable beneath the radius highlight.
+        const float innerRadius = 27.5f;
+        Vector2 center = Vector2.one * ((textureSize - 1) * 0.5f);
+
+        guidanceRingTexture = new Texture2D(
+            textureSize,
+            textureSize,
+            TextureFormat.RGBA32,
+            false)
+        {
+            name = "RuntimeMinimapTargetRing",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+
+        Color[] pixels = new Color[textureSize * textureSize];
+        for (int y = 0; y < textureSize; y++)
+        {
+            for (int x = 0; x < textureSize; x++)
+            {
+                float distance = Vector2.Distance(new Vector2(x, y), center);
+                float outerAlpha = Mathf.Clamp01(outerRadius + 0.75f - distance);
+                float innerAlpha = Mathf.Clamp01(distance - innerRadius + 0.75f);
+                float alpha = Mathf.Min(outerAlpha, innerAlpha);
+                pixels[y * textureSize + x] = new Color(1f, 1f, 1f, alpha);
+            }
+        }
+
+        guidanceRingTexture.SetPixels(pixels);
+        guidanceRingTexture.Apply(false, true);
+
+        Sprite sprite = Sprite.Create(
+            guidanceRingTexture,
+            new Rect(0f, 0f, textureSize, textureSize),
+            new Vector2(0.5f, 0.5f),
+            100f);
+        sprite.name = "RuntimeMinimapTargetRing";
+        sprite.hideFlags = HideFlags.HideAndDontSave;
+        return sprite;
     }
 }

@@ -13,6 +13,7 @@ using UnityEngine.UI;
 public sealed class PauseMenuController : MonoBehaviour
 {
     public const string DefaultPrefabResource = "SantaTrailPauseMenu";
+    private const string LoadingSceneName = "LoadingScene";
 
     [Header("UI References")]
     [Tooltip("The menu Canvas. Keep the complete menu under this component's root so it persists across scenes.")]
@@ -65,6 +66,7 @@ public sealed class PauseMenuController : MonoBehaviour
     private bool previousAudioPause;
     private bool previousCursorVisible;
     private CursorLockMode previousCursorLock;
+    private PauseMenuAudioSettingsUI audioSettingsUI;
 
     public static bool TryTogglePause()
     {
@@ -116,6 +118,12 @@ public sealed class PauseMenuController : MonoBehaviour
         // The menu owns a Canvas and must persist as one root object.
         if (transform.parent != null) transform.SetParent(null, true);
         DontDestroyOnLoad(gameObject);
+        audioSettingsUI = GetComponent<PauseMenuAudioSettingsUI>();
+        if (audioSettingsUI == null)
+        {
+            audioSettingsUI = gameObject.AddComponent<PauseMenuAudioSettingsUI>();
+        }
+        audioSettingsUI.Initialize(menuPanel, restartButton);
         BindButtons(true);
         menuCanvas.enabled = enabled;
         popup.SetActive(false);
@@ -155,7 +163,10 @@ public sealed class PauseMenuController : MonoBehaviour
             pauseKey != Key.None && Keyboard.current != null &&
             Keyboard.current[pauseKey].wasPressedThisFrame)
         {
-            TogglePause();
+            if (IsPaused && audioSettingsUI != null && audioSettingsUI.IsOpen)
+                audioSettingsUI.ShowMainMenu();
+            else
+                TogglePause();
         }
     }
 
@@ -186,6 +197,7 @@ public sealed class PauseMenuController : MonoBehaviour
             ? externalFlightMessage
             : pausedMessage;
         FindFirstObjectByType<QGroundControlOverlayController>()?.ReturnQGroundControlToBackground();
+        audioSettingsUI?.ShowMainMenu(false);
         popup.SetActive(true);
         SetPauseButtonVisible(false);
         resumeButton.Select();
@@ -207,7 +219,12 @@ public sealed class PauseMenuController : MonoBehaviour
 
     public void Restart()
     {
-        ChangeScene(SceneManager.GetActiveScene().name);
+        string currentSceneName = SceneManager.GetActiveScene().name;
+        bool useCleanLoadingTransition =
+            LevelConfigLoader.TryFindLevel(currentSceneName, out _) &&
+            Application.CanStreamedLevelBeLoaded(LoadingSceneName);
+
+        ChangeScene(currentSceneName, useCleanLoadingTransition);
     }
 
     public void BackToMenu()
@@ -215,7 +232,9 @@ public sealed class PauseMenuController : MonoBehaviour
         ChangeScene(mainMenuSceneName);
     }
 
-    private void ChangeScene(string destination)
+    private void ChangeScene(
+        string destination,
+        bool useLoadingScene = false)
     {
         if (!IsPaused || changingScene) return;
         if (!Application.CanStreamedLevelBeLoaded(destination))
@@ -232,7 +251,18 @@ public sealed class PauseMenuController : MonoBehaviour
         simulatorPaused = false;
         RestoreGame();
         SetPauseButtonVisible(false);
-        SceneManager.LoadSceneAsync(destination, LoadSceneMode.Single);
+
+        string sceneToOpen = destination;
+        if (useLoadingScene)
+        {
+            // LoadingScene provides a clean frame between ArcGIS native map
+            // instances. Recreating LV1 in the same transition can leave the
+            // replacement view permanently waiting for a completed draw.
+            SantaTrailSceneLoadRequest.Request(destination, false);
+            sceneToOpen = LoadingSceneName;
+        }
+
+        SceneManager.LoadSceneAsync(sceneToOpen, LoadSceneMode.Single);
     }
 
     public void ExitGame()
@@ -267,6 +297,7 @@ public sealed class PauseMenuController : MonoBehaviour
         Cursor.lockState = previousCursorLock;
         Cursor.visible = previousCursorVisible;
         if (popup != null) popup.SetActive(false);
+        audioSettingsUI?.ShowMainMenu(false);
         SetPauseButtonVisible(gameplayScene);
         if (EventSystem.current != null)
             EventSystem.current.SetSelectedGameObject(previousSelection);
@@ -277,6 +308,7 @@ public sealed class PauseMenuController : MonoBehaviour
     {
         if (instance != this) return;
         SaveFlight();
+        SantaTrailAudioSettings.Save();
         AutoArduPilotOnPlay.EndFlightSession();
         simulatorPaused = false;
         RestoreGame();

@@ -1323,15 +1323,24 @@ MonoBehaviour:
   maxHoverSpeed: 100
   maxHeightAboveRoof: 3
   showSpawnRadius: 1
+  showOnlyGuidanceTargetRing: 0
   showDebugGizmos: 0
   logCandidateBuildings: 1
   logAcceptedBuildingRoots: 1
   verboseDebugLogs: 0
   deliveryRingVerticalOffset: 0.2
   deliveryRingSegments: 48
-  deliveryRingWidth: 0.18
+  deliveryRingWidth: 0.1
   deliveryRingReadyColor: {r: 0.2, g: 1, b: 0.3, a: 0.9}
   deliveryRingSearchColor: {r: 1, g: 0.9, b: 0.2, a: 0.9}
+  showWorldTargetRay: 1
+  worldTargetRayHeight: 45
+  worldTargetRayWidth: 1.25
+  worldTargetRayBottomOffset: 0.3
+  worldTargetRayColor: {r: 1, g: 0.72, b: 0.08, a: 0.95}
+  worldTargetRayTopAlpha: 0.12
+  worldTargetRayPulseAmount: 0.12
+  worldTargetRayPulseSpeed: 2.5
   chimneyPrefabs: []
   chimneyDropPointName: PresentDropPoint
   randomizeChimneyPosition: 1
@@ -2666,6 +2675,139 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 897343141}
   m_CullTransparentMesh: 1
+--- !u!1 &912345680
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 912345681}
+  - component: {fileID: 912345682}
+  - component: {fileID: 912345683}
+  - component: {fileID: 912345684}
+  - component: {fileID: 912345685}
+  m_Layer: 5
+  m_Name: TutorialButton
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &912345681
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 912345680}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2042237334}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 1, y: 1}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: -48, y: -52}
+  m_SizeDelta: {x: 74, y: 74}
+  m_Pivot: {x: 1, y: 1}
+--- !u!222 &912345682
+CanvasRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 912345680}
+  m_CullTransparentMesh: 1
+--- !u!114 &912345683
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 912345680}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
+  m_Material: {fileID: 0}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_RaycastTarget: 1
+  m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
+  m_Maskable: 1
+  m_OnCullStateChanged:
+    m_PersistentCalls:
+      m_Calls: []
+  m_Sprite: {fileID: 21300000, guid: 06ec7756c2127425b9545735672bc75a, type: 3}
+  m_Type: 0
+  m_PreserveAspect: 0
+  m_FillCenter: 1
+  m_FillMethod: 4
+  m_FillAmount: 1
+  m_FillClockwise: 1
+  m_FillOrigin: 0
+  m_UseSpriteMesh: 0
+  m_PixelsPerUnitMultiplier: 1
+--- !u!114 &912345684
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 912345680}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e29b1a8efbd4b44bb3f3716e73f07ff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Button
+  m_Navigation:
+    m_Mode: 3
+    m_WrapAround: 0
+    m_SelectOnUp: {fileID: 0}
+    m_SelectOnDown: {fileID: 0}
+    m_SelectOnLeft: {fileID: 0}
+    m_SelectOnRight: {fileID: 0}
+  m_Transition: 1
+  m_Colors:
+    m_NormalColor: {r: 1, g: 1, b: 1, a: 1}
+    m_HighlightedColor: {r: 1, g: 0.9, b: 0.55, a: 1}
+    m_PressedColor: {r: 0.8, g: 0.8, b: 0.8, a: 1}
+    m_SelectedColor: {r: 1, g: 0.9, b: 0.55, a: 1}
+    m_DisabledColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
+    m_ColorMultiplier: 1
+    m_FadeDuration: 0.1
+  m_SpriteState:
+    m_HighlightedSprite: {fileID: 0}
+    m_PressedSprite: {fileID: 0}
+    m_SelectedSprite: {fileID: 0}
+    m_DisabledSprite: {fileID: 0}
+  m_AnimationTriggers:
+    m_NormalTrigger: Normal
+    m_HighlightedTrigger: Highlighted
+    m_PressedTrigger: Pressed
+    m_SelectedTrigger: Selected
+    m_DisabledTrigger: Disabled
+  m_Interactable: 1
+  m_TargetGraphic: {fileID: 912345683}
+  m_OnClick:
+    m_PersistentCalls:
+      m_Calls: []
+--- !u!114 &912345685
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 912345680}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a45d5c9e110f4a6e9ef6d2db07d23c9a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TutorialReplayButton
 --- !u!1 &934003290
 GameObject:
   m_ObjectHideFlags: 0
@@ -3049,6 +3191,7 @@ GameObject:
   - component: {fileID: 992171053}
   - component: {fileID: 992171054}
   - component: {fileID: 992171055}
+  - component: {fileID: 992171056}
   m_Layer: 0
   m_Name: SantaGameManager
   m_TagString: Untagged
@@ -3074,6 +3217,7 @@ MonoBehaviour:
   hintPanel: {fileID: 288856257}
   deliveryManager: {fileID: 992171047}
   toyLoader: {fileID: 133039196}
+  difficulty: 0
   giftButtons:
   - {fileID: 1488599384}
   - {fileID: 2031736882}
@@ -3081,10 +3225,10 @@ MonoBehaviour:
   - {fileID: 1035004510}
   resultPopup: {fileID: 631720810}
   correctAnswerTransitionDelay: 2
-  difficulty: 0
   missionUI: {fileID: 1275462587}
   packPresentButton: {fileID: 1492418399}
   retryButton: {fileID: 621360007}
+  preloadNextLetter: 1
 --- !u!114 &992171047
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3216,6 +3360,63 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 26a785ae9352c4b488e91c820742db76, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TestScript
+--- !u!114 &992171056
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 992171045}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 56a9e08386b642e5b4b1ba8dd0d0d92d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MainGameTutorialGuide
+  showOnFirstVisit: 1
+  cardPosition: {x: 0, y: 0}
+  cardSize: {x: 460, y: 250}
+  tipGap: 28
+  spotlightPadding: 12
+  dimmerColor: {r: 0.015, g: 0.05, b: 0.035, a: 0.78}
+  cardColor: {r: 0.045, g: 0.19, b: 0.12, a: 0.98}
+  titleColor: {r: 1, g: 0.82, b: 0.32, a: 1}
+  bodyColor: {r: 1, g: 0.96, b: 0.84, a: 1}
+  stepColor: {r: 0.7, g: 0.9, b: 0.72, a: 1}
+  buttonColor: {r: 0.72, g: 0.12, b: 0.12, a: 1}
+  pages:
+  - title: Read the child's wish
+    body: Every letter is a small puzzle from Santa's list. Read it slowly, look
+      for favourite colours, activities, or needs, and use the hint when you need
+      an extra elf-sized nudge. The frame marks the letter.
+    target: {fileID: 0}
+    targetName: letter
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Choose from the toy shelf
+    body: "Gift buttons 1\u20134 are the presents available in your workshop. Pick
+      the one that best matches the letter. The right choice helps Santa make this
+      delivery extra special."
+    target: {fileID: 0}
+    targetName: GiftContainer
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Keep the sleigh list moving
+    body: Mission / Delivery tells you how many children are in this run. Progress
+      shows where you are in the sequence. Complete each wish to prepare the next
+      drone delivery for Santa.
+    target: {fileID: 0}
+    targetName: MissionPanel
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Pack it and fly it
+    body: PACK PRESENT confirms your choice and prepares the drone mission. If you
+      picked the wrong gift, RETRY lets you study the clues again. Once packed, follow
+      the prompt and help Santa deliver it safely. This is the final button to click
+      after choosing a gift.
+    target: {fileID: 0}
+    targetName: PackPresentButton
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
 --- !u!1 &997438910
 GameObject:
   m_ObjectHideFlags: 0
@@ -6189,6 +6390,7 @@ RectTransform:
   - {fileID: 631720809}
   - {fileID: 997438911}
   - {fileID: 182219194}
+  - {fileID: 912345681}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}

@@ -13,6 +13,8 @@ public class AudioManager : MonoBehaviour
     public AudioClip correctClip;
     public AudioClip wrongClip;
 
+    private float baseSoundEffectsVolume = 1f;
+
     // to keep the click sound playing across scenes, we can use the singleton pattern
     private void Awake()
     {
@@ -20,6 +22,12 @@ public class AudioManager : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(gameObject);
+            if (sfxSource != null)
+            {
+                baseSoundEffectsVolume = sfxSource.volume;
+            }
+            SantaTrailAudioSettings.SettingsChanged += ApplyVolume;
+            ApplyVolume();
         }
         else
         {
@@ -29,16 +37,32 @@ public class AudioManager : MonoBehaviour
 
     public void PlayClick()
     {
-        sfxSource.PlayOneShot(clickClip);
+        if (sfxSource != null && clickClip != null) sfxSource.PlayOneShot(clickClip);
     }
 
     public void PlayCorrect()
     {
-        sfxSource.PlayOneShot(correctClip);
+        if (sfxSource != null && correctClip != null) sfxSource.PlayOneShot(correctClip);
     }
 
     public void PlayWrong()
     {
-        sfxSource.PlayOneShot(wrongClip);
+        if (sfxSource != null && wrongClip != null) sfxSource.PlayOneShot(wrongClip);
+    }
+
+    private void ApplyVolume()
+    {
+        if (sfxSource != null)
+        {
+            sfxSource.volume = baseSoundEffectsVolume *
+                SantaTrailAudioSettings.SoundEffectsVolume;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance != this) return;
+        SantaTrailAudioSettings.SettingsChanged -= ApplyVolume;
+        Instance = null;
     }
 }

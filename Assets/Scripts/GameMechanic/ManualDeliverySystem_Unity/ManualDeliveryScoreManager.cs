@@ -93,6 +93,60 @@ public class ManualDeliveryScoreManager : MonoBehaviour
     public int CompletedTargets => completedDeliveries;
     public int TotalTargets => totalTargets;
 
+    /// <summary>
+    /// Returns the closest remaining manual delivery point for minimap guidance.
+    /// </summary>
+    public bool TryGetGuidanceTarget(out Vector3 worldPosition, out float targetRadius)
+    {
+        worldPosition = Vector3.zero;
+        targetRadius = Mathf.Max(0.1f, deliveryRadius);
+
+        if (!targetsInitialized || activeTargets.Count == 0)
+        {
+            return false;
+        }
+
+        ManualBuildingData guidanceTarget =
+            currentDeliverableTarget != null && activeTargets.Contains(currentDeliverableTarget)
+                ? currentDeliverableTarget
+                : null;
+
+        if (guidanceTarget == null)
+        {
+            Vector3 referencePosition = drone != null ? drone.position : Vector3.zero;
+            float nearestSqrDistance = float.MaxValue;
+
+            for (int i = 0; i < activeTargets.Count; i++)
+            {
+                ManualBuildingData candidate = activeTargets[i];
+                if (candidate == null || candidate.root == null)
+                {
+                    continue;
+                }
+
+                Vector2 offset = new Vector2(
+                    candidate.roofTarget.x - referencePosition.x,
+                    candidate.roofTarget.z - referencePosition.z);
+                float sqrDistance = offset.sqrMagnitude;
+
+                if (sqrDistance < nearestSqrDistance)
+                {
+                    nearestSqrDistance = sqrDistance;
+                    guidanceTarget = candidate;
+                }
+            }
+        }
+
+        if (guidanceTarget == null)
+        {
+            return false;
+        }
+
+        worldPosition = guidanceTarget.roofTarget;
+        targetRadius = Mathf.Max(0.1f, GetTargetRadius(guidanceTarget));
+        return true;
+    }
+
     private sealed class ManualBuildingData
     {
         public ManualDeliveryTarget marker;

@@ -36,11 +36,16 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] double mapOriginLongitude;
     [SerializeField] double mapOriginLatitude;
     [SerializeField] double mapOriginAltitude;
+    [Header("Map & Flight Boundary")]
     [Tooltip("Restrict ArcGIS streaming and generated houses to a circular playable area around the map origin.")]
-    [SerializeField] bool limitMapExtent = false;
-    [Min(1f)]
-    [Tooltip("Radius of the playable ArcGIS map area in metres.")]
-    [SerializeField] double mapExtentSizeMeters = 500f;
+    [SerializeField] bool limitMapExtent = true;
+    [Min(50f)]
+    [InspectorName("Map And Boundary Radius (Meters)")]
+    [Tooltip(
+        "Custom radius in metres for both the visible ArcGIS map and the " +
+        "drone flight boundary when Fit Drone Boundary To Generated Village is off."
+    )]
+    [SerializeField] double mapExtentSizeMeters = 350f;
     [Header("ArcGIS")]
     [SerializeField] ArcGISConverter arcGISConverter;
 
@@ -54,7 +59,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Tooltip("Keep loading visible until delivery targets are selected from generated houses.")]
     [SerializeField] bool waitForDeliveryTargetsBeforeHidingLoadingScreen = true;
     [Min(1f)]
-    [Tooltip("Maximum final wait for ArcGIS and delivery systems after object generation.")]
+    [Tooltip(
+        "Maximum final wait for delivery systems after the ArcGIS map is ready. " +
+        "ArcGIS itself remains a strict loading-screen gate until drawing completes."
+    )]
     [SerializeField] float finalLevelReadyTimeoutSeconds = 90f;
     [Range(1, 10)]
     [Tooltip("Extra completed frames rendered before the loading overlay fades out.")]
@@ -62,7 +70,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
     float loadingScreenShownAt;
     [Header("Fallback")]
-    [SerializeField] bool allowLocalGpsFallback = true;
+    [Tooltip(
+        "Allow an offline terrain substitute when ArcGIS cannot initialize. " +
+        "Keep this off when the loading screen must wait for the real ArcGIS map."
+    )]
+    [SerializeField] bool allowLocalGpsFallback = false;
     [Min(5f)]
     [Tooltip("Wait this long for ArcGIS before allowing the offline terrain fallback.")]
     [SerializeField] float arcGISStartupGraceSeconds = 45f;
@@ -71,9 +83,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Header("Building Spawn")]
     [Tooltip("Enable this to generate building prefabs from OSM footprints. Disable it in levels that use manually placed building assets.")]
     [SerializeField] bool spawnOsmBuildings = true;
-    [SerializeField] float buildingSpawnRadius = 500f;
-    [Tooltip("Limit drone travel to the outer edge of the generated village.")]
-    [SerializeField] bool fitDroneBoundaryToGeneratedVillage = true;
+    [SerializeField] float buildingSpawnRadius = 350f;
+    [Tooltip(
+        "Off uses Map Extent Size Meters as the exact map and flight-boundary " +
+        "radius. On automatically shrinks both to the generated village."
+    )]
+    [SerializeField] bool fitDroneBoundaryToGeneratedVillage = false;
     [Min(0f)]
     [Tooltip("Extra flight space beyond the last generated house. The MAVLink edge buffer is applied inside this value.")]
     [SerializeField] float droneBoundaryPastLastHouseMeters = 25f;
@@ -118,12 +133,13 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] float modularBuildingGroundOffset = 0.05f;
 
     [Range(1f, 1.5f)]
+    [InspectorName("OSM Footprint Fill Scale")]
     [Tooltip(
         "Uniform X/Z expansion for walls built from an OSM footprint. " +
-        "1 matches the source exactly; 1.3 makes the visible house fill " +
-        "the wider ArcGIS building shadow."
+        "1 matches the source exactly; increase gradually when the visible " +
+        "map footprint is wider than the source OSM polygon."
     )]
-    [SerializeField] float osmWallFootprintScale = 1.05f;
+    [SerializeField] float osmWallFootprintScale = 1.30f;
 
     [System.Serializable]
     public class BuildingOrientationRule
@@ -467,11 +483,73 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             : requestedRadiusMeters;
         hasConfiguredMapExtent = true;
 
+        ApplyGeneratedBoundaryToArcGISMap(
+            configuredMapExtentRadiusMeters
+        );
+
         Debug.Log(
             $"🛑 Drone boundary matched to generated houses: " +
             $"last house edge={farthestGeneratedHouseEdgeMeters:F1}m, " +
             $"boundary radius={configuredMapExtentRadiusMeters:F1}m."
         );
+    }
+
+    void ApplyGeneratedBoundaryToArcGISMap(double boundaryRadiusMeters)
+    {
+        if (!limitMapExtent || localTerrainFallbackActive)
+        {
+            return;
+        }
+
+        ArcGISMapComponent mapComponent = arcGISMap != null
+            ? arcGISMap
+            : FindFirstObjectByType<ArcGISMapComponent>(
+                FindObjectsInactive.Include
+            );
+
+        if (mapComponent == null || mapComponent.OriginPosition == null)
+        {
+            Debug.LogWarning(
+                "⚠️ Could not crop ArcGIS to the generated boundary " +
+                "because the map or its origin is missing."
+            );
+            return;
+        }
+
+        double radius = System.Math.Max(
+            1.0,
+            boundaryRadiusMeters
+        );
+
+        try
+        {
+            mapComponent.MapType = ArcGISMapType.Local;
+            mapComponent.EnableExtent = true;
+            mapComponent.Extent = new ArcGISExtentInstanceData
+            {
+                GeographicCenter =
+                    mapComponent.OriginPosition.ToInstanceData(),
+                ExtentShape = MapExtentShapes.Circle,
+                ShapeDimensions = new double2(radius, 0),
+                UseOriginAsCenter = true
+            };
+
+            // Changing the clip radius changes the visible ArcGIS view. Make
+            // the loading gate settle against this final, smaller map area.
+            arcGISConverter?.RequireFreshDrawCompletion();
+
+            Debug.Log(
+                $"🗺 ArcGIS map cropped to the generated flight " +
+                $"boundary: {radius:F1}m radius."
+            );
+        }
+        catch (System.Exception exception)
+        {
+            Debug.LogWarning(
+                "⚠️ ArcGIS could not apply the generated boundary " +
+                "extent: " + exception.Message
+            );
+        }
     }
 
     // The current level bootstrap lives in SceneLoaderArcgis.Bootstrap.cs.
@@ -5688,6 +5766,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         arcGISStartupGraceSeconds =
             Mathf.Max(5f, arcGISStartupGraceSeconds);
+
+        finalLevelReadyTimeoutSeconds =
+            Mathf.Max(1f, finalLevelReadyTimeoutSeconds);
 
         buildingSpawnRadius =
             Mathf.Max(1f, buildingSpawnRadius);

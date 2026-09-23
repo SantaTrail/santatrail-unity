@@ -453,18 +453,21 @@ public sealed class TitleSceneStartupController : MonoBehaviour
 
         if (levelLoadingScreen.HasError)
         {
-            SetProgress(
-                0.98f,
-                "Oh snow! Santa could not finish preparing the present route."
-            );
             Debug.LogError("SantaTrail startup: LV1 reported a loading error.");
+            // Reveal LV1's own actionable loading error instead of leaving
+            // the outer LoadingScene canvas permanently over it.
+            SceneManager.SetActiveScene(levelScene);
+            SceneManager.UnloadSceneAsync(gameObject.scene);
             yield break;
         }
 
         if (!levelLoadingScreen.IsReady)
         {
-            SetProgress(0.98f, "Santa is still preparing the present route...");
             Debug.LogError("SantaTrail startup: timed out waiting for LV1 readiness.");
+            // LV1 continues its recovery work independently. Remove the outer
+            // loading scene so its live progress/error UI remains visible.
+            SceneManager.SetActiveScene(levelScene);
+            SceneManager.UnloadSceneAsync(gameObject.scene);
             yield break;
         }
 

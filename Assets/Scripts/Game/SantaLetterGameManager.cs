@@ -26,6 +26,8 @@ public class SantaLetterGameManager : MonoBehaviour
     private ChildData currentChild;
     private ToyData selectedToy;
 
+    public bool HasActiveDelivery => currentChild != null;
+
     private int wrongAttempts = 0;
     private int totalDeliveries;
 
