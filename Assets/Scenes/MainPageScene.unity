@@ -1673,6 +1673,12 @@ MonoBehaviour:
     targetName: 
     bubbleOffset: {x: 0, y: 0}
     yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: 'Christmas Spirit '
+    body: 'Christmas Spirit fills as you help more children. '
+    target: {fileID: 0}
+    targetName: ChristmasSpiritTutorialBounds
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
   - title: Elf workshop stats
     body: 'Magic is the currency your good work has earned. You can use to upgrade
       drone and make more toys. '
@@ -1680,32 +1686,12 @@ MonoBehaviour:
     targetName: MagicAmount
     bubbleOffset: {x: 0, y: 1}
     yellowBoxSizeOffset: {x: 0, y: 10}
-  - title: 'Christmas Spirit '
-    body: 'Christmas Spirit fills as you help more children. '
+  - title: Pilot Skill Radar
+    body: "A visual summary of flying skills across several categories. A fuller
+      radar shape means more balanced performance\u2014for example, careful altitude
+      control, safe navigation, accurate drops, and efficient routes."
     target: {fileID: 0}
-    targetName: ChristmasSpiritTutorialBounds
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: 'Presents Delivered '
-    body: 'Presents Delivered counts successful drops. '
-    target: {fileID: 0}
-    targetName: PresentDeliverTutorialBounds
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: Altitude Discipline
-    body: 'Shows how high the drone is flying now, plus the lowest and highest altitude
-      during the mission. Keep altitude controlled: too low risks obstacles; too
-      high can make delivery less accurate.'
-    target: {fileID: 0}
-    targetName: AltitudeDisciplineTutorialBounds
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: Failure Causes
-    body: Lists why previous deliveries failed, such as collisions, dropping at the
-      wrong house, incorrect present, leaving the allowed area, or unsafe flight.
-      Use it to spot what to improve next.
-    target: {fileID: 0}
-    targetName: FailureCausesTutorialBounds
+    targetName: PilotSkillRadarTutorialBounds
     bubbleOffset: {x: 0, y: 0}
     yellowBoxSizeOffset: {x: 0, y: 0}
   - title: Delivery Efficiency
@@ -1716,12 +1702,26 @@ MonoBehaviour:
     targetName: DeliveryEfficiencyTutorialBounds
     bubbleOffset: {x: 0, y: 0}
     yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: Pilot Skill Radar
-    body: "A visual summary of flying skills across several categories. A fuller
-      radar shape means more balanced performance\u2014for example, careful altitude
-      control, safe navigation, accurate drops, and efficient routes."
+  - title: 'Presents Delivered '
+    body: 'Presents Delivered counts successful drops. '
     target: {fileID: 0}
-    targetName: PilotSkillRadarTutorialBounds
+    targetName: PresentDeliveredTutorialBounds
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Failure Causes
+    body: Lists why previous deliveries failed, such as collisions, dropping at the
+      wrong house, incorrect present, leaving the allowed area, or unsafe flight.
+      Use it to spot what to improve next.
+    target: {fileID: 0}
+    targetName: FailureCausesTutorialBounds
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Altitude Discipline
+    body: 'Shows how high the drone is flying now, plus the lowest and highest altitude
+      during the mission. Keep altitude controlled: too low risks obstacles; too
+      high can make delivery less accurate.'
+    target: {fileID: 0}
+    targetName: AltitudeDisciplineTutorialBounds
     bubbleOffset: {x: 0, y: 0}
     yellowBoxSizeOffset: {x: 0, y: 0}
   - title: Check Santa's flight ledger
@@ -1729,7 +1729,7 @@ MonoBehaviour:
       ALL opens every record; PASSED celebrates completed missions; IN PROGRESS /
       FAILED helps you find work still waiting.
     target: {fileID: 0}
-    targetName: FlightLogScrollView
+    targetName: FlightLogTutorialBounds
     bubbleOffset: {x: 0, y: 0}
     yellowBoxSizeOffset: {x: 0, y: 0}
   - title: Your next elf task
@@ -1737,7 +1737,7 @@ MonoBehaviour:
       the best gift from the workshop, pack it, then launch the drone for a careful
       Santa delivery. '
     target: {fileID: 0}
-    targetName: Letter
+    targetName: LetterBorder
     bubbleOffset: {x: 0, y: 0}
     yellowBoxSizeOffset: {x: 0, y: 0}
 --- !u!4 &394874025
@@ -2552,7 +2552,7 @@ MonoBehaviour:
     m_PressedTrigger: Pressed
     m_SelectedTrigger: Selected
     m_DisabledTrigger: Disabled
-  m_Interactable: 1
+  m_Interactable: 0
   m_TargetGraphic: {fileID: 0}
   m_FillRect: {fileID: 834376141}
   m_HandleRect: {fileID: 0}
@@ -3416,6 +3416,7 @@ RectTransform:
   - {fileID: 1883794785}
   - {fileID: 1088506157}
   - {fileID: 1096624543}
+  - {fileID: 1688567599}
   m_Father: {fileID: 1931462716}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
@@ -3678,7 +3679,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 15, y: 7}
+  m_AnchoredPosition: {x: 82.6, y: 7}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &714900788
@@ -4615,6 +4616,7 @@ RectTransform:
   - {fileID: 1066383475}
   - {fileID: 1531136880}
   - {fileID: 749149452}
+  - {fileID: 1045462031}
   m_Father: {fileID: 834365546}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
@@ -5077,6 +5079,41 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 974400657}
   m_CullTransparentMesh: 1
+--- !u!1 &1045462030
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1045462031}
+  m_Layer: 5
+  m_Name: PresentDeliveredTutorialBounds
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1045462031
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1045462030}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 907606332}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: -0.00024414, y: -0.0003624}
+  m_SizeDelta: {x: 523.99, y: 241.02}
+  m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1056366867
 GameObject:
   m_ObjectHideFlags: 0
@@ -5346,9 +5383,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 'All-time deliveries across all country
-
-'
+  m_text: All-time deliveries across all  the world
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: cab28aede787d44a5a88b14c943e461b, type: 2}
   m_sharedMaterial: {fileID: -541075916963754906, guid: cab28aede787d44a5a88b14c943e461b, type: 2}
@@ -5414,7 +5449,7 @@ MonoBehaviour:
   m_VertexBufferAutoSizeReduction: 0
   m_useMaxVisibleDescender: 1
   m_pageToDisplay: 1
-  m_margin: {x: 0, y: 0, z: -240.98828, w: 0}
+  m_margin: {x: 0, y: 0, z: -269.53833, w: 0}
   m_isUsingLegacyAnimationComponent: 0
   m_isVolumetricText: 0
   m_hasFontAssetChanged: 0
@@ -7463,7 +7498,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -1, y: -24}
+  m_AnchoredPosition: {x: 24, y: -24}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1531136881
@@ -7773,6 +7808,41 @@ RectTransform:
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: -484, y: 57}
   m_SizeDelta: {x: 100, y: 100}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!1 &1688567598
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1688567599}
+  m_Layer: 5
+  m_Name: FlightLogTutorialBounds
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1688567599
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1688567598}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 620450072}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 5.8754, y: 61.692}
+  m_SizeDelta: {x: 1756.8589, y: 223.38}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1693146983
 GameObject:
@@ -8702,6 +8772,7 @@ RectTransform:
   - {fileID: 1144997316}
   - {fileID: 1733256329}
   - {fileID: 933214569}
+  - {fileID: 2108207152}
   m_Father: {fileID: 1931462716}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
@@ -9058,6 +9129,41 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2095199502}
   m_CullTransparentMesh: 1
+--- !u!1 &2108207151
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2108207152}
+  m_Layer: 5
+  m_Name: LetterBorder
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &2108207152
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2108207151}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1944593597}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 1, y: 0.5}
+  m_AnchoredPosition: {x: 1577.136, y: 6.784}
+  m_SizeDelta: {x: 40.272, y: 68.3838}
+  m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

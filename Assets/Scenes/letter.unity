@@ -1764,6 +1764,95 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 355423209}
   m_CullTransparentMesh: 1
+--- !u!1 &386450773
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 386450775}
+  - component: {fileID: 386450774}
+  m_Layer: 0
+  m_Name: TutorialEvent
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &386450774
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 386450773}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 56a9e08386b642e5b4b1ba8dd0d0d92d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MainGameTutorialGuide
+  showOnFirstVisit: 1
+  cardPosition: {x: 0, y: 0}
+  cardSize: {x: 460, y: 250}
+  tipGap: 28
+  spotlightPadding: 12
+  dimmerColor: {r: 0.015, g: 0.05, b: 0.035, a: 0.78}
+  cardColor: {r: 0.045, g: 0.19, b: 0.12, a: 0.98}
+  titleColor: {r: 1, g: 0.82, b: 0.32, a: 1}
+  bodyColor: {r: 1, g: 0.96, b: 0.84, a: 1}
+  stepColor: {r: 0.7, g: 0.9, b: 0.72, a: 1}
+  buttonColor: {r: 0.72, g: 0.12, b: 0.12, a: 1}
+  pages:
+  - title: Read the child's wish
+    body: Every letter is a small puzzle from Santa's list. Read it slowly, look
+      for favourite colours, activities, or needs, and use the hint when you need
+      an extra elf-sized nudge. The frame marks the letter.
+    target: {fileID: 0}
+    targetName: LetterTutorialFrame
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Choose from the toy shelf
+    body: "Gift buttons 1\u20134 are the presents available in your workshop. Pick
+      the one that best matches the letter. The right choice helps Santa make this
+      delivery extra special."
+    target: {fileID: 0}
+    targetName: GiftContainer
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Keep the sleigh list moving
+    body: Mission / Delivery tells you how many children are in this run. Progress
+      shows where you are in the sequence. Complete each wish to prepare the next
+      drone delivery for Santa.
+    target: {fileID: 0}
+    targetName: MissionPanel
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+  - title: Pack it and fly it
+    body: PACK PRESENT confirms your choice and prepares the drone mission. If you
+      picked the wrong gift, RETRY lets you study the clues again. Once packed, follow
+      the prompt and help Santa deliver it safely. This is the final button to click
+      after choosing a gift.
+    target: {fileID: 0}
+    targetName: PackPresentButton
+    bubbleOffset: {x: 0, y: 0}
+    yellowBoxSizeOffset: {x: 0, y: 0}
+--- !u!4 &386450775
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 386450773}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 980.8501, y: 537.9083, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &471196632
 GameObject:
   m_ObjectHideFlags: 0
@@ -2463,6 +2552,41 @@ MonoBehaviour:
   _slot: -1
   _systemPrompt: A chat between a curious human and an artificial intelligence assistant.
     The assistant gives helpful, detailed, and polite answers to the human's questions.
+--- !u!1 &838535431
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 838535432}
+  m_Layer: 5
+  m_Name: LetterTutorialFrame
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &838535432
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 838535431}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2042237334}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0.5, y: 0.5}
+  m_AnchorMax: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: -484.55, y: -45.425}
+  m_SizeDelta: {x: 737.01, y: 783.12}
+  m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &864936211
 GameObject:
   m_ObjectHideFlags: 0
@@ -3191,7 +3315,6 @@ GameObject:
   - component: {fileID: 992171053}
   - component: {fileID: 992171054}
   - component: {fileID: 992171055}
-  - component: {fileID: 992171056}
   m_Layer: 0
   m_Name: SantaGameManager
   m_TagString: Untagged
@@ -3360,63 +3483,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 26a785ae9352c4b488e91c820742db76, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TestScript
---- !u!114 &992171056
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 992171045}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 56a9e08386b642e5b4b1ba8dd0d0d92d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::MainGameTutorialGuide
-  showOnFirstVisit: 1
-  cardPosition: {x: 0, y: 0}
-  cardSize: {x: 460, y: 250}
-  tipGap: 28
-  spotlightPadding: 12
-  dimmerColor: {r: 0.015, g: 0.05, b: 0.035, a: 0.78}
-  cardColor: {r: 0.045, g: 0.19, b: 0.12, a: 0.98}
-  titleColor: {r: 1, g: 0.82, b: 0.32, a: 1}
-  bodyColor: {r: 1, g: 0.96, b: 0.84, a: 1}
-  stepColor: {r: 0.7, g: 0.9, b: 0.72, a: 1}
-  buttonColor: {r: 0.72, g: 0.12, b: 0.12, a: 1}
-  pages:
-  - title: Read the child's wish
-    body: Every letter is a small puzzle from Santa's list. Read it slowly, look
-      for favourite colours, activities, or needs, and use the hint when you need
-      an extra elf-sized nudge. The frame marks the letter.
-    target: {fileID: 0}
-    targetName: letter
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: Choose from the toy shelf
-    body: "Gift buttons 1\u20134 are the presents available in your workshop. Pick
-      the one that best matches the letter. The right choice helps Santa make this
-      delivery extra special."
-    target: {fileID: 0}
-    targetName: GiftContainer
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: Keep the sleigh list moving
-    body: Mission / Delivery tells you how many children are in this run. Progress
-      shows where you are in the sequence. Complete each wish to prepare the next
-      drone delivery for Santa.
-    target: {fileID: 0}
-    targetName: MissionPanel
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
-  - title: Pack it and fly it
-    body: PACK PRESENT confirms your choice and prepares the drone mission. If you
-      picked the wrong gift, RETRY lets you study the clues again. Once packed, follow
-      the prompt and help Santa deliver it safely. This is the final button to click
-      after choosing a gift.
-    target: {fileID: 0}
-    targetName: PackPresentButton
-    bubbleOffset: {x: 0, y: 0}
-    yellowBoxSizeOffset: {x: 0, y: 0}
 --- !u!1 &997438910
 GameObject:
   m_ObjectHideFlags: 0
@@ -6391,6 +6457,7 @@ RectTransform:
   - {fileID: 997438911}
   - {fileID: 182219194}
   - {fileID: 912345681}
+  - {fileID: 838535432}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
@@ -6688,3 +6755,4 @@ SceneRoots:
   - {fileID: 256450290}
   - {fileID: 623435970}
   - {fileID: 1267000795}
+  - {fileID: 386450775}

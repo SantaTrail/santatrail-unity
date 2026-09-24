@@ -248,10 +248,10 @@ public class ArcGISConverter : MonoBehaviour
     public bool CanProjectCoordinates()
     {
         // Coordinate conversion becomes usable before the renderer finishes
-        // streaming every visible tile. Level generation may safely start at
-        // this point, while IsReady() continues to guard removal of the
-        // loading screen until drawing completes or the loaded view has stayed
-        // continuously usable for the configured fallback window.
+        // streaming every visible tile. Coordinate-only callers may use this
+        // state, but callers that add ArcGIS components must wait for IsReady()
+        // because those components synchronize with the native map in
+        // OnEnable.
         return arcGISMap != null &&
                arcGISMap.View != null &&
                IsMapContentLoaded() &&

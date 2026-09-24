@@ -36,13 +36,14 @@ public class MinimapOverlayController : MonoBehaviour
     [Header("Current Target Guidance")]
     [Tooltip("Draw a high-contrast ray from the drone to the closest remaining delivery house.")]
     [SerializeField] private bool showTargetGuidanceRay = true;
-    [Tooltip("Draw a thin, hollow ring around the closest remaining delivery area.")]
+    [Tooltip("Draw a ring around the closest delivery area, or a directional arrow when it is offscreen.")]
     [SerializeField] private bool showTargetGuidanceRing = true;
     [SerializeField] private Color targetGuidanceColor = new Color(1f, 0.78f, 0.08f, 1f);
     [SerializeField] private Color targetGuidanceOutlineColor = new Color(0.05f, 0.04f, 0.02f, 0.9f);
     [Min(1f)] [SerializeField] private float targetGuidanceRayWidth = 3f;
     [Min(8f)] [SerializeField] private float minimumTargetRingSize = 34f;
     [Min(8f)] [SerializeField] private float maximumTargetRingSize = 72f;
+    [Min(12f)] [SerializeField] private float offscreenTargetArrowSize = 30f;
     [Range(0f, 0.25f)] [SerializeField] private float targetRingPulseAmount = 0.08f;
     [Min(0f)] [SerializeField] private float targetRingPulseSpeed = 2.5f;
 
@@ -67,7 +68,9 @@ public class MinimapOverlayController : MonoBehaviour
     private Sprite playerTextureSprite;
     private Sprite missionTextureSprite;
     private Sprite guidanceRingSprite;
+    private Sprite guidanceArrowSprite;
     private Texture2D guidanceRingTexture;
+    private Texture2D guidanceArrowTexture;
     private float nextMissionRefreshTime;
     private DeliveryScoreManager deliveryScoreManager;
     private ManualDeliveryScoreManager manualDeliveryScoreManager;
@@ -79,6 +82,7 @@ public class MinimapOverlayController : MonoBehaviour
         playerTextureSprite = CreateSpriteFromTexture(playerMarkerTexture);
         missionTextureSprite = CreateSpriteFromTexture(missionMarkerTexture);
         guidanceRingSprite = CreateGuidanceRingSprite();
+        guidanceArrowSprite = CreateGuidanceArrowSprite();
         EnsureMarkerLayer();
         EnsureGuidanceVisuals();
     }
@@ -125,6 +129,16 @@ public class MinimapOverlayController : MonoBehaviour
         if (guidanceRingTexture != null)
         {
             Destroy(guidanceRingTexture);
+        }
+
+        if (guidanceArrowSprite != null)
+        {
+            Destroy(guidanceArrowSprite);
+        }
+
+        if (guidanceArrowTexture != null)
+        {
+            Destroy(guidanceArrowTexture);
         }
     }
 
@@ -537,27 +551,46 @@ public class MinimapOverlayController : MonoBehaviour
         float pulse = 1f + Mathf.Sin(Time.unscaledTime * targetRingPulseSpeed) * targetRingPulseAmount;
         float pulsedRingSize = ringSize * pulse;
 
-        Vector2 targetPosition = new Vector2(
+        Vector2 unclampedTargetPosition = new Vector2(
             (viewport.x - 0.5f) * rect.width,
             (viewport.y - 0.5f) * rect.height);
+        Vector2 targetPosition = unclampedTargetPosition;
+        bool targetIsOffscreen = viewport.x < 0f ||
+                                 viewport.x > 1f ||
+                                 viewport.y < 0f ||
+                                 viewport.y > 1f;
+        float targetIndicatorSize = targetIsOffscreen
+            ? Mathf.Max(12f, offscreenTargetArrowSize)
+            : pulsedRingSize;
 
         if (clampMarkersToEdge)
         {
-            float padding = Mathf.Max(edgePadding, pulsedRingSize * 0.5f + 2f);
+            float indicatorMargin = targetIsOffscreen ? 8f : 2f;
+            float padding = Mathf.Max(
+                edgePadding,
+                targetIndicatorSize * 0.5f + indicatorMargin);
             float horizontalLimit = Mathf.Max(0f, halfSize.x - padding);
             float verticalLimit = Mathf.Max(0f, halfSize.y - padding);
-            targetPosition.x = Mathf.Clamp(targetPosition.x, -horizontalLimit, horizontalLimit);
-            targetPosition.y = Mathf.Clamp(targetPosition.y, -verticalLimit, verticalLimit);
+
+            targetPosition = targetIsOffscreen
+                ? PlaceIndicatorOnMinimapEdge(
+                    unclampedTargetPosition,
+                    horizontalLimit,
+                    verticalLimit)
+                : new Vector2(
+                    Mathf.Clamp(targetPosition.x, -horizontalLimit, horizontalLimit),
+                    Mathf.Clamp(targetPosition.y, -verticalLimit, verticalLimit));
         }
 
         guidanceRingOutline.gameObject.SetActive(showTargetGuidanceRing);
         guidanceRing.gameObject.SetActive(showTargetGuidanceRing);
         if (showTargetGuidanceRing)
         {
-            guidanceRingOutline.anchoredPosition = targetPosition;
-            guidanceRing.anchoredPosition = targetPosition;
-            guidanceRingOutline.sizeDelta = Vector2.one * (pulsedRingSize + 3f);
-            guidanceRing.sizeDelta = Vector2.one * pulsedRingSize;
+            UpdateGuidanceTargetIndicator(
+                targetPosition,
+                unclampedTargetPosition,
+                targetIndicatorSize,
+                targetIsOffscreen);
         }
 
         guidanceRayOutline.gameObject.SetActive(showTargetGuidanceRay);
@@ -576,7 +609,7 @@ public class MinimapOverlayController : MonoBehaviour
                 float startInset = playerMarker != null
                     ? Mathf.Max(playerMarker.rect.width, playerMarker.rect.height) * 0.35f
                     : 0f;
-                float endInset = showTargetGuidanceRing ? pulsedRingSize * 0.42f : 0f;
+                float endInset = showTargetGuidanceRing ? targetIndicatorSize * 0.42f : 0f;
                 float totalInset = Mathf.Min(distance * 0.8f, startInset + endInset);
                 float insetScale = startInset + endInset > 0f
                     ? totalInset / (startInset + endInset)
@@ -601,6 +634,82 @@ public class MinimapOverlayController : MonoBehaviour
                 guidanceRay.gameObject.SetActive(false);
             }
         }
+    }
+
+    private void UpdateGuidanceTargetIndicator(
+        Vector2 targetPosition,
+        Vector2 unclampedTargetPosition,
+        float indicatorSize,
+        bool targetIsOffscreen)
+    {
+        Image outlineImage = guidanceRingOutline.GetComponent<Image>();
+        Image indicatorImage = guidanceRing.GetComponent<Image>();
+        Sprite indicatorSprite = targetIsOffscreen
+            ? guidanceArrowSprite
+            : guidanceRingSprite;
+
+        outlineImage.sprite = indicatorSprite;
+        indicatorImage.sprite = indicatorSprite;
+        outlineImage.preserveAspect = true;
+        indicatorImage.preserveAspect = true;
+
+        guidanceRingOutline.anchoredPosition = targetPosition;
+        guidanceRing.anchoredPosition = targetPosition;
+        guidanceRingOutline.sizeDelta = Vector2.one * (indicatorSize + 3f);
+        guidanceRing.sizeDelta = Vector2.one * indicatorSize;
+
+        float rotation = 0f;
+        if (targetIsOffscreen)
+        {
+            Vector2 direction = unclampedTargetPosition -
+                                (playerMarker != null
+                                    ? playerMarker.anchoredPosition
+                                    : Vector2.zero);
+            if (direction.sqrMagnitude > 0.0001f)
+            {
+                rotation = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
+            }
+        }
+
+        Quaternion indicatorRotation = Quaternion.Euler(0f, 0f, rotation);
+        guidanceRingOutline.localRotation = indicatorRotation;
+        guidanceRing.localRotation = indicatorRotation;
+    }
+
+    private Vector2 PlaceIndicatorOnMinimapEdge(
+        Vector2 targetPosition,
+        float horizontalLimit,
+        float verticalLimit)
+    {
+        Vector2 origin = playerMarker != null
+            ? playerMarker.anchoredPosition
+            : Vector2.zero;
+        Vector2 direction = targetPosition - origin;
+        if (direction.sqrMagnitude <= 0.0001f)
+        {
+            return origin;
+        }
+
+        float horizontalScale = float.PositiveInfinity;
+        if (Mathf.Abs(direction.x) > 0.0001f)
+        {
+            float horizontalEdge = direction.x > 0f
+                ? horizontalLimit
+                : -horizontalLimit;
+            horizontalScale = (horizontalEdge - origin.x) / direction.x;
+        }
+
+        float verticalScale = float.PositiveInfinity;
+        if (Mathf.Abs(direction.y) > 0.0001f)
+        {
+            float verticalEdge = direction.y > 0f
+                ? verticalLimit
+                : -verticalLimit;
+            verticalScale = (verticalEdge - origin.y) / direction.y;
+        }
+
+        float edgeScale = Mathf.Max(0f, Mathf.Min(horizontalScale, verticalScale));
+        return origin + direction * edgeScale;
     }
 
     private bool TryGetCurrentGuidanceTarget(
@@ -865,6 +974,57 @@ public class MinimapOverlayController : MonoBehaviour
             new Vector2(0.5f, 0.5f),
             100f);
         sprite.name = "RuntimeMinimapTargetRing";
+        sprite.hideFlags = HideFlags.HideAndDontSave;
+        return sprite;
+    }
+
+    private Sprite CreateGuidanceArrowSprite()
+    {
+        const int textureSize = 64;
+        const float tipX = 60f;
+        const float backX = 6f;
+        const float halfHeight = 25f;
+        float centerY = (textureSize - 1) * 0.5f;
+
+        guidanceArrowTexture = new Texture2D(
+            textureSize,
+            textureSize,
+            TextureFormat.RGBA32,
+            false)
+        {
+            name = "RuntimeMinimapTargetArrow",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+
+        Color[] pixels = new Color[textureSize * textureSize];
+        float arrowLength = tipX - backX;
+        for (int y = 0; y < textureSize; y++)
+        {
+            float verticalDistance = Mathf.Abs(y - centerY);
+            float rightEdge = backX + arrowLength *
+                              (1f - verticalDistance / halfHeight);
+
+            for (int x = 0; x < textureSize; x++)
+            {
+                float edgeDistance = Mathf.Min(
+                    x - backX,
+                    Mathf.Min(rightEdge - x, halfHeight - verticalDistance));
+                float alpha = Mathf.Clamp01(edgeDistance + 1f);
+                pixels[y * textureSize + x] = new Color(1f, 1f, 1f, alpha);
+            }
+        }
+
+        guidanceArrowTexture.SetPixels(pixels);
+        guidanceArrowTexture.Apply(false, true);
+
+        Sprite sprite = Sprite.Create(
+            guidanceArrowTexture,
+            new Rect(0f, 0f, textureSize, textureSize),
+            new Vector2(0.5f, 0.5f),
+            100f);
+        sprite.name = "RuntimeMinimapTargetArrow";
         sprite.hideFlags = HideFlags.HideAndDontSave;
         return sprite;
     }

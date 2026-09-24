@@ -863,12 +863,24 @@ public partial class SceneLoaderArcgis
                 pythonProcessCompleted = true;
             }
 
-            if (!arcgisReady &&
+            bool arcGISReadyForGeneration =
                 arcGISConverter != null &&
-                arcGISConverter.IsReady())
+                arcGISConverter.IsReady();
+
+            if (!arcgisReady && arcGISReadyForGeneration)
             {
                 arcgisReady = true;
                 Debug.Log("✅ ArcGIS READY");
+            }
+            else if (arcgisReady && !arcGISReadyForGeneration)
+            {
+                // Readiness can be lost if ArcGIS starts drawing again. Do not
+                // keep a stale ready result because ArcGISLocationComponent
+                // synchronizes with the native map immediately in OnEnable.
+                arcgisReady = false;
+                Debug.LogWarning(
+                    "⚠️ ArcGIS resumed loading; delaying level-object generation."
+                );
             }
 
             bool arcGISProjectionReady =
@@ -879,7 +891,7 @@ public partial class SceneLoaderArcgis
                 CanUseFallbackProjection() &&
                 timer >= Mathf.Max(5f, arcGISStartupGraceSeconds);
             bool projectionReady =
-                arcGISProjectionReady ||
+                arcGISReadyForGeneration ||
                 fallbackProjectionReady;
 
             if (loadingScreen != null)
@@ -921,14 +933,6 @@ public partial class SceneLoaderArcgis
 
             if (jsonReady && projectionReady)
             {
-                if (arcGISProjectionReady && !arcgisReady)
-                {
-                    Debug.Log(
-                        "🗺 ArcGIS projection ready; generating level objects " +
-                        "while the final visible map tiles finish drawing."
-                    );
-                }
-
                 Debug.Log("🚀 ALL READY → Stabilizing...");
 
                 if (loadingScreen != null)
@@ -952,6 +956,22 @@ public partial class SceneLoaderArcgis
                 // Let Unity render the loading-screen update before
                 // running the synchronous generation work.
                 yield return null;
+
+                // The stabilization delay gives ArcGIS another opportunity to
+                // resume drawing. Re-check immediately before any generated
+                // object can add an ArcGISLocationComponent; its OnEnable path
+                // calls native synchronization and is not safe against a
+                // partially initialized or newly invalidated map view.
+                if (!fallbackProjectionReady &&
+                    (arcGISConverter == null || !arcGISConverter.IsReady()))
+                {
+                    arcgisReady = false;
+                    Debug.LogWarning(
+                        "⚠️ ArcGIS readiness changed during stabilization; " +
+                        "waiting for a stable map before generating objects."
+                    );
+                    continue;
+                }
 
                 bool generationSucceeded = false;
                 const int maximumGenerationAttempts = 2;

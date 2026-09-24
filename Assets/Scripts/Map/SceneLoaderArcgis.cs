@@ -2286,6 +2286,48 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                !float.IsInfinity(point.lon);
     }
 
+    ArcGISLocationComponent AddConfiguredArcGISLocation(
+        GameObject target,
+        double longitude,
+        double latitude,
+        double altitude,
+        ArcGISSurfacePlacementMode surfacePlacementMode,
+        double surfacePlacementOffset,
+        ArcGISRotation rotation)
+    {
+        // ArcGISLocationComponent performs its first high-precision transform
+        // sync from OnEnable. Adding it to an active runtime object lets that
+        // sync run before Position has a spatial reference, which can abort in
+        // the native SDK. Configure the component while inactive, then enable
+        // it and reapply the requested pose so the initialized component pushes
+        // the intended geographic location to its HPTransform.
+        target.SetActive(false);
+
+        ArcGISPoint position = new ArcGISPoint(
+            longitude,
+            latitude,
+            altitude,
+            ArcGISSpatialReference.WGS84()
+        );
+        ArcGISLocationComponent location =
+            target.AddComponent<ArcGISLocationComponent>();
+
+        location.SurfacePlacementMode = surfacePlacementMode;
+        location.SurfacePlacementOffset = surfacePlacementOffset;
+        location.Position = position;
+        location.Rotation = rotation;
+
+        target.SetActive(true);
+
+        // A newly added ArcGIS location initializes by pulling its existing
+        // HPTransform. Reapply the requested pose after OnEnable so this final
+        // update is a push and cannot be replaced by that initialization pull.
+        location.Position = position;
+        location.Rotation = rotation;
+
+        return location;
+    }
+
     void SpawnArcGISStreetLight(
         double latitude,
         double longitude,
@@ -2300,17 +2342,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             lightRoot.transform.SetParent(parent, false);
         }
 
-        ArcGISLocationComponent location =
-            lightRoot.AddComponent<ArcGISLocationComponent>();
-        location.SurfacePlacementMode = ArcGISSurfacePlacementMode.OnTheGround;
-        location.SurfacePlacementOffset = 0.05;
-        location.Position = new ArcGISPoint(
+        AddConfiguredArcGISLocation(
+            lightRoot,
             longitude,
             latitude,
             0,
-            ArcGISSpatialReference.WGS84()
+            ArcGISSurfacePlacementMode.OnTheGround,
+            0.05,
+            new ArcGISRotation(0, 0, 0)
         );
-        location.Rotation = new ArcGISRotation(0, 0, 0);
 
         GameObject uprightObject = new GameObject("UprightVisualRoot");
         uprightObject.transform.SetParent(lightRoot.transform, false);
@@ -2760,23 +2800,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     buildingRoot.transform.SetParent(modularBuildingContainer, false);
                 }
 
-                ArcGISLocationComponent modularLocation =
-                    buildingRoot.AddComponent<ArcGISLocationComponent>();
-
-                modularLocation.SurfacePlacementMode =
-                    ArcGISSurfacePlacementMode.OnTheGround;
-                modularLocation.SurfacePlacementOffset =
-                    modularBuildingGroundOffset;
-                modularLocation.Position = new ArcGISPoint(
+                AddConfiguredArcGISLocation(
+                    buildingRoot,
                     placementLongitude,
                     placementLatitude,
                     0,
-                    ArcGISSpatialReference.WGS84()
+                    ArcGISSurfacePlacementMode.OnTheGround,
+                    modularBuildingGroundOffset,
+                    new ArcGISRotation(0, 0, 0)
                 );
-
-                // Do not put the geographic heading on the ArcGIS anchor.
-                // The upright visual child handles Y rotation in Unity space.
-                modularLocation.Rotation = new ArcGISRotation(0, 0, 0);
 
                 GameObject uprightObject = new GameObject(
                     "UprightVisualRoot"
@@ -2879,19 +2911,6 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 buildingRoot.transform.SetParent(buildingContainer, false);
             }
 
-            ArcGISLocationComponent locationComponent =
-                buildingRoot.AddComponent<ArcGISLocationComponent>();
-
-            locationComponent.SurfacePlacementMode =
-                ArcGISSurfacePlacementMode.OnTheGround;
-            locationComponent.SurfacePlacementOffset = 0;
-            locationComponent.Position = new ArcGISPoint(
-                placementLongitude,
-                placementLatitude,
-                0,
-                ArcGISSpatialReference.WGS84()
-            );
-
             string buildingTypeName = prefabToUse.name;
             BuildingOrientationRule orientationRule =
                 GetBuildingOrientationRule(
@@ -2907,10 +2926,14 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 angle + yawCorrectionDegrees
             );
 
-            locationComponent.Rotation = new ArcGISRotation(
-                finalHeading,
+            AddConfiguredArcGISLocation(
+                buildingRoot,
+                placementLongitude,
+                placementLatitude,
                 0,
-                0
+                ArcGISSurfacePlacementMode.OnTheGround,
+                0,
+                new ArcGISRotation(finalHeading, 0, 0)
             );
 
             // Complete-prefab hierarchy retained as the fallback/special-building path:
@@ -3509,18 +3532,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             arcGISConverter.CanProjectCoordinates() &&
             TryGetVisibleVillageGeoAnchor(result, out double anchorLatitude, out double anchorLongitude))
         {
-            ArcGISLocationComponent clusterLocation =
-                clusterRoot.AddComponent<ArcGISLocationComponent>();
-            clusterLocation.SurfacePlacementMode =
-                ArcGISSurfacePlacementMode.OnTheGround;
-            clusterLocation.SurfacePlacementOffset = 0f;
-            clusterLocation.Position = new ArcGISPoint(
+            AddConfiguredArcGISLocation(
+                clusterRoot,
                 anchorLongitude,
                 anchorLatitude,
                 0,
-                ArcGISSpatialReference.WGS84()
+                ArcGISSurfacePlacementMode.OnTheGround,
+                0,
+                new ArcGISRotation(0, 0, 0)
             );
-            clusterLocation.Rotation = new ArcGISRotation(0, 0, 0);
         }
         else
         {
