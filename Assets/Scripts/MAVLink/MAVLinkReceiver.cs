@@ -195,6 +195,13 @@ public class MAVLinkReceiver : MonoBehaviour
     )]
     [SerializeField] bool preserveGuidedModeOnBuildingCollision = true;
 
+    [Tooltip(
+        "If a previous boundary or building contact has put ArduPilot in " +
+        "BRAKE, switch it back to GUIDED before sending the safe hold. " +
+        "This keeps the next QGroundControl click flyable."
+    )]
+    [SerializeField] bool restoreGuidedModeAfterSafetyHold = true;
+
     [Min(0f)]
     [Tooltip(
         "Move the replacement GUIDED target this far back from the impact " +
@@ -282,6 +289,8 @@ public class MAVLinkReceiver : MonoBehaviour
     private double buildingCollisionContactLon;
     private double buildingCollisionContactAlt;
     private Vector3 lastBlockedMovementWorldDirection;
+    private Vector3 buildingCollisionEscapeWorldDirection;
+    private Transform buildingCollisionRoot;
 
     public bool IsGuidedArmed => hbGuided && hbArmed;
     public bool IsGuidedMode => hbGuided;
@@ -861,7 +870,10 @@ public class MAVLinkReceiver : MonoBehaviour
     {
         return enabledForSafetyLimit &&
                hbArmed &&
-               (hbGuided || hbCustomMode == 4u);
+               // BRAKE (17) can be left over from an earlier safety stop.
+               // It is restored to GUIDED immediately before the replacement
+               // target is sent in SendGuidedHoldPosition.
+               (hbGuided || hbCustomMode == 4u || hbCustomMode == 17u);
     }
 
     bool WouldHitBuilding(double latitude, double longitude, double altitude)
@@ -902,8 +914,17 @@ public class MAVLinkReceiver : MonoBehaviour
 
             for (int i = 0; i < hits.Length; i++)
             {
-                if (IsGeneratedBuildingCollider(hits[i].collider))
+                Transform hitBuildingRoot =
+                    FindGeneratedBuildingRoot(hits[i].collider);
+                if (hitBuildingRoot != null)
                 {
+                    if (IsEscapingBuildingContact(
+                            movementDirection,
+                            hitBuildingRoot))
+                    {
+                        continue;
+                    }
+
                     // A sphere cast can report a collider that the start point
                     // is merely touching. Permit travel away from that surface;
                     // otherwise one impact can permanently trap the drone.
@@ -920,7 +941,12 @@ public class MAVLinkReceiver : MonoBehaviour
                         continue;
                     }
 
-                    lastBlockedMovementWorldDirection = movementDirection;
+                    RecordBuildingCollisionDirection(
+                        movementDirection,
+                        hits[i].normal,
+                        hits[i].collider,
+                        hitBuildingRoot
+                    );
                     return true;
                 }
             }
@@ -934,10 +960,20 @@ public class MAVLinkReceiver : MonoBehaviour
         );
         for (int i = 0; i < overlaps.Length; i++)
         {
-            if (IsGeneratedBuildingCollider(overlaps[i]))
+            Transform overlapBuildingRoot =
+                FindGeneratedBuildingRoot(overlaps[i]);
+            if (overlapBuildingRoot != null)
             {
                 if (movement.sqrMagnitude > 0.0001f)
                 {
+                    Vector3 movementDirection = movement.normalized;
+                    if (IsEscapingBuildingContact(
+                            movementDirection,
+                            overlapBuildingRoot))
+                    {
+                        continue;
+                    }
+
                     // If numerical/ArcGIS timing leaves the saved point just
                     // inside a collider, allow candidates that increase their
                     // distance from its centre. This guarantees an escape path.
@@ -952,7 +988,17 @@ public class MAVLinkReceiver : MonoBehaviour
                         continue;
                     }
 
-                    lastBlockedMovementWorldDirection = movement.normalized;
+                    Vector3 closestStartPoint =
+                        overlaps[i].ClosestPoint(lastSafeWorldPosition);
+                    Vector3 surfaceEscapeDirection =
+                        lastSafeWorldPosition - closestStartPoint;
+
+                    RecordBuildingCollisionDirection(
+                        movementDirection,
+                        surfaceEscapeDirection,
+                        overlaps[i],
+                        overlapBuildingRoot
+                    );
                 }
                 return true;
             }
@@ -961,13 +1007,82 @@ public class MAVLinkReceiver : MonoBehaviour
         return false;
     }
 
+    bool IsEscapingBuildingContact(
+        Vector3 movementDirection,
+        Transform candidateBuildingRoot)
+    {
+        if (!buildingCollisionTriggered ||
+            buildingCollisionRoot == null ||
+            candidateBuildingRoot != buildingCollisionRoot ||
+            buildingCollisionEscapeWorldDirection.sqrMagnitude <= 0.0001f)
+        {
+            return false;
+        }
+
+        // Permit movement out of, or sideways along, the surface that caused
+        // the collision. Without this exception a roof or gable MeshCollider
+        // can report a zero-distance hit every frame and permanently trap the
+        // presentation at the contact point.
+        return Vector3.Dot(
+            movementDirection,
+            buildingCollisionEscapeWorldDirection.normalized
+        ) >= -0.02f;
+    }
+
+    void RecordBuildingCollisionDirection(
+        Vector3 movementDirection,
+        Vector3 reportedSurfaceDirection,
+        Collider collider,
+        Transform generatedBuildingRoot)
+    {
+        if (movementDirection.sqrMagnitude > 0.0001f)
+        {
+            movementDirection.Normalize();
+            lastBlockedMovementWorldDirection = movementDirection;
+        }
+
+        Vector3 escapeDirection = reportedSurfaceDirection;
+        if (escapeDirection.sqrMagnitude <= 0.0001f && collider != null)
+        {
+            escapeDirection =
+                lastSafeWorldPosition - collider.bounds.center;
+        }
+
+        if (escapeDirection.sqrMagnitude <= 0.0001f)
+        {
+            escapeDirection = -movementDirection;
+        }
+
+        if (escapeDirection.sqrMagnitude > 0.0001f)
+        {
+            escapeDirection.Normalize();
+
+            // Some MeshCollider queries return a normal with the same
+            // direction as the incoming sweep. Always orient it toward the
+            // side the drone approached from.
+            if (movementDirection.sqrMagnitude > 0.0001f &&
+                Vector3.Dot(escapeDirection, movementDirection) > 0f)
+            {
+                escapeDirection = -escapeDirection;
+            }
+        }
+
+        buildingCollisionEscapeWorldDirection = escapeDirection;
+        buildingCollisionRoot = generatedBuildingRoot;
+    }
+
     bool IsGeneratedBuildingCollider(Collider candidate)
+    {
+        return FindGeneratedBuildingRoot(candidate) != null;
+    }
+
+    Transform FindGeneratedBuildingRoot(Collider candidate)
     {
         if (candidate == null ||
             candidate.transform == transform ||
             candidate.transform.IsChildOf(transform))
         {
-            return false;
+            return null;
         }
 
         Transform current = candidate.transform;
@@ -977,13 +1092,13 @@ public class MAVLinkReceiver : MonoBehaviour
                 current.name.StartsWith("VisibleBuilding_") ||
                 current.name.StartsWith("ModularHouse_"))
             {
-                return true;
+                return current;
             }
 
             current = current.parent;
         }
 
-        return false;
+        return null;
     }
 
     void RejectBuildingMovement()
@@ -1099,16 +1214,47 @@ public class MAVLinkReceiver : MonoBehaviour
         altitude = lastSafeAlt;
         worldPosition = lastSafeWorldPosition;
 
-        float retreatMeters = Mathf.Max(0f, buildingCollisionRetreatMeters);
-        Vector3 blockedDirection = lastBlockedMovementWorldDirection;
+        float collisionRadius = Mathf.Max(0.1f, droneCollisionRadiusMeters);
+        float retreatMeters = Mathf.Max(
+            buildingCollisionRetreatMeters,
+            collisionRadius * 1.5f
+        );
+        Vector3 retreatDirection = buildingCollisionEscapeWorldDirection;
+
+        if (retreatDirection.sqrMagnitude <= 0.0001f)
+        {
+            retreatDirection = -lastBlockedMovementWorldDirection;
+        }
 
         if (retreatMeters <= 0.001f ||
-            blockedDirection.sqrMagnitude <= 0.0001f)
+            retreatDirection.sqrMagnitude <= 0.0001f)
         {
             return;
         }
 
-        blockedDirection.Normalize();
+        retreatDirection.Normalize();
+
+        // Roof and upper-wall meshes can overlap the nominal one-metre
+        // retreat. Increase the distance until the entire collision sphere is
+        // outside generated building geometry.
+        float selectedRetreatMeters = retreatMeters;
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            float candidateRetreatMeters =
+                retreatMeters + attempt * collisionRadius;
+            Vector3 candidateWorldPosition =
+                lastSafeWorldPosition +
+                retreatDirection * candidateRetreatMeters;
+
+            selectedRetreatMeters = candidateRetreatMeters;
+            if (!OverlapsGeneratedBuilding(
+                    candidateWorldPosition,
+                    collisionRadius))
+            {
+                break;
+            }
+        }
+
         const double metersPerDegreeLatitude = 111320.0;
         double metersPerDegreeLongitude =
             metersPerDegreeLatitude *
@@ -1117,11 +1263,13 @@ public class MAVLinkReceiver : MonoBehaviour
                 System.Math.Cos(lastSafeLat * System.Math.PI / 180.0)
             );
 
-        latitude -=
-            blockedDirection.z * retreatMeters / metersPerDegreeLatitude;
-        longitude -=
-            blockedDirection.x * retreatMeters / metersPerDegreeLongitude;
-        altitude -= blockedDirection.y * retreatMeters;
+        latitude +=
+            retreatDirection.z * selectedRetreatMeters /
+            metersPerDegreeLatitude;
+        longitude +=
+            retreatDirection.x * selectedRetreatMeters /
+            metersPerDegreeLongitude;
+        altitude += retreatDirection.y * selectedRetreatMeters;
         ClampToPlayableMap(ref latitude, ref longitude);
 
         worldPosition = lastSafeWorldPosition + new Vector3(
@@ -1129,6 +1277,26 @@ public class MAVLinkReceiver : MonoBehaviour
             (float)(altitude - lastSafeAlt),
             (float)((latitude - lastSafeLat) * metersPerDegreeLatitude)
         );
+    }
+
+    bool OverlapsGeneratedBuilding(Vector3 worldPosition, float radius)
+    {
+        Collider[] overlaps = Physics.OverlapSphere(
+            worldPosition,
+            Mathf.Max(0.1f, radius),
+            buildingCollisionLayers,
+            QueryTriggerInteraction.Ignore
+        );
+
+        for (int index = 0; index < overlaps.Length; index++)
+        {
+            if (IsGeneratedBuildingCollider(overlaps[index]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     bool SendGuidedHoldPosition(
@@ -1143,6 +1311,23 @@ public class MAVLinkReceiver : MonoBehaviour
             !IsFinite(relativeAltitude))
         {
             return false;
+        }
+
+        // A BRAKE mode survives a boundary/collider contact and ignores new
+        // reposition requests. Restore GUIDED first, then replace the unsafe
+        // destination with the nearby safe hold. The packets are sent in that
+        // order on the same MAVLink link.
+        if (restoreGuidedModeAfterSafetyHold && hbArmed && hbCustomMode == 17u)
+        {
+            if (!SendGuidedMode())
+            {
+                return false;
+            }
+
+            Debug.Log(
+                "Safety hold restored GUIDED from BRAKE so QGroundControl " +
+                "can accept the next destination."
+            );
         }
 
         const ushort positionOnlyTypeMask =
@@ -1250,6 +1435,17 @@ public class MAVLinkReceiver : MonoBehaviour
 
     bool SendBrakeMode()
     {
+        return SendFlightMode(17u);
+    }
+
+    bool SendGuidedMode()
+    {
+        // ArduCopter custom mode 4 is GUIDED.
+        return SendFlightMode(4u);
+    }
+
+    bool SendFlightMode(uint customMode)
+    {
         if (txParser == null)
         {
             return false;
@@ -1257,7 +1453,7 @@ public class MAVLinkReceiver : MonoBehaviour
 
         MAVLink.mavlink_set_mode_t setMode =
             new MAVLink.mavlink_set_mode_t(
-                17u,
+                customMode,
                 vehicleSystemId,
                 (byte)MAVLink.MAV_MODE_FLAG.CUSTOM_MODE_ENABLED
             );
@@ -1974,6 +2170,9 @@ public class MAVLinkReceiver : MonoBehaviour
         {
             buildingCollisionTriggered = false;
             buildingGuidedHoldSent = false;
+            buildingCollisionRoot = null;
+            buildingCollisionEscapeWorldDirection = Vector3.zero;
+            lastBlockedMovementWorldDirection = Vector3.zero;
         }
     }
 }

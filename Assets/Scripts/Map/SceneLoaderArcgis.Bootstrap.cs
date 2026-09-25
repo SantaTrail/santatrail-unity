@@ -288,7 +288,10 @@ public partial class SceneLoaderArcgis
                             UseOriginAsCenter = true
                         };
 
-                        Debug.Log("🗺 ArcGIS map extent applied after SDK initialization.");
+                        Debug.Log(
+                            "🗺 ArcGIS local map extent applied after SDK " +
+                            $"initialization: {mapExtentSizeMeters:0}m radius."
+                        );
                         mapExtentCoroutine = null;
                         yield break;
                     }
@@ -860,12 +863,24 @@ public partial class SceneLoaderArcgis
                 pythonProcessCompleted = true;
             }
 
-            if (!arcgisReady &&
+            bool arcGISReadyForGeneration =
                 arcGISConverter != null &&
-                arcGISConverter.IsReady())
+                arcGISConverter.IsReady();
+
+            if (!arcgisReady && arcGISReadyForGeneration)
             {
                 arcgisReady = true;
                 Debug.Log("✅ ArcGIS READY");
+            }
+            else if (arcgisReady && !arcGISReadyForGeneration)
+            {
+                // Readiness can be lost if ArcGIS starts drawing again. Do not
+                // keep a stale ready result because ArcGISLocationComponent
+                // synchronizes with the native map immediately in OnEnable.
+                arcgisReady = false;
+                Debug.LogWarning(
+                    "⚠️ ArcGIS resumed loading; delaying level-object generation."
+                );
             }
 
             bool arcGISProjectionReady =
@@ -876,7 +891,7 @@ public partial class SceneLoaderArcgis
                 CanUseFallbackProjection() &&
                 timer >= Mathf.Max(5f, arcGISStartupGraceSeconds);
             bool projectionReady =
-                arcGISProjectionReady ||
+                arcGISReadyForGeneration ||
                 fallbackProjectionReady;
 
             if (loadingScreen != null)
@@ -918,14 +933,6 @@ public partial class SceneLoaderArcgis
 
             if (jsonReady && projectionReady)
             {
-                if (arcGISProjectionReady && !arcgisReady)
-                {
-                    Debug.Log(
-                        "🗺 ArcGIS projection ready; generating level objects " +
-                        "while the final visible map tiles finish drawing."
-                    );
-                }
-
                 Debug.Log("🚀 ALL READY → Stabilizing...");
 
                 if (loadingScreen != null)
@@ -949,6 +956,22 @@ public partial class SceneLoaderArcgis
                 // Let Unity render the loading-screen update before
                 // running the synchronous generation work.
                 yield return null;
+
+                // The stabilization delay gives ArcGIS another opportunity to
+                // resume drawing. Re-check immediately before any generated
+                // object can add an ArcGISLocationComponent; its OnEnable path
+                // calls native synchronization and is not safe against a
+                // partially initialized or newly invalidated map view.
+                if (!fallbackProjectionReady &&
+                    (arcGISConverter == null || !arcGISConverter.IsReady()))
+                {
+                    arcgisReady = false;
+                    Debug.LogWarning(
+                        "⚠️ ArcGIS readiness changed during stabilization; " +
+                        "waiting for a stable map before generating objects."
+                    );
+                    continue;
+                }
 
                 bool generationSucceeded = false;
                 const int maximumGenerationAttempts = 2;
@@ -1015,6 +1038,9 @@ public partial class SceneLoaderArcgis
                 }
 
                 float readyTimer = 0f;
+                float deliveryReadyTimer = 0f;
+                float nextProlongedMapLogAt =
+                    Mathf.Max(1f, finalLevelReadyTimeoutSeconds);
                 bool mapReady =
                     !waitForArcGISBeforeHidingLoadingScreen ||
                     (arcGISConverter != null && arcGISConverter.IsReady()) ||
@@ -1024,8 +1050,10 @@ public partial class SceneLoaderArcgis
                     deliveryManager == null ||
                     deliveryManager.IsInitializationComplete;
 
-                while ((!mapReady || !deliveryReady) &&
-                       readyTimer < finalLevelReadyTimeoutSeconds)
+                // ArcGIS readiness is a strict gate. Never reveal gameplay
+                // while the visible view is still drawing; a slow connection
+                // should extend the loading screen, not expose an empty map.
+                while (!mapReady || !deliveryReady)
                 {
                     if (arcGISConverter == null)
                     {
@@ -1056,11 +1084,44 @@ public partial class SceneLoaderArcgis
                         deliveryManager == null ||
                         deliveryManager.IsInitializationComplete;
 
+                    if (mapReady && !deliveryReady)
+                    {
+                        deliveryReadyTimer += 0.2f;
+                    }
+                    else
+                    {
+                        deliveryReadyTimer = 0f;
+                    }
+
+                    if (!mapReady && readyTimer >= nextProlongedMapLogAt)
+                    {
+                        Debug.LogWarning(
+                            "⚠️ ArcGIS is still drawing; keeping the loading " +
+                            "screen visible. " +
+                            (arcGISConverter != null
+                                ? arcGISConverter.GetDiagnosticSummary()
+                                : "ArcGISConverter is missing.")
+                        );
+
+                        nextProlongedMapLogAt += 30f;
+                    }
+
+                    // Delivery initialization has its own actionable failure
+                    // state. Bound that wait only after the map is ready.
+                    if (mapReady &&
+                        !deliveryReady &&
+                        deliveryReadyTimer >= finalLevelReadyTimeoutSeconds)
+                    {
+                        break;
+                    }
+
                     if (loadingScreen != null)
                     {
                         string readinessMessage =
                             !mapReady
-                                ? "Finishing ArcGIS map tiles..."
+                                ? readyTimer >= finalLevelReadyTimeoutSeconds
+                                    ? "ArcGIS is still loading map tiles..."
+                                    : "Finishing ArcGIS map tiles..."
                                 : "Preparing delivery targets and minimap...";
                         float readinessProgress =
                             0.88f +
@@ -1135,6 +1196,11 @@ public partial class SceneLoaderArcgis
                     yield return new WaitForEndOfFrame();
                 }
 
+                Debug.Log(
+                    "✅ Final ArcGIS view and delivery systems are fully ready; " +
+                    "hiding the loading screen."
+                );
+
                 if (loadingScreen != null)
                 {
                     loadingScreen.SetProgress(
@@ -1161,6 +1227,10 @@ public partial class SceneLoaderArcgis
                     yield return new WaitForSecondsRealtime(0.25f);
                     loadingScreen.Hide();
                 }
+
+                // ArcGIS has completed the held final view. It may now resume
+                // following the moving drone for normal gameplay streaming.
+                arcGISConverter?.ReleaseReadinessViewHold();
 
                 yield break;
             }

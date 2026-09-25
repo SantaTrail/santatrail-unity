@@ -56,6 +56,8 @@ public class DeliveryScoreManager : MonoBehaviour
     public float maxHoverSpeed = 100f;
     public float maxHeightAboveRoof = 3f;
     public bool showSpawnRadius = true;
+    [Tooltip("Only show the radius ring for the house selected by the guidance ray. Keep this off to show every remaining delivery radius.")]
+    public bool showOnlyGuidanceTargetRing = false;
     [Tooltip("Editor-only debug gizmos. Keep this off to avoid extra colored circles in Scene view.")]
     public bool showDebugGizmos = false;
     public bool logCandidateBuildings = false;
@@ -66,9 +68,20 @@ public class DeliveryScoreManager : MonoBehaviour
     [Header("Delivery Ring")]
     public float deliveryRingVerticalOffset = 0.2f;
     [Range(12, 128)] public int deliveryRingSegments = 48;
-    public float deliveryRingWidth = 0.18f;
+    [Range(0.02f, 0.1f)] public float deliveryRingWidth = 0.1f;
     public Color deliveryRingReadyColor = new Color(0.2f, 1f, 0.3f, 0.9f);
     public Color deliveryRingSearchColor = new Color(1f, 0.9f, 0.2f, 0.9f);
+
+    [Header("World Target Ray")]
+    [Tooltip("Show a vertical light ray above the closest remaining delivery house.")]
+    public bool showWorldTargetRay = true;
+    [Min(1f)] public float worldTargetRayHeight = 45f;
+    [Min(0.05f)] public float worldTargetRayWidth = 1.25f;
+    [Min(0f)] public float worldTargetRayBottomOffset = 0.3f;
+    public Color worldTargetRayColor = new Color(1f, 0.72f, 0.08f, 0.95f);
+    [Range(0f, 1f)] public float worldTargetRayTopAlpha = 0.12f;
+    [Range(0f, 0.5f)] public float worldTargetRayPulseAmount = 0.12f;
+    [Min(0f)] public float worldTargetRayPulseSpeed = 2.5f;
 
     [Header("Delivery Chimney")]
     [Tooltip("Add all chimney prefabs here. Every selected house receives one random chimney.")]
@@ -233,6 +246,69 @@ public class DeliveryScoreManager : MonoBehaviour
     public int TotalTargets => totalTargets;
     public bool IsInitializationComplete => initializationFinished;
     public bool HasInitializedTargets => buildingsInitialized;
+
+    /// <summary>
+    /// Returns the closest remaining delivery point for UI guidance such as the minimap.
+    /// This deliberately exposes position/radius instead of the private target type.
+    /// </summary>
+    public bool TryGetGuidanceTarget(out Vector3 worldPosition, out float targetRadius)
+    {
+        worldPosition = Vector3.zero;
+        targetRadius = Mathf.Max(0.1f, deliveryRadius);
+
+        SpawnedBuildingTarget guidanceTarget = FindGuidanceTarget();
+
+        if (guidanceTarget == null)
+        {
+            return false;
+        }
+
+        worldPosition = GetDeliveryPoint(guidanceTarget);
+        targetRadius = Mathf.Max(0.1f, GetTargetDeliveryRadius(guidanceTarget));
+        return true;
+    }
+
+    SpawnedBuildingTarget FindGuidanceTarget()
+    {
+        if (!buildingsInitialized || activeTargets.Count == 0)
+        {
+            return null;
+        }
+
+        if (currentNearestBuilding != null &&
+            activeTargets.Contains(currentNearestBuilding))
+        {
+            return currentNearestBuilding;
+        }
+
+        Vector3 referencePosition = drone != null ? drone.position : Vector3.zero;
+        SpawnedBuildingTarget guidanceTarget = null;
+        float nearestSqrDistance = float.MaxValue;
+
+        for (int i = 0; i < activeTargets.Count; i++)
+        {
+            SpawnedBuildingTarget candidate = activeTargets[i];
+            if (candidate == null || candidate.root == null)
+            {
+                continue;
+            }
+
+            Vector3 candidatePosition = GetDeliveryPoint(candidate);
+            Vector2 offset = new Vector2(
+                candidatePosition.x - referencePosition.x,
+                candidatePosition.z - referencePosition.z);
+            float sqrDistance = offset.sqrMagnitude;
+
+            if (sqrDistance < nearestSqrDistance)
+            {
+                nearestSqrDistance = sqrDistance;
+                guidanceTarget = candidate;
+            }
+        }
+
+        return guidanceTarget;
+    }
+
     private string latestStatus = "";
     private float statusUntilTime = -1f;
     private int completedDeliveries = 0;
@@ -245,6 +321,9 @@ public class DeliveryScoreManager : MonoBehaviour
     private readonly Dictionary<string, LineRenderer> deliveryRings = new Dictionary<string, LineRenderer>();
     private readonly Dictionary<string, GameObject> deliveryRingObjects = new Dictionary<string, GameObject>();
     private readonly Dictionary<string, GameObject> targetChimneys = new Dictionary<string, GameObject>();
+    private GameObject worldTargetRayObject;
+    private LineRenderer worldTargetRay;
+    private Material worldTargetRayMaterial;
     private Vector3 lastDronePos;
     private Vector3 droneStartPos;
     private bool hasDroneStartPos;
@@ -284,6 +363,14 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         EnsureInitializationStarted();
+    }
+
+    void OnDestroy()
+    {
+        if (worldTargetRayMaterial != null)
+        {
+            Destroy(worldTargetRayMaterial);
+        }
     }
 
     public void EnsureInitializationStarted(bool retryIfFinished = false)
@@ -418,8 +505,11 @@ public class DeliveryScoreManager : MonoBehaviour
         if (drone == null)
         {
             SetAllDeliveryRingsActive(false);
+            SetWorldTargetRayActive(false);
             return;
         }
+
+        UpdateWorldTargetRay();
 
         if (tutorialLockout)
         {
@@ -1339,6 +1429,85 @@ public class DeliveryScoreManager : MonoBehaviour
         UpdateAllDeliveryRings(null);
     }
 
+    void UpdateWorldTargetRay()
+    {
+        if (!showWorldTargetRay ||
+            !TryGetGuidanceTarget(out Vector3 targetPosition, out _))
+        {
+            SetWorldTargetRayActive(false);
+            return;
+        }
+
+        EnsureWorldTargetRay();
+        if (worldTargetRay == null)
+        {
+            return;
+        }
+
+        worldTargetRayObject.SetActive(true);
+
+        float pulse = 1f +
+            Mathf.Sin(Time.unscaledTime * worldTargetRayPulseSpeed) *
+            worldTargetRayPulseAmount;
+        float rayHeight = Mathf.Max(1f, worldTargetRayHeight) * pulse;
+        float rayWidth = Mathf.Max(0.05f, worldTargetRayWidth) * pulse;
+        Vector3 rayStart = targetPosition + Vector3.up * worldTargetRayBottomOffset;
+
+        Color topColor = worldTargetRayColor;
+        topColor.a = Mathf.Clamp01(worldTargetRayTopAlpha);
+
+        worldTargetRay.widthMultiplier = rayWidth;
+        worldTargetRay.startColor = worldTargetRayColor;
+        worldTargetRay.endColor = topColor;
+        worldTargetRay.SetPosition(0, rayStart);
+        worldTargetRay.SetPosition(1, rayStart + Vector3.up * rayHeight);
+    }
+
+    void EnsureWorldTargetRay()
+    {
+        if (worldTargetRay != null)
+        {
+            return;
+        }
+
+        worldTargetRayObject = new GameObject("DeliveryGuidanceRay");
+        worldTargetRayObject.transform.SetParent(transform, false);
+
+        worldTargetRay = worldTargetRayObject.AddComponent<LineRenderer>();
+        worldTargetRay.useWorldSpace = true;
+        worldTargetRay.positionCount = 2;
+        worldTargetRay.alignment = LineAlignment.View;
+        worldTargetRay.textureMode = LineTextureMode.Stretch;
+        worldTargetRay.numCapVertices = 6;
+        worldTargetRay.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        worldTargetRay.receiveShadows = false;
+        worldTargetRay.sortingOrder = 100;
+
+        Shader shader = Shader.Find("Sprites/Default");
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Unlit");
+        }
+        if (shader == null)
+        {
+            shader = Shader.Find("Unlit/Color");
+        }
+
+        if (shader != null)
+        {
+            worldTargetRayMaterial = new Material(shader);
+            worldTargetRay.material = worldTargetRayMaterial;
+        }
+    }
+
+    void SetWorldTargetRayActive(bool active)
+    {
+        if (worldTargetRayObject != null)
+        {
+            worldTargetRayObject.SetActive(active && showWorldTargetRay);
+        }
+    }
+
     void UpdateAllDeliveryRings(SpawnedBuildingTarget deliverableTarget)
     {
         if (!showSpawnRadius)
@@ -1349,11 +1518,29 @@ public class DeliveryScoreManager : MonoBehaviour
 
         RemoveUnusedDeliveryRings();
 
+        SpawnedBuildingTarget guidanceTarget =
+            deliverableTarget != null
+                ? deliverableTarget
+                : FindGuidanceTarget();
+
         for (int i = 0; i < activeTargets.Count; i++)
         {
             SpawnedBuildingTarget target = activeTargets[i];
             if (target == null || target.root == null)
             {
+                continue;
+            }
+
+            if (showOnlyGuidanceTargetRing && target != guidanceTarget)
+            {
+                if (deliveryRingObjects.TryGetValue(
+                        target.key,
+                        out GameObject hiddenRing) &&
+                    hiddenRing != null)
+                {
+                    hiddenRing.SetActive(false);
+                }
+
                 continue;
             }
 
@@ -1371,7 +1558,9 @@ public class DeliveryScoreManager : MonoBehaviour
 
             ring.loop = true;
             ring.useWorldSpace = true;
-            ring.widthMultiplier = deliveryRingWidth;
+            // Keep the radius readable from above without letting a stale,
+            // oversized scene value turn it into an opaque band.
+            ring.widthMultiplier = Mathf.Clamp(deliveryRingWidth, 0.02f, 0.1f);
             ring.positionCount = Mathf.Max(12, deliveryRingSegments);
             ring.startColor = ringColor;
             ring.endColor = ringColor;

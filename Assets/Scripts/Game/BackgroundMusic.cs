@@ -27,6 +27,7 @@ public class BackgroundMusic : MonoBehaviour
 
         instance = this;
         DontDestroyOnLoad(gameObject);
+        SantaTrailAudioSettings.SettingsChanged += ApplyVolume;
         ApplySceneMusic(musicSource.clip, musicVolume, playAutomatically);
     }
 
@@ -51,7 +52,8 @@ public class BackgroundMusic : MonoBehaviour
         musicSource.loop = true;
         musicSource.spatialBlend = 0f;
         musicSource.mute = false;
-        musicSource.volume = Mathf.Clamp01(volume);
+        musicVolume = Mathf.Clamp01(volume);
+        ApplyVolume();
 
         if (shouldPlay && musicSource.clip != null)
         {
@@ -71,10 +73,19 @@ public class BackgroundMusic : MonoBehaviour
         }
     }
 
+    private void ApplyVolume()
+    {
+        if (musicSource != null)
+        {
+            musicSource.volume = musicVolume * SantaTrailAudioSettings.MusicVolume;
+        }
+    }
+
     private void OnDestroy()
     {
         if (instance == this)
         {
+            SantaTrailAudioSettings.SettingsChanged -= ApplyVolume;
             instance = null;
         }
     }

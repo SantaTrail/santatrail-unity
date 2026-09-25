@@ -3101,6 +3101,15 @@ MonoBehaviour:
   missionMarkerSize: {x: 12, y: 12}
   clampMarkersToEdge: 1
   edgePadding: 10
+  showTargetGuidanceRay: 1
+  showTargetGuidanceRing: 1
+  targetGuidanceColor: {r: 1, g: 0.78, b: 0.08, a: 1}
+  targetGuidanceOutlineColor: {r: 0.05, g: 0.04, b: 0.02, a: 0.9}
+  targetGuidanceRayWidth: 3
+  minimumTargetRingSize: 34
+  maximumTargetRingSize: 72
+  targetRingPulseAmount: 0.08
+  targetRingPulseSpeed: 2.5
   missionRefreshInterval: 1
 --- !u!1 &785339296
 GameObject:
@@ -3972,6 +3981,10 @@ PrefabInstance:
       value: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/osm/standard
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
+      propertyPath: enableExtent
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: originPosition.X
       value: 4.964212
       objectReference: {fileID: 0}
@@ -3981,6 +3994,22 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: layers.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
+      propertyPath: extent.ExtentShape
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
+      propertyPath: extent.ShapeDimensions.x
+      value: 350
+      objectReference: {fileID: 0}
+    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
+      propertyPath: extent.ShapeDimensions.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
+      propertyPath: extent.UseOriginAsCenter
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
@@ -4021,7 +4050,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: mapElevation.ElevationSources.Array.data[1].IsEnabled
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: mapElevation.ElevationSources.Array.data[1].AuthenticationType
@@ -4638,6 +4667,7 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   preserveGuidedModeOnBuildingCollision: 1
+  restoreGuidedModeAfterSafetyHold: 1
   buildingCollisionRetreatMeters: 1
   enforceMaximumAltitude: 1
   maximumRelativeAltitudeMeters: 45
@@ -6029,7 +6059,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!114 &1625187251
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -6134,7 +6164,7 @@ Canvas:
   m_AdditionalShaderChannelsFlag: 25
   m_UpdateRectTransformForStandalone: 0
   m_SortingLayerID: 0
-  m_SortingOrder: 0
+  m_SortingOrder: 2000
   m_TargetDisplay: 0
 --- !u!224 &1625187255
 RectTransform:
@@ -6333,6 +6363,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ArcGISConverter
   requiredStableDrawSeconds: 2
+  allowLoadedMapFallback: 0
+  loadedMapFallbackSeconds: 15
 --- !u!4 &1663710038
 Transform:
   m_ObjectHideFlags: 0
@@ -7403,15 +7435,24 @@ MonoBehaviour:
   maxHoverSpeed: 100
   maxHeightAboveRoof: 3
   showSpawnRadius: 1
+  showOnlyGuidanceTargetRing: 0
   showDebugGizmos: 0
   logCandidateBuildings: 0
   logAcceptedBuildingRoots: 0
   verboseDebugLogs: 0
   deliveryRingVerticalOffset: 0.35
   deliveryRingSegments: 62
-  deliveryRingWidth: 0.35
+  deliveryRingWidth: 0.1
   deliveryRingReadyColor: {r: 0.2, g: 1, b: 0.3, a: 0.9}
   deliveryRingSearchColor: {r: 1, g: 0.9, b: 0.2, a: 0.9}
+  showWorldTargetRay: 1
+  worldTargetRayHeight: 45
+  worldTargetRayWidth: 1.25
+  worldTargetRayBottomOffset: 0.3
+  worldTargetRayColor: {r: 1, g: 0.72, b: 0.08, a: 0.95}
+  worldTargetRayTopAlpha: 0.12
+  worldTargetRayPulseAmount: 0.12
+  worldTargetRayPulseSpeed: 2.5
   chimneyPrefabs: []
   chimneyDropPointName: PresentDropPoint
   randomizeChimneyPosition: 1
@@ -7706,7 +7747,7 @@ MonoBehaviour:
   mapOriginLatitude: 52.155719
   mapOriginAltitude: 0
   limitMapExtent: 1
-  mapExtentSizeMeters: 500
+  mapExtentSizeMeters: 350
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
@@ -7714,12 +7755,12 @@ MonoBehaviour:
   waitForDeliveryTargetsBeforeHidingLoadingScreen: 1
   finalLevelReadyTimeoutSeconds: 90
   finalRenderFrameCount: 3
-  allowLocalGpsFallback: 1
+  allowLocalGpsFallback: 0
   arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
-  buildingSpawnRadius: 1000
-  fitDroneBoundaryToGeneratedVillage: 1
+  buildingSpawnRadius: 350
+  fitDroneBoundaryToGeneratedVillage: 0
   droneBoundaryPastLastHouseMeters: 25
   minimumGeneratedVillageBoundaryMeters: 60
   filterBuildingsByDroneDistance: 0
@@ -7734,7 +7775,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1.05
+  osmWallFootprintScale: 1.3
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -7823,7 +7864,7 @@ MonoBehaviour:
   - {fileID: 5917764883595587885, guid: d606c02a095ed03439719ba47e0c3033, type: 3}
   spawnEnvironmentDetail: 1
   spawnEnvironmentTrees: 0
-  spawnEnvironmentBushes: 1
+  spawnEnvironmentBushes: 0
   spawnFieldPatches: 0
   spawnBackgroundTrees: 0
   environmentTreesPerBuildingMin: 1
@@ -7834,8 +7875,8 @@ MonoBehaviour:
   environmentTreeScaleMax: 0.8
   environmentTreeMaximumHeight: 4.5
   fieldTreeChancePerBuilding: 0.18
-  spawnStreetLights: 1
-  spawnStreetLightsAlongRoads: 1
+  spawnStreetLights: 0
+  spawnStreetLightsAlongRoads: 0
   roadsideStreetLightSpacingMeters: 32
   roadsideStreetLightOffsetMeters: 4
   roadsideStreetLightMaximumCount: 40
@@ -7893,7 +7934,7 @@ MonoBehaviour:
   mapOriginLatitude: 52.155719
   mapOriginAltitude: 0
   limitMapExtent: 1
-  mapExtentSizeMeters: 500
+  mapExtentSizeMeters: 350
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
@@ -7901,12 +7942,12 @@ MonoBehaviour:
   waitForDeliveryTargetsBeforeHidingLoadingScreen: 1
   finalLevelReadyTimeoutSeconds: 90
   finalRenderFrameCount: 3
-  allowLocalGpsFallback: 1
+  allowLocalGpsFallback: 0
   arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
-  buildingSpawnRadius: 50000
-  fitDroneBoundaryToGeneratedVillage: 1
+  buildingSpawnRadius: 350
+  fitDroneBoundaryToGeneratedVillage: 0
   droneBoundaryPastLastHouseMeters: 25
   minimumGeneratedVillageBoundaryMeters: 60
   filterBuildingsByDroneDistance: 0
@@ -7921,7 +7962,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1.05
+  osmWallFootprintScale: 1.3
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -8008,9 +8049,9 @@ MonoBehaviour:
   - {fileID: 5917764883595587885, guid: 1c5940ef19fcfe8459baeb233edc1583, type: 3}
   - {fileID: 5917764883595587885, guid: 28a975aa8310cae41add1e09a208bd6e, type: 3}
   - {fileID: 5917764883595587885, guid: d606c02a095ed03439719ba47e0c3033, type: 3}
-  spawnEnvironmentDetail: 1
+  spawnEnvironmentDetail: 0
   spawnEnvironmentTrees: 0
-  spawnEnvironmentBushes: 1
+  spawnEnvironmentBushes: 0
   spawnFieldPatches: 0
   spawnBackgroundTrees: 0
   environmentTreesPerBuildingMin: 1
@@ -8021,8 +8062,8 @@ MonoBehaviour:
   environmentTreeScaleMax: 0.8
   environmentTreeMaximumHeight: 4.5
   fieldTreeChancePerBuilding: 0.18
-  spawnStreetLights: 1
-  spawnStreetLightsAlongRoads: 1
+  spawnStreetLights: 0
+  spawnStreetLightsAlongRoads: 0
   roadsideStreetLightSpacingMeters: 32
   roadsideStreetLightOffsetMeters: 4
   roadsideStreetLightMaximumCount: 40
@@ -8096,7 +8137,7 @@ MonoBehaviour:
   roofStyle: 0
   slopedRoofHeight: 2.2
   roofVerticalOffset: 0.05
-  roofOverhang: 0.5
+  roofOverhang: 0
   createRoofEdge: 1
   roofEdgeHeight: 0.12
   roofEdgeInset: 0.1
@@ -9570,7 +9611,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 1}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -232.4, y: -113}
+  m_AnchoredPosition: {x: -232.4, y: -152}
   m_SizeDelta: {x: 224, y: 40}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &2113456702

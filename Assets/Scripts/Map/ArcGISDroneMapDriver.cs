@@ -8,11 +8,27 @@ using UnityEngine;
 /// </summary>
 public class ArcGISDroneMapDriver : MonoBehaviour
 {
+    [Header("Streaming Performance")]
+    [Range(0.1f, 1f)]
+    [SerializeField] float qualityScalingFactor = 0.65f;
+    [Min(0.05f)]
+    [SerializeField] float minimumPositionChangeMeters = 1f;
+    [Min(0.05f)]
+    [SerializeField] float minimumRotationChangeDegrees = 1f;
+
     Camera sourceCamera;
     Camera driverCamera;
     HPTransform sourceHighPrecisionTransform;
     HPTransform driverHighPrecisionTransform;
     ArcGISCameraComponent arcGisCamera;
+    Vector3 lastSyncedSourcePosition;
+    Quaternion lastSyncedSourceRotation;
+    float lastSyncedFieldOfView;
+    float lastSyncedAspect;
+    int lastSyncedPixelWidth;
+    int lastSyncedPixelHeight;
+    bool hasSyncedSourceState;
+    bool holdCurrentViewForReadiness;
 
     public ArcGISCameraComponent ArcGisCamera => arcGisCamera;
 
@@ -38,17 +54,36 @@ public class ArcGISDroneMapDriver : MonoBehaviour
         {
             arcGisCamera.UpdateClippingPlanes = false;
             arcGisCamera.UseCameraViewportProperties = false;
+            arcGisCamera.qualityScalingFactor = Mathf.Clamp(
+                qualityScalingFactor,
+                0.1f,
+                1f
+            );
         }
 
-        SyncFromSource();
+        SyncFromSource(force: true);
     }
 
     void LateUpdate()
     {
-        SyncFromSource();
+        SyncFromSource(force: false);
     }
 
-    void SyncFromSource()
+    public void HoldCurrentViewForReadiness()
+    {
+        // Capture the final loading camera once, then stop tiny telemetry or
+        // smoothing changes from restarting ArcGIS tile drawing every frame.
+        holdCurrentViewForReadiness = false;
+        SyncFromSource(force: true);
+        holdCurrentViewForReadiness = true;
+    }
+
+    public void ReleaseReadinessHold()
+    {
+        holdCurrentViewForReadiness = false;
+    }
+
+    void SyncFromSource(bool force)
     {
         if (sourceCamera == null ||
             driverCamera == null ||
@@ -58,16 +93,42 @@ public class ArcGISDroneMapDriver : MonoBehaviour
             return;
         }
 
+        if (holdCurrentViewForReadiness && !force)
+        {
+            return;
+        }
+
+        Vector3 sourcePosition = sourceCamera.transform.position;
+        Quaternion sourceRotation = sourceCamera.transform.rotation;
+        bool poseChanged =
+            force ||
+            !hasSyncedSourceState ||
+            (sourcePosition - lastSyncedSourcePosition).sqrMagnitude >=
+                minimumPositionChangeMeters * minimumPositionChangeMeters ||
+            Quaternion.Angle(sourceRotation, lastSyncedSourceRotation) >=
+                minimumRotationChangeDegrees;
+
+        bool viewportChanged =
+            force ||
+            !hasSyncedSourceState ||
+            !Mathf.Approximately(
+                sourceCamera.fieldOfView,
+                lastSyncedFieldOfView
+            ) ||
+            !Mathf.Approximately(sourceCamera.aspect, lastSyncedAspect) ||
+            sourceCamera.pixelWidth != lastSyncedPixelWidth ||
+            sourceCamera.pixelHeight != lastSyncedPixelHeight;
+
         sourceHighPrecisionTransform ??= sourceCamera.GetComponent<HPTransform>();
 
-        if (sourceHighPrecisionTransform != null)
+        if (poseChanged && sourceHighPrecisionTransform != null)
         {
             driverHighPrecisionTransform.UniversePosition =
                 sourceHighPrecisionTransform.UniversePosition;
             driverHighPrecisionTransform.UniverseRotation =
                 sourceHighPrecisionTransform.UniverseRotation;
         }
-        else
+        else if (poseChanged)
         {
             driverCamera.transform.SetPositionAndRotation(
                 sourceCamera.transform.position,
@@ -75,15 +136,31 @@ public class ArcGISDroneMapDriver : MonoBehaviour
             );
         }
 
-        driverCamera.fieldOfView = sourceCamera.fieldOfView;
-        driverCamera.aspect = sourceCamera.aspect;
-        arcGisCamera.verticalFov = sourceCamera.fieldOfView;
-        arcGisCamera.horizontalFov = CalculateHorizontalFov(
-            sourceCamera.fieldOfView,
-            sourceCamera.aspect
-        );
-        arcGisCamera.viewportSizeX = (uint)Mathf.Max(1, sourceCamera.pixelWidth);
-        arcGisCamera.viewportSizeY = (uint)Mathf.Max(1, sourceCamera.pixelHeight);
+        if (viewportChanged)
+        {
+            driverCamera.fieldOfView = sourceCamera.fieldOfView;
+            driverCamera.aspect = sourceCamera.aspect;
+            arcGisCamera.verticalFov = sourceCamera.fieldOfView;
+            arcGisCamera.horizontalFov = CalculateHorizontalFov(
+                sourceCamera.fieldOfView,
+                sourceCamera.aspect
+            );
+            arcGisCamera.viewportSizeX =
+                (uint)Mathf.Max(1, sourceCamera.pixelWidth);
+            arcGisCamera.viewportSizeY =
+                (uint)Mathf.Max(1, sourceCamera.pixelHeight);
+        }
+
+        if (poseChanged || viewportChanged)
+        {
+            lastSyncedSourcePosition = sourcePosition;
+            lastSyncedSourceRotation = sourceRotation;
+            lastSyncedFieldOfView = sourceCamera.fieldOfView;
+            lastSyncedAspect = sourceCamera.aspect;
+            lastSyncedPixelWidth = sourceCamera.pixelWidth;
+            lastSyncedPixelHeight = sourceCamera.pixelHeight;
+            hasSyncedSourceState = true;
+        }
     }
 
     static float CalculateHorizontalFov(float verticalFov, float aspect)
