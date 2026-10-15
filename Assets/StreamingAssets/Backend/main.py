@@ -1,4 +1,6 @@
 import json
+import math
+import os
 import random
 import sys
 
@@ -20,12 +22,67 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--custom-location", type=str, default=None)
 parser.add_argument("--radius-meters", type=float, default=500.0)
+parser.add_argument("--output-path", type=str, default=None)
 args = parser.parse_args()
 
 SCHEMA_VERSION = 2
 META_FILE_NAME = "level.meta.json"
 GEOMETRY_FILE_NAME = "level.geometry.json"
 LEGACY_OUTPUT_FILE_NAME = "output.json"
+
+
+def write_json_atomic(path, value):
+    """Publish complete JSON without exposing a partially written file."""
+    temporary_path = f"{path}.tmp.{os.getpid()}"
+
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as output_file:
+            json.dump(value, output_file)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+
+
+def can_reuse_building_cache(path, current_waypoints, radius_meters):
+    """Only retain a valid, non-empty cache for the same launch location."""
+    if not os.path.exists(path) or not current_waypoints:
+        return False
+
+    try:
+        with open(path, "r", encoding="utf-8") as cache_file:
+            cached = json.load(cache_file)
+
+        cached_waypoints = cached.get("waypoints")
+        cached_buildings = cached.get("buildings")
+        cached_elevation = cached.get("elevation_data")
+
+        if not cached_waypoints or not cached_buildings or not cached_elevation:
+            return False
+
+        cached_origin = cached_waypoints[0]
+        current_origin = current_waypoints[0]
+        current_latitude = float(current_origin["lat"])
+        latitude_delta = (
+            float(cached_origin["lat"]) - current_latitude
+        ) * 111320.0
+        longitude_delta = (
+            float(cached_origin["lon"]) - float(current_origin["lon"])
+        ) * 111320.0 * math.cos(math.radians(current_latitude))
+        distance_meters = math.hypot(latitude_delta, longitude_delta)
+
+        # A cache hundreds of metres away can cover a substantially different
+        # set of buildings even when both points fit inside the query radius.
+        location_tolerance_meters = min(
+            25.0,
+            max(5.0, float(radius_meters) * 0.05)
+        )
+        return distance_meters <= location_tolerance_meters
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return False
 
 def get_random_location():
     import random
@@ -136,6 +193,9 @@ def run(plan_path):
     bbox = create_bbox(waypoints, margin_meters=args.radius_meters)
 
     osm_data = query_osm(bbox)
+    osm_query_succeeded = osm_data is not None
+    if osm_data is None:
+        osm_data = {"elements": []}
     elevation_grid = generate_elevation_grid_fast(bbox, grid_size=25)
 
     features = compute_features(osm_data, elevation_grid, bbox)
@@ -201,27 +261,35 @@ def run(plan_path):
     result = dict(meta)
     result.update(geometry)
 
-    return meta, geometry, result
+    return meta, geometry, result, osm_query_succeeded
 
 
 if __name__ == "__main__":
-    import os
-
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(BASE_DIR, exist_ok=True)
 
     plan_path = os.path.join(BASE_DIR, "auto.plan")
-    output_path = os.path.join(BASE_DIR, LEGACY_OUTPUT_FILE_NAME)
+    output_path = (
+        os.path.abspath(args.output_path)
+        if args.output_path
+        else os.path.join(BASE_DIR, LEGACY_OUTPUT_FILE_NAME)
+    )
+    output_directory = os.path.dirname(output_path)
+    os.makedirs(output_directory, exist_ok=True)
 
-    if os.path.exists(output_path):
-        os.remove(output_path)
-
-    meta_path = os.path.join(BASE_DIR, META_FILE_NAME)
-    geometry_path = os.path.join(BASE_DIR, GEOMETRY_FILE_NAME)
-
-    for path in (meta_path, geometry_path):
-        if os.path.exists(path):
-            os.remove(path)
+    if args.output_path:
+        output_stem = os.path.splitext(os.path.basename(output_path))[0]
+        meta_path = os.path.join(
+            output_directory,
+            f"{output_stem}.meta.json"
+        )
+        geometry_path = os.path.join(
+            output_directory,
+            f"{output_stem}.geometry.json"
+        )
+    else:
+        meta_path = os.path.join(BASE_DIR, META_FILE_NAME)
+        geometry_path = os.path.join(BASE_DIR, GEOMETRY_FILE_NAME)
 
     print("🛠 Generating SITL-aligned plan...")
     generate_sitl_plan(plan_path)
@@ -232,16 +300,27 @@ if __name__ == "__main__":
 
     print("✅ PLAN CREATED")
 
-    meta, geometry, result = run(plan_path)
+    meta, geometry, result, osm_query_succeeded = run(plan_path)
 
-    with open(meta_path, "w") as f:
-        json.dump(meta, f)
+    if (
+        (not osm_query_succeeded or not result.get("buildings"))
+        and can_reuse_building_cache(
+            output_path,
+            result["waypoints"],
+            args.radius_meters
+        )
+    ):
+        print(
+            "✅ OSM refresh returned no usable building footprints; "
+            "preserving the last successful building cache"
+        )
+        sys.exit(0)
 
-    with open(geometry_path, "w") as f:
-        json.dump(geometry, f)
-
-    with open(output_path, "w") as f:
-        json.dump(result, f)
+    # Metadata and geometry are committed first. output.json is the readiness
+    # marker observed by Unity, so publish it last and only as an atomic rename.
+    write_json_atomic(meta_path, meta)
+    write_json_atomic(geometry_path, geometry)
+    write_json_atomic(output_path, result)
 
     print(f"📁 Writing output to: {output_path}")
     print(f"📁 Writing metadata to: {meta_path}")

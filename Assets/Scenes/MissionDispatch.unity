@@ -970,11 +970,11 @@ MonoBehaviour:
     homeLongitude: 4.964212
     homeAltitude: 0
     homeYaw: 0
-  - label: Level 2 - Demo
-    sceneName: DroneSimulateDemo
-    homeLatitude: 13.8455
-    homeLongitude: 100.5688
-    homeAltitude: 10
+  - label: Level 2 - Charvin Christmas Village
+    sceneName: LV2
+    homeLatitude: 45.7975
+    homeLongitude: 6.3636
+    homeAltitude: 930
     homeYaw: 0
   - label: Level 3 - Sandbox
     sceneName: SampleScene

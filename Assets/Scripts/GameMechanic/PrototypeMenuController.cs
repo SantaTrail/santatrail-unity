@@ -29,7 +29,7 @@ public class PrototypeMenuController : MonoBehaviour
     public List<LevelEntry> levels = new List<LevelEntry>
     {
         new LevelEntry { label = "Level 1 - Guided Tutorial", sceneName = "LV1", homeLatitude = 52.155719, homeLongitude = 4.964212, homeAltitude = 0, homeYaw = 0 },
-        new LevelEntry { label = "Level 2 - Demo", sceneName = "DroneSimulateDemo", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 },
+        new LevelEntry { label = "Level 2 - Charvin Christmas Village", sceneName = "LV2", homeLatitude = 45.79619316475242, homeLongitude = 6.370749299289542, homeAltitude = 930, homeYaw = 0, missionDifficulty = MissionDifficulty.Medium, deliveryCount = 5, showTutorial = false },
         new LevelEntry { label = "Level 3 - Sandbox", sceneName = "SampleScene", homeLatitude = 13.8455, homeLongitude = 100.5688, homeAltitude = 10, homeYaw = 0 }
     };
 

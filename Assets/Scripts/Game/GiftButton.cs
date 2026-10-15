@@ -11,6 +11,12 @@ public class GiftButton : MonoBehaviour
     private ToyData toy;
     private SantaLetterGameManager santaLetterGameManager;
 
+    /// <summary>
+    /// The choice currently represented by this button. The first-run guide
+    /// uses this to point at the correct present after the choices are shuffled.
+    /// </summary>
+    public ToyData AssignedToy => toy;
+
     //-------------------------------------------------
 
     // public void Setup(

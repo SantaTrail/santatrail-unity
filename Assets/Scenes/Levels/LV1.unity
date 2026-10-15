@@ -626,7 +626,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 4
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -1073,19 +1073,26 @@ MonoBehaviour:
   completedMessage: Nice work! You finished the guided-flight tutorial.
   presentProgressUI: {fileID: 2113456702}
   showTutorial: 1
-  welcomeMessage: Welcome! First, open QGroundControl and make sure the drone is
-    connected.
-  mapModeMessage: QGroundControl opens in Satellite map mode automatically. Use the
-    map to locate the drone and delivery area.
-  findTargetMessage: Change the flight mode to Guided so the drone accepts the tutorial
-    controls.
-  approachMessage: Use Guided takeoff and climb to a safe height.
-  holdPositionMessage: Now try to gently control the drone and hold a steady position.
-  transitionMessage: Great. Now you can try the first delivery target.
+  welcomeMessage: "Welcome! Connect to the drone in QGroundControl. I\u2019ll guide
+    you through the first flight."
+  mapModeMessage: In QGroundControl, open Application Settings > Maps and set Type
+    to Street Map. If it already shows Street Map, the tutorial will continue automatically.
+  findTargetMessage: "Open the flight-mode menu in QGC Fly View. If Guided isn\u2019t
+    listed, enable Edit Displayed Flight Modes and add it with Configure. Then select
+    Guided."
+  approachMessage: Choose Guided mode and Takeoff in QGroundControl and enter 12
+    m as the target altitude.
+  holdPositionMessage: Move the drone a short distance, then release the controls
+    and let it hover.
+  transitionMessage: Tutorial complete! Delivery targets are unlocked. Follow the
+    highlighted house to make your first delivery.
+  struggleHintMessage: Need a hand? Stay around 12 m while traveling. Above the highlighted
+    house, descend to no more than 3 m above the roof and hover to deliver.
   connectionHoldSeconds: 8
   mapModeDisplaySeconds: 4
   takeoffAltitudeMeters: 1.5
   controlMovementMeters: 2
+  struggleHintDelaySeconds: 30
   autoLoadNextScene: 0
   nextSceneName: 
   nextSceneDelaySeconds: 2
@@ -1507,7 +1514,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 4
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -2960,7 +2967,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 4
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -3108,6 +3115,7 @@ MonoBehaviour:
   targetGuidanceRayWidth: 3
   minimumTargetRingSize: 34
   maximumTargetRingSize: 72
+  offscreenTargetArrowSize: 30
   targetRingPulseAmount: 0.08
   targetRingPulseSpeed: 2.5
   missionRefreshInterval: 1
@@ -3779,7 +3787,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!114 &908455141
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -6479,7 +6487,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 4
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -7237,7 +7245,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 4
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -7513,8 +7521,8 @@ MonoBehaviour:
   level1RequiredDeliveries: 5
   tutorialLockout: 0
   showDeliveryRingsDuringTutorial: 1
-  altitudeDisciplineMinimumMeters: 20
-  altitudeDisciplineMaximumMeters: 45
+  altitudeDisciplineMinimumMeters: 10
+  altitudeDisciplineMaximumMeters: 15
   score: 0
 --- !u!1 &1901079121
 GameObject:
@@ -9282,7 +9290,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 4
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0

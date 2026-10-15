@@ -1,9 +1,8 @@
 import socket
 import struct
 import subprocess
-import numpy as np
-import cv2
 import time
+import signal
 
 UDP_IP = "0.0.0.0"
 UDP_PORT = 5005
@@ -14,20 +13,27 @@ FRAME_SIZE = WIDTH * HEIGHT * 3
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind((UDP_IP, UDP_PORT))
+sock.settimeout(0.5)
 
 ffmpeg = subprocess.Popen([
     'ffmpeg',
+
+    '-loglevel', 'error',
+    '-nostats',
 
     '-fflags', 'nobuffer',
     '-flags', 'low_delay',
 
     '-f', 'rawvideo',
-    '-pix_fmt', 'bgr24',
+    '-pix_fmt', 'rgb24',
     '-s', f'{WIDTH}x{HEIGHT}',
     '-r', '20',
     '-i', 'pipe:0',
 
     '-an',
+
+    # Unity sends RGB24 pixels with the image upside down for the QGC view.
+    '-vf', 'vflip',
 
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
@@ -57,8 +63,17 @@ ffmpeg = subprocess.Popen([
 print("Listening for chunked frames...")
 
 frames = {}
+running = True
+last_encoded_at = 0.0
 
-while True:
+def stop_bridge(_signal, _frame):
+    global running
+    running = False
+
+signal.signal(signal.SIGTERM, stop_bridge)
+signal.signal(signal.SIGINT, stop_bridge)
+
+while running:
     try:
         data, _ = sock.recvfrom(65536)
 
@@ -82,20 +97,12 @@ while True:
             full_data = b''.join(chunks[i] for i in range(total_chunks))
 
             if len(full_data) == FRAME_SIZE:
-                frame = np.frombuffer(full_data, dtype=np.uint8).reshape((HEIGHT, WIDTH, 3))
-
-                # FIX orientation
-                frame = np.flipud(frame)
-
-                # RGB → BGR
-                frame = frame[:, :, ::-1]
-
-                # 🔍 Preview
-                cv2.imshow("Video", frame)
-                cv2.waitKey(1)
-
-                # Send to FFmpeg
-                ffmpeg.stdin.write(frame.tobytes())
+                # Unity already sends tightly packed RGB24; FFmpeg flips and
+                # encodes it directly, so this bridge needs only Python stdlib.
+                frame_time = time.monotonic()
+                if frame_time - last_encoded_at >= 1.0 / 20.0:
+                    ffmpeg.stdin.write(full_data)
+                    last_encoded_at = frame_time
             else:
                 print("Frame size mismatch")
 
@@ -107,5 +114,14 @@ while True:
             if now - frames[fid]["time"] > 1:
                 del frames[fid]
 
+    except socket.timeout:
+        continue
     except Exception as e:
         print("Error:", e)
+
+sock.close()
+try:
+    ffmpeg.stdin.close()
+    ffmpeg.wait(timeout=3)
+except Exception:
+    ffmpeg.kill()

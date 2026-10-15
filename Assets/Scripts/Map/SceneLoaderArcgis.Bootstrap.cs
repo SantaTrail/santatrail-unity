@@ -866,32 +866,34 @@ public partial class SceneLoaderArcgis
             bool arcGISReadyForGeneration =
                 arcGISConverter != null &&
                 arcGISConverter.IsReady();
+            bool arcGISProjectionReady =
+                arcGISConverter != null &&
+                arcGISConverter.CanProjectCoordinates();
 
             if (!arcgisReady && arcGISReadyForGeneration)
             {
                 arcgisReady = true;
                 Debug.Log("✅ ArcGIS READY");
             }
-            else if (arcgisReady && !arcGISReadyForGeneration)
+            else if (arcgisReady && !arcGISProjectionReady)
             {
-                // Readiness can be lost if ArcGIS starts drawing again. Do not
-                // keep a stale ready result because ArcGISLocationComponent
-                // synchronizes with the native map immediately in OnEnable.
+                // Keep the first stable-map result while ArcGIS streams more
+                // tiles. Revoke it only if the loaded map or geographic
+                // projection itself becomes unavailable.
                 arcgisReady = false;
                 Debug.LogWarning(
-                    "⚠️ ArcGIS resumed loading; delaying level-object generation."
+                    "⚠️ ArcGIS map projection became unavailable; " +
+                    "delaying level-object generation."
                 );
             }
 
-            bool arcGISProjectionReady =
-                arcGISConverter != null &&
-                arcGISConverter.CanProjectCoordinates();
             bool fallbackProjectionReady =
                 !arcGISProjectionReady &&
                 CanUseFallbackProjection() &&
                 timer >= Mathf.Max(5f, arcGISStartupGraceSeconds);
             bool projectionReady =
                 arcGISReadyForGeneration ||
+                (arcgisReady && arcGISProjectionReady) ||
                 fallbackProjectionReady;
 
             if (loadingScreen != null)
@@ -957,18 +959,18 @@ public partial class SceneLoaderArcgis
                 // running the synchronous generation work.
                 yield return null;
 
-                // The stabilization delay gives ArcGIS another opportunity to
-                // resume drawing. Re-check immediately before any generated
-                // object can add an ArcGISLocationComponent; its OnEnable path
-                // calls native synchronization and is not safe against a
-                // partially initialized or newly invalidated map view.
+                // Re-check map content and coordinate conversion immediately
+                // before generated ArcGISLocationComponents synchronize with
+                // the native map. DrawStatus may return to InProgress while
+                // tiles stream, even though the loaded map remains usable.
                 if (!fallbackProjectionReady &&
-                    (arcGISConverter == null || !arcGISConverter.IsReady()))
+                    (arcGISConverter == null ||
+                     !arcGISConverter.CanProjectCoordinates()))
                 {
                     arcgisReady = false;
                     Debug.LogWarning(
-                        "⚠️ ArcGIS readiness changed during stabilization; " +
-                        "waiting for a stable map before generating objects."
+                        "⚠️ ArcGIS projection became unavailable during " +
+                        "stabilization; waiting before generating objects."
                     );
                     continue;
                 }
@@ -1043,16 +1045,20 @@ public partial class SceneLoaderArcgis
                     Mathf.Max(1f, finalLevelReadyTimeoutSeconds);
                 bool mapReady =
                     !waitForArcGISBeforeHidingLoadingScreen ||
-                    (arcGISConverter != null && arcGISConverter.IsReady()) ||
+                    (arcGISConverter != null &&
+                     (arcGISConverter.IsReady() ||
+                      (arcgisReady &&
+                       arcGISConverter.CanProjectCoordinates()))) ||
                     localTerrainFallbackActive;
                 bool deliveryReady =
                     !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
                     deliveryManager == null ||
                     deliveryManager.IsInitializationComplete;
 
-                // ArcGIS readiness is a strict gate. Never reveal gameplay
-                // while the visible view is still drawing; a slow connection
-                // should extend the loading screen, not expose an empty map.
+                // A completed visible draw must have been observed before
+                // generation. After that, keep the gate satisfied while the
+                // loaded map remains projectable; background tile refinement
+                // should not hold an otherwise usable level on this screen.
                 while (!mapReady || !deliveryReady)
                 {
                     if (arcGISConverter == null)
@@ -1077,7 +1083,10 @@ public partial class SceneLoaderArcgis
 
                     mapReady =
                         !waitForArcGISBeforeHidingLoadingScreen ||
-                        (arcGISConverter != null && arcGISConverter.IsReady()) ||
+                        (arcGISConverter != null &&
+                         (arcGISConverter.IsReady() ||
+                          (arcgisReady &&
+                           arcGISConverter.CanProjectCoordinates()))) ||
                         localTerrainFallbackActive;
                     deliveryReady =
                         !waitForDeliveryTargetsBeforeHidingLoadingScreen ||

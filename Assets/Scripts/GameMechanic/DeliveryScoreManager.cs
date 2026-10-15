@@ -215,8 +215,8 @@ public class DeliveryScoreManager : MonoBehaviour
     public bool showDeliveryRingsDuringTutorial = true;
 
     [Header("Altitude Discipline")]
-    [Min(0f)] public float altitudeDisciplineMinimumMeters = 20f;
-    [Min(0f)] public float altitudeDisciplineMaximumMeters = 45f;
+    [Min(0f)] public float altitudeDisciplineMinimumMeters = 10f;
+    [Min(0f)] public float altitudeDisciplineMaximumMeters = 15f;
 
     public int score = 0;
     private bool buildingsInitialized = false;
@@ -311,6 +311,7 @@ public class DeliveryScoreManager : MonoBehaviour
 
     private string latestStatus = "";
     private float statusUntilTime = -1f;
+    private bool deliveryStatusSuppressed;
     private int completedDeliveries = 0;
     private bool level1Completed = false;
     private bool completionSavedThisSession = false;
@@ -594,6 +595,12 @@ public class DeliveryScoreManager : MonoBehaviour
 
     void SetDeliveryStatus(string message, float durationSeconds = -1f)
     {
+        if (deliveryStatusSuppressed)
+        {
+            ClearDeliveryStatus();
+            return;
+        }
+
         TextMeshProUGUI text = GetDeliveryStatusText();
         latestStatus = string.IsNullOrEmpty(message) ? "" : message;
 
@@ -616,6 +623,16 @@ public class DeliveryScoreManager : MonoBehaviour
         if (text != null)
         {
             text.text = "";
+        }
+    }
+
+    public void SetDeliveryStatusSuppressed(bool suppressed)
+    {
+        deliveryStatusSuppressed = suppressed;
+
+        if (deliveryStatusSuppressed)
+        {
+            ClearDeliveryStatus();
         }
     }
 

@@ -28,6 +28,39 @@ public class SantaLetterGameManager : MonoBehaviour
 
     public bool HasActiveDelivery => currentChild != null;
 
+    /// <summary>
+    /// Finds the shuffled gift button that matches the current child's wish.
+    /// This keeps tutorial code independent of the random button order.
+    /// </summary>
+    public bool TryGetCorrectGiftButton(out GiftButton correctButton)
+    {
+        correctButton = null;
+
+        if (currentChild == null ||
+            currentChild.targetToy == null ||
+            giftButtons == null)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < giftButtons.Length; index++)
+        {
+            GiftButton giftButton = giftButtons[index];
+            ToyData choice = giftButton != null
+                ? giftButton.AssignedToy
+                : null;
+
+            if (choice != null &&
+                choice.id == currentChild.targetToy.id)
+            {
+                correctButton = giftButton;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private int wrongAttempts = 0;
     private int totalDeliveries;
 

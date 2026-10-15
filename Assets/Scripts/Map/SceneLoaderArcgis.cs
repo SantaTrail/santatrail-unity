@@ -9,6 +9,7 @@ using Esri.ArcGISMapsSDK.Components;
 using Esri.ArcGISMapsSDK.Utils;
 using Esri.ArcGISMapsSDK.Utils.GeoCoord;
 using Esri.GameEngine.Geometry;
+using Esri.GameEngine.Elevation;
 using Esri.GameEngine.Map;
 using Unity.Mathematics;
 
@@ -3517,8 +3518,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         forward.Normalize();
 
         Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
-        int count = 8;
-        float radius = Mathf.Clamp(scale * 0.015f, 5f, 14f);
+        // Keep the fallback village compact enough for one delivery route,
+        // but spread the houses over the real hillside so ArcGIS can drape
+        // each one onto a different ground elevation.
+        int count = 4;
+        float radius = Mathf.Clamp(buildingSpawnRadius * 0.45f, 70f, 130f);
         float angleStep = 360f / Mathf.Max(1, count);
 
         Transform clusterParent = GetGeneratedBuildingsRoot();
@@ -3528,9 +3532,18 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             clusterRoot.transform.SetParent(clusterParent, false);
         }
 
-        if (arcGISConverter != null &&
+        double anchorLatitude = 0;
+        double anchorLongitude = 0;
+        bool hasGeoAnchor =
+            arcGISConverter != null &&
             arcGISConverter.CanProjectCoordinates() &&
-            TryGetVisibleVillageGeoAnchor(result, out double anchorLatitude, out double anchorLongitude))
+            TryGetVisibleVillageGeoAnchor(
+                result,
+                out anchorLatitude,
+                out anchorLongitude
+            );
+
+        if (hasGeoAnchor)
         {
             AddConfiguredArcGISLocation(
                 clusterRoot,
@@ -3561,16 +3574,22 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             );
         }
 
-        float heroWidth = radius * 1.05f;
-        float heroDepth = radius * 0.85f;
-        float heroScale = 1.5f;
+        // Keep the lead delivery house at residential scale. The village
+        // radius controls spacing between houses; using it as the house
+        // footprint creates a huge slab instead of a house.
+        float heroWidth = 12f;
+        float heroDepth = 10f;
+        float heroScale = 1f;
         float heroFootprintRadius = CalculateFootprintRadius(
             heroWidth,
             heroDepth,
             heroScale
         );
         Vector3 heroLocalPosition =
-            forward * GetMinimumBuildingCenterDistance(heroFootprintRadius) +
+            forward * Mathf.Max(
+                GetMinimumBuildingCenterDistance(heroFootprintRadius),
+                Mathf.Clamp(buildingSpawnRadius * 0.14f, 35f, 55f)
+            ) +
             Vector3.down * 0.5f;
         float clusterOuterRadiusMeters =
             new Vector2(heroLocalPosition.x, heroLocalPosition.z).magnitude +
@@ -3583,7 +3602,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             heroDepth,
             heroScale,
             count * 1000 + 1,
-            "Hero"
+            "Hero",
+            hasGeoAnchor,
+            anchorLatitude,
+            anchorLongitude
         );
         Debug.Log(
             $"🏠 Hero fallback delivery building spawned at " +
@@ -3598,7 +3620,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
             float distance =
                 UnityEngine.Random.Range(
-                    radius * 0.4f,
+                    radius * 0.62f,
                     radius
                 );
 
@@ -3607,9 +3629,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                  forward * Mathf.Sin(angle * Mathf.Deg2Rad)) *
                 distance;
 
-            float footprintWidth = UnityEngine.Random.Range(4.5f, 9.5f);
-            float footprintDepth = UnityEngine.Random.Range(3.5f, 7.5f);
-            float scaleMultiplier = UnityEngine.Random.Range(0.95f, 1.25f);
+            float footprintWidth = UnityEngine.Random.Range(7f, 11f);
+            float footprintDepth = UnityEngine.Random.Range(5.5f, 9f);
+            float scaleMultiplier = UnityEngine.Random.Range(1f, 1.15f);
             float footprintRadius = CalculateFootprintRadius(
                 footprintWidth,
                 footprintDepth,
@@ -3651,7 +3673,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 footprintDepth,
                 scaleMultiplier,
                 count * 1000 + i + 2,
-                $"Fallback_{i}"
+                $"Fallback_{i}",
+                hasGeoAnchor,
+                anchorLatitude,
+                anchorLongitude
             );
 
             Debug.Log(
@@ -3689,7 +3714,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         float footprintDepth,
         float scaleMultiplier,
         int seed,
-        string label)
+        string label,
+        bool geolocateOnTerrain,
+        double anchorLatitude,
+        double anchorLongitude)
     {
         if (parent == null)
         {
@@ -3715,6 +3743,32 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             Vector3.up
         );
         buildingRoot.transform.localScale = Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
+
+        if (geolocateOnTerrain)
+        {
+            double latitude = anchorLatitude + localPosition.z / 111320.0;
+            double longitudeMetersPerDegree =
+                111320.0 * System.Math.Cos(anchorLatitude * System.Math.PI / 180.0);
+            double longitude = anchorLongitude +
+                localPosition.x / longitudeMetersPerDegree;
+
+            buildingRoot.transform.localPosition = Vector3.zero;
+            float headingDegrees =
+                Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg;
+            AddConfiguredArcGISLocation(
+                buildingRoot,
+                longitude,
+                latitude,
+                0,
+                ArcGISSurfacePlacementMode.OnTheGround,
+                0,
+                new ArcGISRotation(headingDegrees, 0, 0)
+            );
+        }
+        else
+        {
+            buildingRoot.transform.localPosition = localPosition;
+        }
 
         if (modularHouseGenerator != null &&
             buildingGenerationMode != BuildingGenerationMode.CompletePrefab)
@@ -5485,10 +5539,16 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         if (droneLocation != null &&
             droneLocation.GetComponentInParent<ArcGISMapComponent>() != null)
         {
+            // Keep the drone terrain-relative while it is parked at spawn.
+            // The ArcGIS Location component tracks elevation as terrain LODs
+            // load, so the drone follows the same hillside as the rendered map.
+            droneLocation.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.RelativeToGround;
+            droneLocation.SurfacePlacementOffset = 1.5;
             droneLocation.Position = new ArcGISPoint(
                 wp0.lon,
                 wp0.lat,
-                wp0.alt,
+                0,
                 ArcGISSpatialReference.WGS84()
             );
         }
@@ -5520,6 +5580,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
 
         Debug.Log("🚁 Drone placed over ArcGIS surface");
+
     }
 
     void SetupDroneReference()

@@ -13,6 +13,26 @@ using UnityEngine.UI;
 /// </summary>
 public sealed class MainGameTutorialGuide : MonoBehaviour
 {
+    private struct SelectableState
+    {
+        public bool interactable;
+        public Navigation navigation;
+
+        public SelectableState(Selectable selectable)
+        {
+            interactable = selectable.interactable;
+            navigation = selectable.navigation;
+        }
+    }
+
+    private enum GuidedAction
+    {
+        None,
+        OpenLetter,
+        SelectCorrectGift,
+        PackPresent
+    }
+
     [System.Serializable]
     public sealed class TutorialStep
     {
@@ -79,7 +99,19 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
     private TMP_Text stepText;
     private Button previousButton;
     private Button nextButton;
+    private Button skipButton;
     private TMP_Text nextButtonText;
+    private readonly Dictionary<Selectable, SelectableState>
+        sceneSelectableStates =
+            new Dictionary<Selectable, SelectableState>();
+    private readonly TutorialStep guidedLayoutStep =
+        new TutorialStep("", "");
+    private Image[] inputBlockers;
+    private Button requiredButton;
+    private RectTransform guidedTarget;
+    private GuidedAction guidedAction;
+    private bool isGuidedActionMode;
+    private bool isMainPageTourMode;
     private string sceneName;
     private int pageIndex;
     private bool hasQueuedScene;
@@ -87,11 +119,14 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
     {
-        Scene activeScene = SceneManager.GetActiveScene();
-        if (!IsTutorialScene(activeScene.name))
-        {
-            return;
-        }
+        SceneManager.sceneLoaded -= EnsureTutorialForLoadedScene;
+        SceneManager.sceneLoaded += EnsureTutorialForLoadedScene;
+        EnsureTutorialForLoadedScene(SceneManager.GetActiveScene(), LoadSceneMode.Single);
+    }
+
+    private static void EnsureTutorialForLoadedScene(Scene activeScene, LoadSceneMode mode)
+    {
+        if (!IsTutorialScene(activeScene.name)) return;
 
         MainGameTutorialGuide existing = FindGuideInScene(activeScene);
         if (existing != null)
@@ -143,6 +178,7 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
     {
         SceneManager.sceneLoaded -= OnSceneLoaded;
         SceneManager.activeSceneChanged -= OnActiveSceneChanged;
+        StopRestrictedTutorialMode();
     }
 
     private void OnSceneLoaded(Scene loadedScene, LoadSceneMode mode)
@@ -213,7 +249,15 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
 
         bool shouldShow = showOnFirstVisit &&
             PlayerPrefs.GetInt(SeenPrefix + sceneName, 0) == 0;
-        SetTutorialVisible(shouldShow);
+
+        if (shouldShow)
+        {
+            StartFirstRunGuide();
+        }
+        else
+        {
+            SetTutorialVisible(false);
+        }
     }
 
     private IEnumerator WaitForLetterSceneReady(Scene letterScene)
@@ -370,6 +414,18 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
         Stretch(dimmer.rectTransform);
         dimmer.raycastTarget = false;
 
+        inputBlockers = new Image[4];
+        for (int index = 0; index < inputBlockers.Length; index++)
+        {
+            Image blocker = CreateImage(
+                "Input Blocker " + (index + 1),
+                overlay.transform,
+                new Color(0f, 0f, 0f, 0.001f));
+            blocker.raycastTarget = true;
+            blocker.gameObject.SetActive(false);
+            inputBlockers[index] = blocker;
+        }
+
         spotlight = CreateSpotlight(overlay.transform);
 
         card = new GameObject("Tutorial Card", typeof(RectTransform),
@@ -404,7 +460,7 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
         previousButton = CreateButton("Back", card.transform, "BACK", new Vector2(-320f, 18f), buttonColor);
         nextButton = CreateButton("Next", card.transform, "NEXT", new Vector2(-165f, 18f), buttonColor);
         nextButtonText = nextButton.GetComponentInChildren<TMP_Text>();
-        Button skipButton = CreateButton("Skip", card.transform, "SKIP", new Vector2(-10f, 18f), buttonColor);
+        skipButton = CreateButton("Skip", card.transform, "SKIP", new Vector2(-10f, 18f), buttonColor);
         ConfigureCardButton(previousButton, new Vector2(-320f, 18f));
         ConfigureCardButton(nextButton, new Vector2(-165f, 18f));
         ConfigureCardButton(skipButton, new Vector2(-10f, 18f));
@@ -413,7 +469,6 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
         skipButton.onClick.AddListener(CloseTutorial);
 
         pageIndex = 0;
-        ShowPage();
     }
 
     public void OpenTutorial()
@@ -424,8 +479,310 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
             return;
         }
 
+        sceneName = gameObject.scene.name;
+        StartFirstRunGuide();
+    }
+
+    private void StartFirstRunGuide()
+    {
+        StopRestrictedTutorialMode();
+
+        if (string.Equals(
+                sceneName,
+                MainPageScene,
+                System.StringComparison.OrdinalIgnoreCase) &&
+            pages.Count > 1)
+        {
+            StartMainPageTour();
+            return;
+        }
+
+        isGuidedActionMode = true;
+
+        bool started = string.Equals(
+            sceneName,
+            MainPageScene,
+            System.StringComparison.OrdinalIgnoreCase)
+            ? TryShowGuidedAction(GuidedAction.OpenLetter)
+            : TryShowGuidedAction(GuidedAction.SelectCorrectGift);
+
+        if (started)
+        {
+            SetTutorialVisible(true);
+            return;
+        }
+
+        // Do not trap the player if a required scene reference was removed.
+        // The existing page tutorial remains a usable fallback and the warning
+        // identifies which auto-wired target needs repairing.
+        Debug.LogWarning(
+            "MainGameTutorialGuide: could not find the required first-run " +
+            $"control in scene '{sceneName}'. Showing the page tutorial instead.");
+        ShowPageTutorialFallback();
+    }
+
+    private void StartMainPageTour()
+    {
+        isMainPageTourMode = true;
+        pageIndex = 0;
+        LockSceneInputTo(null);
+        SetTutorialVisible(true);
+    }
+
+    private void StartOpenLetterAction()
+    {
+        isMainPageTourMode = false;
+        isGuidedActionMode = true;
+
+        if (TryShowGuidedAction(GuidedAction.OpenLetter))
+        {
+            SetTutorialVisible(true);
+            return;
+        }
+
+        Debug.LogWarning(
+            "MainGameTutorialGuide: the Letter button was not found after " +
+            "the Main Page tour. Showing the page tutorial instead.");
+        ShowPageTutorialFallback();
+    }
+
+    private void ShowPageTutorialFallback()
+    {
+        StopRestrictedTutorialMode();
         pageIndex = 0;
         SetTutorialVisible(true);
+    }
+
+    private bool TryShowGuidedAction(GuidedAction action)
+    {
+        Button targetButton = null;
+        string title = "";
+        string body = "";
+        string progress = "";
+
+        if (action == GuidedAction.OpenLetter)
+        {
+            targetButton = FindSceneButton("Letter");
+            title = "Start your first Santa task";
+            body = "Click the highlighted letter icon to open a child's wish. " +
+                "Other controls stay locked until you follow this step.";
+            progress = pages.Count > 1
+                ? $"{pages.Count} / {pages.Count}"
+                : "1 / 1";
+        }
+        else
+        {
+            SantaLetterGameManager manager =
+                FindLetterManager(gameObject.scene);
+
+            if (action == GuidedAction.SelectCorrectGift)
+            {
+                GiftButton correctGift;
+                if (manager != null &&
+                    manager.TryGetCorrectGiftButton(out correctGift) &&
+                    correctGift != null)
+                {
+                    targetButton = correctGift.GetComponent<Button>();
+                }
+
+                title = "Choose the correct present";
+                body = "Read the child's clues, then click the highlighted toy. " +
+                    "This guided delivery only allows the correct choice.";
+                progress = "1 / 2";
+            }
+            else if (action == GuidedAction.PackPresent)
+            {
+                targetButton = manager != null
+                    ? manager.packPresentButton
+                    : null;
+                title = "Pack the present";
+                body = "Great match! Now click PACK PRESENT to prepare it for " +
+                    "this child and finish the guided lesson.";
+                progress = "2 / 2";
+            }
+        }
+
+        if (targetButton == null || !targetButton.gameObject.activeInHierarchy)
+        {
+            return false;
+        }
+
+        UnsubscribeRequiredButton();
+        guidedAction = action;
+        requiredButton = targetButton;
+        guidedTarget = targetButton.transform as RectTransform;
+        guidedLayoutStep.target = guidedTarget;
+        titleText.text = title;
+        bodyText.text = body;
+        stepText.text = progress;
+
+        SetNavigationButtonsVisible(false);
+        requiredButton.onClick.AddListener(OnRequiredActionCompleted);
+        LockSceneInputTo(requiredButton);
+        ResizeTipBubble();
+        Canvas.ForceUpdateCanvases();
+        RefreshGuidedLayout();
+        return true;
+    }
+
+    private Button FindSceneButton(string objectName)
+    {
+        Button[] buttons = FindObjectsByType<Button>(
+            FindObjectsInactive.Include,
+            FindObjectsSortMode.None);
+
+        for (int index = 0; index < buttons.Length; index++)
+        {
+            Button candidate = buttons[index];
+            if (candidate != null &&
+                candidate.gameObject.scene == gameObject.scene &&
+                candidate.gameObject.name == objectName)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private void OnRequiredActionCompleted()
+    {
+        GuidedAction completedAction = guidedAction;
+        UnsubscribeRequiredButton();
+
+        if (completedAction == GuidedAction.SelectCorrectGift)
+        {
+            if (!TryShowGuidedAction(GuidedAction.PackPresent))
+            {
+                Debug.LogWarning(
+                    "MainGameTutorialGuide: PackPresentButton was not found; " +
+                    "ending the guide without locking the player.");
+                CompleteFirstRunGuide();
+            }
+
+            return;
+        }
+
+        CompleteFirstRunGuide();
+    }
+
+    private void CompleteFirstRunGuide()
+    {
+        PlayerPrefs.SetInt(SeenPrefix + sceneName, 1);
+        PlayerPrefs.Save();
+        StopRestrictedTutorialMode();
+        SetTutorialVisible(false);
+    }
+
+    private void StopRestrictedTutorialMode()
+    {
+        UnsubscribeRequiredButton();
+        RestoreSceneInput();
+        isGuidedActionMode = false;
+        isMainPageTourMode = false;
+        guidedAction = GuidedAction.None;
+        guidedTarget = null;
+        guidedLayoutStep.target = null;
+        SetInputBlockersActive(false);
+        SetNavigationButtonsVisible(true);
+    }
+
+    private void UnsubscribeRequiredButton()
+    {
+        if (requiredButton != null)
+        {
+            requiredButton.onClick.RemoveListener(OnRequiredActionCompleted);
+            requiredButton = null;
+        }
+    }
+
+    private void LockSceneInputTo(Button allowedButton)
+    {
+        if (sceneSelectableStates.Count == 0)
+        {
+            Selectable[] selectables = FindObjectsByType<Selectable>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
+
+            for (int index = 0; index < selectables.Length; index++)
+            {
+                Selectable selectable = selectables[index];
+                if (selectable != null &&
+                    selectable.gameObject.scene == gameObject.scene &&
+                    (overlay == null ||
+                     !selectable.transform.IsChildOf(overlay.transform)))
+                {
+                    sceneSelectableStates[selectable] =
+                        new SelectableState(selectable);
+                }
+            }
+        }
+
+        foreach (KeyValuePair<Selectable, SelectableState> pair in
+                 sceneSelectableStates)
+        {
+            if (pair.Key != null)
+            {
+                // Keep the normal visual state. Pointer input is blocked by
+                // the overlay, while Navigation.None prevents focus from
+                // escaping to dashboard controls with a keyboard or gamepad.
+                Navigation lockedNavigation = pair.Key.navigation;
+                lockedNavigation.mode = Navigation.Mode.None;
+                pair.Key.navigation = lockedNavigation;
+            }
+        }
+
+        // Pack Present becomes interactable in the same click that advances
+        // the guide, so the allowed action always wins over its initial state.
+        if (allowedButton == null)
+        {
+            if (EventSystem.current != null)
+            {
+                EventSystem.current.SetSelectedGameObject(null);
+            }
+
+            return;
+        }
+
+        allowedButton.interactable = true;
+
+        if (EventSystem.current != null)
+        {
+            EventSystem.current.SetSelectedGameObject(allowedButton.gameObject);
+        }
+    }
+
+    private void RestoreSceneInput()
+    {
+        foreach (KeyValuePair<Selectable, SelectableState> pair in
+                 sceneSelectableStates)
+        {
+            if (pair.Key != null)
+            {
+                pair.Key.interactable = pair.Value.interactable;
+                pair.Key.navigation = pair.Value.navigation;
+            }
+        }
+
+        sceneSelectableStates.Clear();
+    }
+
+    private void SetNavigationButtonsVisible(bool visible)
+    {
+        if (previousButton != null)
+        {
+            previousButton.gameObject.SetActive(visible && pageIndex > 0);
+        }
+
+        if (nextButton != null)
+        {
+            nextButton.gameObject.SetActive(visible);
+        }
+
+        if (skipButton != null)
+        {
+            skipButton.gameObject.SetActive(visible);
+        }
     }
 
     private void SetTutorialVisible(bool visible)
@@ -447,11 +804,29 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
 
         if (visible)
         {
-            ShowPage();
+            if (isGuidedActionMode)
+            {
+                SetNavigationButtonsVisible(false);
+                SetInputBlockersActive(true);
+                RefreshGuidedLayout();
+            }
+            else if (isMainPageTourMode)
+            {
+                SetNavigationButtonsVisible(true);
+                skipButton.gameObject.SetActive(false);
+                ShowPage();
+                ShowFullScreenInputBlocker();
+            }
+            else
+            {
+                SetNavigationButtonsVisible(true);
+                ShowPage();
+            }
         }
         else if (spotlight != null)
         {
             spotlight.SetActive(false);
+            SetInputBlockersActive(false);
         }
     }
 
@@ -477,6 +852,21 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
 
     private void NextPage()
     {
+        if (isMainPageTourMode)
+        {
+            // The last configured Main Page entry explains how to begin the
+            // game. Replace that passive page with the required letter click.
+            if (pageIndex >= pages.Count - 2)
+            {
+                StartOpenLetterAction();
+                return;
+            }
+
+            pageIndex++;
+            ShowPage();
+            return;
+        }
+
         if (pageIndex >= pages.Count - 1)
         {
             CloseTutorial();
@@ -497,6 +887,7 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
     {
         PlayerPrefs.SetInt(SeenPrefix + sceneName, 1);
         PlayerPrefs.Save();
+        StopRestrictedTutorialMode();
         SetTutorialVisible(false);
     }
 
@@ -518,6 +909,8 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
 
     private void DestroyOverlay()
     {
+        StopRestrictedTutorialMode();
+
         if (overlay != null)
         {
             Destroy(overlay);
@@ -525,6 +918,7 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
             card = null;
             cardRect = null;
             spotlight = null;
+            inputBlockers = null;
         }
 
     }
@@ -605,6 +999,131 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
         SetSpotlightEdge(edges[4], new Vector2(right, (bottom + top) * .5f),
             new Vector2(thickness, top - bottom));
         spotlight.SetActive(true);
+    }
+
+    private void LateUpdate()
+    {
+        if (isGuidedActionMode &&
+            overlay != null &&
+            card != null &&
+            card.activeSelf)
+        {
+            RefreshGuidedLayout();
+        }
+    }
+
+    private void RefreshGuidedLayout()
+    {
+        if (guidedTarget == null)
+        {
+            return;
+        }
+
+        HighlightTarget(guidedLayoutStep);
+        PositionTipBubble(guidedLayoutStep);
+        PositionInputBlockers(guidedTarget);
+    }
+
+    private void SetInputBlockersActive(bool active)
+    {
+        if (inputBlockers == null)
+        {
+            return;
+        }
+
+        for (int index = 0; index < inputBlockers.Length; index++)
+        {
+            if (inputBlockers[index] != null)
+            {
+                inputBlockers[index].gameObject.SetActive(active);
+            }
+        }
+    }
+
+    private void ShowFullScreenInputBlocker()
+    {
+        if (inputBlockers == null || inputBlockers.Length == 0)
+        {
+            return;
+        }
+
+        SetInputBlockersActive(false);
+        Stretch(inputBlockers[0].rectTransform);
+        inputBlockers[0].gameObject.SetActive(true);
+    }
+
+    private void PositionInputBlockers(RectTransform target)
+    {
+        if (overlay == null ||
+            inputBlockers == null ||
+            inputBlockers.Length != 4 ||
+            target == null)
+        {
+            return;
+        }
+
+        RectTransform overlayRect = overlay.GetComponent<RectTransform>();
+        Vector3[] corners = new Vector3[4];
+        target.GetWorldCorners(corners);
+        Camera targetCamera = GetTargetCamera(target);
+        Vector2 lowerLeft;
+        Vector2 upperRight;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            overlayRect,
+            RectTransformUtility.WorldToScreenPoint(targetCamera, corners[0]),
+            null,
+            out lowerLeft);
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            overlayRect,
+            RectTransformUtility.WorldToScreenPoint(targetCamera, corners[2]),
+            null,
+            out upperRight);
+
+        float left = Mathf.Clamp(
+            Mathf.Min(lowerLeft.x, upperRight.x),
+            overlayRect.rect.xMin,
+            overlayRect.rect.xMax);
+        float right = Mathf.Clamp(
+            Mathf.Max(lowerLeft.x, upperRight.x),
+            overlayRect.rect.xMin,
+            overlayRect.rect.xMax);
+        float bottom = Mathf.Clamp(
+            Mathf.Min(lowerLeft.y, upperRight.y),
+            overlayRect.rect.yMin,
+            overlayRect.rect.yMax);
+        float top = Mathf.Clamp(
+            Mathf.Max(lowerLeft.y, upperRight.y),
+            overlayRect.rect.yMin,
+            overlayRect.rect.yMax);
+
+        SetBlockerRect(inputBlockers[0].rectTransform,
+            overlayRect.rect.xMin, top,
+            overlayRect.rect.xMax, overlayRect.rect.yMax);
+        SetBlockerRect(inputBlockers[1].rectTransform,
+            overlayRect.rect.xMin, overlayRect.rect.yMin,
+            overlayRect.rect.xMax, bottom);
+        SetBlockerRect(inputBlockers[2].rectTransform,
+            overlayRect.rect.xMin, bottom, left, top);
+        SetBlockerRect(inputBlockers[3].rectTransform,
+            right, bottom, overlayRect.rect.xMax, top);
+    }
+
+    private static void SetBlockerRect(
+        RectTransform blocker,
+        float left,
+        float bottom,
+        float right,
+        float top)
+    {
+        blocker.anchorMin = new Vector2(.5f, .5f);
+        blocker.anchorMax = new Vector2(.5f, .5f);
+        blocker.pivot = new Vector2(.5f, .5f);
+        blocker.anchoredPosition = new Vector2(
+            (left + right) * .5f,
+            (bottom + top) * .5f);
+        blocker.sizeDelta = new Vector2(
+            Mathf.Max(0f, right - left),
+            Mathf.Max(0f, top - bottom));
     }
 
     private void PositionTipBubble(TutorialStep page)

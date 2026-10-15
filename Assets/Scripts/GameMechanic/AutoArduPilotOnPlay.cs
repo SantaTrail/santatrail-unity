@@ -9,7 +9,6 @@ using UnityEngine.SceneManagement;
 
 public static class AutoArduPilotOnPlay
 {
-    private const string QgcMapTypeAtStartup = "Satellite";
     private const int QgcUdpListenPort = 14550;
     private static bool hasLaunchedThisSession;
     private static bool isLaunchInProgress;
@@ -889,8 +888,6 @@ public static class AutoArduPilotOnPlay
                 ? new List<string>(File.ReadAllLines(settingsPath))
                 : new List<string>();
 
-            SetIniValue(lines, "FlightMap", "mapType", QgcMapTypeAtStartup);
-
             // QGC 5 stores these under AutoConnect. QGC 4.x used LinkManager,
             // and QGC 5 migrates that legacy group, so writing both keeps
             // existing installations and newly downloaded releases working.
@@ -902,14 +899,14 @@ public static class AutoArduPilotOnPlay
 
             File.WriteAllLines(settingsPath, lines);
             UnityEngine.Debug.Log(
-                $"AutoArduPilotOnPlay: QGroundControl map type set to " +
-                $"{QgcMapTypeAtStartup}; UDP auto-connect set to {QgcUdpListenPort}."
+                $"AutoArduPilotOnPlay: QGroundControl UDP auto-connect set to " +
+                $"{QgcUdpListenPort}; existing map preferences were preserved."
             );
         }
         catch (Exception exception)
         {
             UnityEngine.Debug.LogWarning(
-                "AutoArduPilotOnPlay: could not set the QGroundControl map type. " +
+                "AutoArduPilotOnPlay: could not set QGroundControl UDP auto-connect settings. " +
                 exception.Message
             );
         }

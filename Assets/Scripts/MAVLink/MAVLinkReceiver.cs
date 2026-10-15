@@ -33,6 +33,10 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("Rate Unity requests for GLOBAL_POSITION_INT telemetry from ArduPilot.")]
     [SerializeField] float requestedPositionRateHz = 10f;
 
+    [Min(1f)]
+    [Tooltip("Rate Unity requests for ATTITUDE telemetry so the drone keeps its true yaw while stationary.")]
+    [SerializeField] float requestedAttitudeRateHz = 10f;
+
     private float nextSocketOpenAttemptTime;
 
     private MAVLink.MavlinkParse parser;
@@ -47,6 +51,8 @@ public class MAVLinkReceiver : MonoBehaviour
     private float lastHomeSyncRequestTime = -1000f;
     private float lastPositionStreamRequestTime = -1000f;
     private bool hasLoggedPositionStreamRequest;
+    private float lastAttitudeStreamRequestTime = -1000f;
+    private bool hasLoggedAttitudeStreamRequest;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -260,6 +266,10 @@ public class MAVLinkReceiver : MonoBehaviour
     private bool hbArmed;
     private bool hbGuided;
     private uint hbCustomMode;
+    private ushort missionCurrentSequence;
+    private ushort missionCurrentTotal;
+    private int missionCurrentUpdateCount;
+    private bool hasMissionCurrent;
     private byte hbSystemStatus;
     private MAVLink.MAV_LANDED_STATE landedState = MAVLink.MAV_LANDED_STATE.UNDEFINED;
     private string lastStatusText = "";
@@ -294,8 +304,13 @@ public class MAVLinkReceiver : MonoBehaviour
 
     public bool IsGuidedArmed => hbGuided && hbArmed;
     public bool IsGuidedMode => hbGuided;
+    public bool IsAutoMode => hbCustomMode == 3u;
     public bool IsArmed => hbArmed;
     public bool HasRecentTelemetry => lastAnyPacketTime > 0f && (Time.time - lastAnyPacketTime) <= 2f;
+    public bool HasMissionCurrent => hasMissionCurrent;
+    public ushort MissionCurrentSequence => missionCurrentSequence;
+    public ushort MissionCurrentTotal => missionCurrentTotal;
+    public int MissionCurrentUpdateCount => missionCurrentUpdateCount;
     public MAVLink.MAV_LANDED_STATE LandedState => landedState;
     public float RelativeAltitudeMeters => targetRelativeAlt;
     public double CurrentLatitude => smoothLat;
@@ -528,6 +543,27 @@ public class MAVLinkReceiver : MonoBehaviour
         }
     }
 
+    void SwitchDroneToAbsoluteAltitude()
+    {
+        if (locationComponent == null ||
+            locationComponent.SurfacePlacementMode ==
+                ArcGISSurfacePlacementMode.AbsoluteHeight)
+        {
+            return;
+        }
+
+        // Keep ArcGIS's terrain-relative placement while the vehicle is
+        // parked. Once armed, preserve the resolved spawn point and let
+        // incoming MAVLink altitude control the drone in flight.
+        ArcGISPoint currentPosition = locationComponent.Position;
+        locationComponent.SurfacePlacementMode =
+            ArcGISSurfacePlacementMode.AbsoluteHeight;
+        if (currentPosition != null)
+        {
+            locationComponent.Position = currentPosition;
+        }
+    }
+
     void RequestPositionStream()
     {
         if (client == null || endPoint == null || txParser == null)
@@ -579,6 +615,58 @@ public class MAVLinkReceiver : MonoBehaviour
                 $"Requested GLOBAL_POSITION_INT at {requestedPositionRateHz:0.#} Hz from ArduPilot."
             );
             hasLoggedPositionStreamRequest = true;
+        }
+    }
+
+    void RequestAttitudeStream()
+    {
+        if (client == null || endPoint == null || txParser == null)
+        {
+            return;
+        }
+
+        bool hasFreshAttitude =
+            lastAttitudeTime > 0f &&
+            (Time.time - lastAttitudeTime) < 2f;
+
+        if (hasFreshAttitude ||
+            (Time.time - lastAttitudeStreamRequestTime) < 2f)
+        {
+            return;
+        }
+
+        lastAttitudeStreamRequestTime = Time.time;
+        float intervalMicroseconds =
+            1000000f / Mathf.Max(1f, requestedAttitudeRateHz);
+
+        var requestAttitude = new MAVLink.mavlink_command_long_t(
+            (float)MAVLink.MAVLINK_MSG_ID.ATTITUDE,
+            intervalMicroseconds,
+            0f,
+            0f,
+            0f,
+            0f,
+            0f,
+            (ushort)MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL,
+            vehicleSystemId,
+            vehicleComponentId,
+            0
+        );
+
+        byte[] requestPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_LONG,
+            requestAttitude,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        if (SendToVehicle(requestPacket) && !hasLoggedAttitudeStreamRequest)
+        {
+            Debug.Log(
+                $"Requested ATTITUDE at {requestedAttitudeRateHz:0.#} Hz from ArduPilot."
+            );
+            hasLoggedAttitudeStreamRequest = true;
         }
     }
 
@@ -1586,11 +1674,25 @@ public class MAVLinkReceiver : MonoBehaviour
         float mavHeadingDegrees;
 
         // Use one stable source instead of switching between ATTITUDE and GPS
-        // every frame. GLOBAL_POSITION_INT.hdg is also the heading normally
-        // represented by the vehicle arrow in QGroundControl.
-        if (useGpsHeadingForRotation && headingFresh)
+        // every frame. When GPS heading is disabled, wait for attitude data
+        // rather than falling back to GPS heading while the vehicle is still.
+        if (useGpsHeadingForRotation)
         {
-            mavHeadingDegrees = headingDeg;
+            if (headingFresh)
+            {
+                mavHeadingDegrees = headingDeg;
+            }
+            else if (attitudeFresh)
+            {
+                mavHeadingDegrees = Mathf.Repeat(
+                    yaw * Mathf.Rad2Deg,
+                    360f
+                );
+            }
+            else
+            {
+                return;
+            }
         }
         else if (attitudeFresh)
         {
@@ -1598,10 +1700,6 @@ public class MAVLinkReceiver : MonoBehaviour
                 yaw * Mathf.Rad2Deg,
                 360f
             );
-        }
-        else if (headingFresh)
-        {
-            mavHeadingDegrees = headingDeg;
         }
         else
         {
@@ -1963,8 +2061,22 @@ public class MAVLinkReceiver : MonoBehaviour
             hbSystemStatus = hb.system_status;
             hbArmed = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.SAFETY_ARMED) != 0;
             hbGuided = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.GUIDED_ENABLED) != 0;
+            if (hbArmed)
+            {
+                SwitchDroneToAbsoluteAltitude();
+            }
             TrySyncHomeLocation();
             RequestPositionStream();
+            RequestAttitudeStream();
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.MISSION_CURRENT)
+        {
+            var mission = (MAVLink.mavlink_mission_current_t)msg.data;
+            missionCurrentSequence = mission.seq;
+            missionCurrentTotal = mission.total;
+            missionCurrentUpdateCount++;
+            hasMissionCurrent = true;
         }
 
         if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.EXTENDED_SYS_STATE)

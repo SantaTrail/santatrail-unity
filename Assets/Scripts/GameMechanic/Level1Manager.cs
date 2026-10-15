@@ -1,4 +1,5 @@
 using TMPro;
+using System.IO;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using System;
@@ -9,10 +10,20 @@ public class Level1Manager : MonoBehaviour
     {
         WaitForConnection,
         ShowMapMode,
+        WaitForMapType,
         WaitForGuidedMode,
         WaitForTakeoff,
         WaitForControl,
         DeliveryUnlocked,
+        Finished
+    }
+
+    private enum LV2PlanningTutorialStep
+    {
+        Inactive,
+        WaitingForTelemetry,
+        PlanningMission,
+        MissionDetected,
         Finished
     }
 
@@ -29,21 +40,25 @@ public class Level1Manager : MonoBehaviour
     [Header("Beginner Tutorial")]
     public bool showTutorial = true;
     [TextArea(2, 4)] public string welcomeMessage =
-        "Welcome! First, open QGroundControl and make sure the drone is connected.";
+        "Welcome! Connect to the drone in QGroundControl. I’ll guide you through the first flight.";
     [TextArea(2, 4)] public string mapModeMessage =
-        "QGroundControl opens in Satellite map mode automatically. Use the map to locate the drone and delivery area.";
+        "In QGroundControl, open Application Settings > Maps and set Type to Street Map. If it already shows Street Map, the tutorial will continue automatically.";
     [TextArea(2, 4)] public string findTargetMessage =
-        "Change the flight mode to Guided so the drone accepts the tutorial controls.";
+        "Open the flight-mode menu in QGC Fly View. If Guided isn’t listed, enable Edit Displayed Flight Modes and add it with Configure. Then select Guided.";
     [TextArea(2, 4)] public string approachMessage =
-        "Use Guided takeoff and climb to a safe height.";
+        "Choose Guided mode and Takeoff in QGroundControl and enter 12 m as the target altitude.";
     [TextArea(2, 4)] public string holdPositionMessage =
-        "Now try to gently control the drone and move it a little.";
+        "Move the drone a short distance, then release the controls and let it hover.";
     [TextArea(2, 4)] public string transitionMessage =
-        "Good. The delivery targets are now unlocked. You still need to deliver 5 presents.";
+        "Tutorial complete! Delivery targets are unlocked. Follow the highlighted house to make your first delivery.";
+    [TextArea(2, 4)] public string struggleHintMessage =
+        "Need a hand? Stay around 12 m while traveling. Above the highlighted house, descend to no more than 3 m above the roof and hover to deliver.";
     [Min(0.1f)] public float connectionHoldSeconds = 8f;
     [Min(0.1f)] public float mapModeDisplaySeconds = 4f;
     [Min(0.1f)] public float takeoffAltitudeMeters = 1.5f;
     [Min(0.1f)] public float controlMovementMeters = 2f;
+    [Tooltip("Show the delivery help when this many seconds pass after the tutorial with no completed delivery.")]
+    [Min(1f)] public float struggleHintDelaySeconds = 30f;
 
     [Header("Scene Flow")]
     public bool autoLoadNextScene = false;
@@ -60,6 +75,33 @@ public class Level1Manager : MonoBehaviour
     private bool hasControlReference;
     private float connectionDetectedTime = -1f;
     private float mapModeInstructionStartedAt = -1f;
+    private float nextMapTypeCheckAt = -1f;
+    private bool qgcMapSettingsWarningLogged;
+    private float deliveryUnlockedTime = -1f;
+    private bool struggleHintShown;
+    private LV2PlanningTutorialStep lv2PlanningTutorialStep =
+        LV2PlanningTutorialStep.Inactive;
+    private bool isLV2PlanningTutorial;
+    private bool hadMissionCurrentWhenLV2Started;
+    private ushort missionTotalWhenLV2Started;
+    private ushort missionSequenceWhenLV2Started;
+    private bool autoModeWhenLV2Started;
+    private int missionUpdateCountWhenLV2Started;
+    private float lv2MissionDetectedAt = -1f;
+
+    private const string LV2SceneName = "LV2";
+    private const float LV2MissionDetectedMessageSeconds = 12f;
+    private const string LV2WaitingForTelemetryMessage =
+        "Connect the drone in QGroundControl, then open Plan View.\n" +
+        "Build and upload your survey mission.\n" +
+        "I’ll confirm when the vehicle reports the upload.";
+    private const string LV2PlanningMessage =
+        "QGC PLAN VIEW — MISSION PLANNING\n" +
+        "Choose Survey for an area. Corridor = strip; Structure = orbit.\n" +
+        "Enable speed and altitude; camera is optional.\n" +
+        "Draw the boundary; add vertices or select one and Remove Vertex.\n" +
+        "Set grid/camera, enable terrain following, keep default tolerance.\n" +
+        "Add Return to Launch, Upload, then slide to confirm.";
 
     public float LevelStartedAt { get; private set; } = -1f;
     public float LevelCompletedAt { get; private set; } = -1f;
@@ -69,6 +111,15 @@ public class Level1Manager : MonoBehaviour
     void Start()
     {
         ApplyActiveLevelOverrides();
+        bool isLV2Scene = string.Equals(
+            SceneManager.GetActiveScene().name,
+            LV2SceneName,
+            StringComparison.OrdinalIgnoreCase
+        );
+        if (isLV2Scene)
+        {
+            showTutorial = false;
+        }
 
         if (deliveryScoreManager == null)
         {
@@ -81,7 +132,14 @@ public class Level1Manager : MonoBehaviour
         if (deliveryScoreManager == null)
         {
             SetObjectiveText($"{GetObjectiveLabel()}: 0/0");
-            SetStatusText("Waiting for delivery system...");
+            if (isLV2Scene)
+            {
+                StartLV2PlanningTutorial();
+            }
+            else
+            {
+                SetStatusText("Waiting for delivery system...");
+            }
             Debug.LogWarning("Level1Manager: DeliveryScoreManager was not found.");
             return;
         }
@@ -89,6 +147,7 @@ public class Level1Manager : MonoBehaviour
         deliveryScoreManager.TargetsRemainingChanged += UpdateObjective;
         deliveryScoreManager.LevelCompleted += CompleteLevel;
         deliveryScoreManager.SetTutorialLockout(showTutorial);
+        deliveryScoreManager.SetDeliveryStatusSuppressed(showTutorial);
 
         if (showTutorial)
         {
@@ -97,6 +156,10 @@ public class Level1Manager : MonoBehaviour
             hasControlReference = false;
             connectionDetectedTime = -1f;
             mapModeInstructionStartedAt = -1f;
+            nextMapTypeCheckAt = -1f;
+            qgcMapSettingsWarningLogged = false;
+            deliveryUnlockedTime = -1f;
+            struggleHintShown = false;
             LevelStartedAt = -1f;
             LevelCompletedAt = -1f;
             RefreshDeliveryObjective();
@@ -110,6 +173,8 @@ public class Level1Manager : MonoBehaviour
                 : deliveryScoreManager.targetBuildingCount);
             SetStatusText("");
         }
+
+        StartLV2PlanningTutorial();
     }
 
     void ApplyActiveLevelOverrides()
@@ -144,7 +209,7 @@ public class Level1Manager : MonoBehaviour
     void Update()
     {
         if (PauseMenuController.IsPaused) return;
-        if (completed || deliveryScoreManager == null)
+        if (completed || (deliveryScoreManager == null && !isLV2PlanningTutorial))
         {
             return;
         }
@@ -152,12 +217,19 @@ public class Level1Manager : MonoBehaviour
         ResolveMavlinkReceiver();
         TryAutoStartLevelTimer();
 
+        if (isLV2PlanningTutorial)
+        {
+            AdvanceLV2PlanningTutorial();
+            return;
+        }
+
         if (!showTutorial)
         {
             return;
         }
 
         AdvanceTutorialIfReady();
+        ShowStruggleHintIfNeeded();
     }
 
     void OnDestroy()
@@ -182,6 +254,128 @@ public class Level1Manager : MonoBehaviour
         if (mavlinkReceiver == null)
         {
             mavlinkReceiver = FindFirstObjectByType<MAVLinkReceiver>();
+        }
+    }
+
+    void StartLV2PlanningTutorial()
+    {
+        isLV2PlanningTutorial = string.Equals(
+            SceneManager.GetActiveScene().name,
+            LV2SceneName,
+            StringComparison.OrdinalIgnoreCase
+        );
+        if (!isLV2PlanningTutorial)
+        {
+            return;
+        }
+
+        ConfigureLV2TutorialText();
+        ResolveMavlinkReceiver();
+        hadMissionCurrentWhenLV2Started =
+            mavlinkReceiver != null && mavlinkReceiver.HasMissionCurrent;
+        missionTotalWhenLV2Started = hadMissionCurrentWhenLV2Started
+            ? mavlinkReceiver.MissionCurrentTotal
+            : (ushort)0;
+        missionSequenceWhenLV2Started = hadMissionCurrentWhenLV2Started
+            ? mavlinkReceiver.MissionCurrentSequence
+            : (ushort)0;
+        autoModeWhenLV2Started = mavlinkReceiver != null && mavlinkReceiver.IsAutoMode;
+        missionUpdateCountWhenLV2Started = mavlinkReceiver != null
+            ? mavlinkReceiver.MissionCurrentUpdateCount
+            : 0;
+
+        if (mavlinkReceiver != null && mavlinkReceiver.HasRecentTelemetry)
+        {
+            lv2PlanningTutorialStep = LV2PlanningTutorialStep.PlanningMission;
+            SetStatusText(LV2PlanningMessage);
+        }
+        else
+        {
+            lv2PlanningTutorialStep = LV2PlanningTutorialStep.WaitingForTelemetry;
+            SetStatusText(LV2WaitingForTelemetryMessage);
+        }
+    }
+
+    void ConfigureLV2TutorialText()
+    {
+        if (levelStatusText == null)
+        {
+            return;
+        }
+
+        RectTransform textRect = levelStatusText.rectTransform;
+        textRect.anchorMin = new Vector2(0.5f, 0.5f);
+        textRect.anchorMax = new Vector2(0.5f, 0.5f);
+        textRect.pivot = new Vector2(0.5f, 0.5f);
+        textRect.anchoredPosition = Vector2.zero;
+        textRect.sizeDelta = new Vector2(1500f, 340f);
+
+        levelStatusText.alignment = TMPro.TextAlignmentOptions.Center;
+        levelStatusText.fontSize = 44f;
+        levelStatusText.fontSizeMin = 34f;
+        levelStatusText.fontSizeMax = 44f;
+        levelStatusText.enableAutoSizing = true;
+        levelStatusText.characterSpacing = 0f;
+        levelStatusText.wordSpacing = 0f;
+        levelStatusText.margin = Vector4.zero;
+        levelStatusText.raycastTarget = false;
+    }
+
+    void AdvanceLV2PlanningTutorial()
+    {
+        if (lv2PlanningTutorialStep == LV2PlanningTutorialStep.Finished)
+        {
+            return;
+        }
+
+        if (lv2PlanningTutorialStep == LV2PlanningTutorialStep.MissionDetected)
+        {
+            if (Time.time - lv2MissionDetectedAt >= LV2MissionDetectedMessageSeconds)
+            {
+                lv2PlanningTutorialStep = LV2PlanningTutorialStep.Finished;
+                SetStatusText("");
+            }
+
+            return;
+        }
+
+        if (mavlinkReceiver == null || !mavlinkReceiver.HasRecentTelemetry)
+        {
+            lv2PlanningTutorialStep = LV2PlanningTutorialStep.WaitingForTelemetry;
+            SetStatusText(LV2WaitingForTelemetryMessage);
+            return;
+        }
+
+        if (lv2PlanningTutorialStep == LV2PlanningTutorialStep.WaitingForTelemetry)
+        {
+            lv2PlanningTutorialStep = LV2PlanningTutorialStep.PlanningMission;
+            SetStatusText(LV2PlanningMessage);
+        }
+
+        if (!mavlinkReceiver.HasMissionCurrent)
+        {
+            return;
+        }
+
+        ushort missionTotal = mavlinkReceiver.MissionCurrentTotal;
+        bool vehicleHasMission = missionTotal > 0 && missionTotal < ushort.MaxValue;
+        bool missionChangedSinceLV2Started =
+            !hadMissionCurrentWhenLV2Started ||
+            missionTotal != missionTotalWhenLV2Started ||
+            mavlinkReceiver.MissionCurrentSequence != missionSequenceWhenLV2Started ||
+            (!autoModeWhenLV2Started && mavlinkReceiver.IsAutoMode);
+        bool missionTelemetryUpdated =
+            mavlinkReceiver.MissionCurrentUpdateCount > missionUpdateCountWhenLV2Started;
+
+        if (vehicleHasMission && missionChangedSinceLV2Started && missionTelemetryUpdated)
+        {
+            lv2PlanningTutorialStep = LV2PlanningTutorialStep.MissionDetected;
+            lv2MissionDetectedAt = Time.time;
+            SetStatusText(
+                $"Mission received: {missionTotal} items.\n" +
+                "If the battery runs low, land safely and change it.\n" +
+                "Then choose Resume Mission from Waypoint to continue."
+            );
         }
     }
 
@@ -216,6 +410,15 @@ public class Level1Manager : MonoBehaviour
                 }
                 else if ((Time.time - mapModeInstructionStartedAt) >= mapModeDisplaySeconds)
                 {
+                    SetTutorialStep(IsQgcStreetMapSelected()
+                        ? TutorialStep.WaitForGuidedMode
+                        : TutorialStep.WaitForMapType);
+                }
+                break;
+
+            case TutorialStep.WaitForMapType:
+                if (IsQgcStreetMapSelected())
+                {
                     SetTutorialStep(TutorialStep.WaitForGuidedMode);
                 }
                 break;
@@ -244,6 +447,105 @@ public class Level1Manager : MonoBehaviour
                 }
                 break;
         }
+    }
+
+    bool IsQgcStreetMapSelected()
+    {
+        if (Time.time < nextMapTypeCheckAt)
+        {
+            return false;
+        }
+
+        nextMapTypeCheckAt = Time.time + 0.5f;
+        if (!TryReadQgcMapType(out string mapType))
+        {
+            if (!qgcMapSettingsWarningLogged)
+            {
+                qgcMapSettingsWarningLogged = true;
+                Debug.LogWarning(
+                    "Level1Manager: could not read QGroundControl's FlightMap/mapType " +
+                    "setting. The map selection tutorial will keep waiting."
+                );
+            }
+
+            return false;
+        }
+
+        qgcMapSettingsWarningLogged = false;
+        return string.Equals(mapType, "Street Map", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool TryReadQgcMapType(out string mapType)
+    {
+        mapType = null;
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string roamingAppData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string[] candidates =
+        {
+            Path.Combine(userProfile, ".config", "qgroundcontrol.com", "QGroundControl.ini"),
+            Path.Combine(userProfile, ".config", "org.qgroundcontrol", "QGroundControl.ini"),
+            Path.Combine(userProfile, ".config", "QGroundControl.org", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl.org", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl.ini")
+        };
+
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            if (!File.Exists(candidates[candidateIndex]))
+            {
+                continue;
+            }
+
+            try
+            {
+                string[] lines = File.ReadAllLines(candidates[candidateIndex]);
+                bool inFlightMapSection = false;
+                for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+                {
+                    string line = lines[lineIndex].Trim();
+                    if (line.StartsWith("[", StringComparison.Ordinal) &&
+                        line.EndsWith("]", StringComparison.Ordinal))
+                    {
+                        inFlightMapSection = string.Equals(
+                            line.Substring(1, line.Length - 2),
+                            "FlightMap",
+                            StringComparison.OrdinalIgnoreCase
+                        );
+                        continue;
+                    }
+
+                    if (!inFlightMapSection || line.Length == 0 || line.StartsWith(";"))
+                    {
+                        continue;
+                    }
+
+                    int separatorIndex = line.IndexOf('=');
+                    if (separatorIndex <= 0)
+                    {
+                        continue;
+                    }
+
+                    string key = line.Substring(0, separatorIndex).Trim();
+                    if (string.Equals(key, "mapType", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mapType = line.Substring(separatorIndex + 1).Trim();
+                        return true;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                // QGC can be writing the settings file at the same time. Retry
+                // during the next tutorial poll.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // A later candidate may still be readable on this platform.
+            }
+        }
+
+        return false;
     }
 
     bool HasTakenOff()
@@ -306,7 +608,24 @@ public class Level1Manager : MonoBehaviour
             deliveryScoreManager.CompletedTargets > 0)
         {
             SetStatusText("");
+            deliveryScoreManager.SetDeliveryStatusSuppressed(false);
         }
+    }
+
+    void ShowStruggleHintIfNeeded()
+    {
+        if (struggleHintShown ||
+            !tutorialFinished ||
+            tutorialStep != TutorialStep.DeliveryUnlocked ||
+            deliveryScoreManager.CompletedTargets > 0 ||
+            deliveryUnlockedTime < 0f ||
+            (Time.time - deliveryUnlockedTime) < struggleHintDelaySeconds)
+        {
+            return;
+        }
+
+        struggleHintShown = true;
+        SetStatusText(struggleHintMessage);
     }
 
     void SetObjectiveText(string text)
@@ -337,6 +656,9 @@ public class Level1Manager : MonoBehaviour
             case TutorialStep.ShowMapMode:
                 SetStatusText(mapModeMessage);
                 break;
+            case TutorialStep.WaitForMapType:
+                SetStatusText(mapModeMessage);
+                break;
             case TutorialStep.WaitForGuidedMode:
                 SetStatusText(findTargetMessage);
                 break;
@@ -347,6 +669,8 @@ public class Level1Manager : MonoBehaviour
                 SetStatusText(holdPositionMessage);
                 break;
             case TutorialStep.DeliveryUnlocked:
+                deliveryUnlockedTime = Time.time;
+                struggleHintShown = false;
                 SetStatusText(transitionMessage);
                 BeginLevelTimer();
                 RefreshDeliveryObjective();
@@ -368,6 +692,7 @@ public class Level1Manager : MonoBehaviour
         LevelCompletedAt = Time.time;
         RefreshDeliveryObjective();
         SetStatusText("");
+        deliveryScoreManager.SetDeliveryStatusSuppressed(true);
         Debug.Log("Level1Manager: Level 1 complete.");
 
         if (!autoLoadNextScene)
