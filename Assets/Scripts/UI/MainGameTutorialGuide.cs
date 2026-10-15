@@ -241,6 +241,14 @@ public sealed class MainGameTutorialGuide : MonoBehaviour
         }
 
         yield return new WaitForEndOfFrame();
+
+        // The opening story owns the screen before the player reaches the
+        // mission desk.  Do not let the dashboard tutorial appear above it.
+        while (SantaTrailOpeningStory.IsShowing)
+        {
+            yield return null;
+        }
+
         hasQueuedScene = false;
 
         sceneName = activeScene.name;

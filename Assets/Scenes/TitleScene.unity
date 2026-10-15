@@ -653,7 +653,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9f27b1d0a53b4d7f8e6c124b7a9d3e51, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TitleSceneStartupController
-  mainPageSceneName: MainPageScene
+  mainPageSceneName: VisualNovelScene1
   loadingSceneName: LoadingScene
   runSetupInThisScene: 0
   loadMainPageAfterSetup: 1
