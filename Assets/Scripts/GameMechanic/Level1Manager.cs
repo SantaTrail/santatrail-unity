@@ -87,22 +87,21 @@ public class Level1Manager : MonoBehaviour
     private ushort missionSequenceWhenLV2Started;
     private bool autoModeWhenLV2Started;
     private int missionUpdateCountWhenLV2Started;
-    private float lv2MissionDetectedAt = -1f;
 
     private const string LV2SceneName = "LV2";
-    private const float LV2MissionDetectedMessageSeconds = 12f;
     private const string LV2WaitingForTelemetryMessage =
-        "Connect the drone in QGroundControl, then open Plan View.\n" +
-        "Build and upload your survey mission.\n" +
-        "I’ll confirm when the vehicle reports the upload.";
+        "LV2 • BASIC SURVEY\n" +
+        "Connect the vehicle in QGroundControl. Open Plan View to begin.";
     private const string LV2PlanningMessage =
-        "QGC PLAN VIEW — MISSION PLANNING\n" +
-        "Choose Survey for an area. Corridor = strip; Structure = orbit.\n" +
-        "Enable speed and altitude; camera is optional.\n" +
-        "Draw the boundary; add vertices or select one and Remove Vertex.\n" +
-        "Set grid/camera, enable terrain following, keep default tolerance.\n" +
-        "Add Return to Launch, Upload, then slide to confirm.";
-
+        "LV2 • BASIC SURVEY  |  PLAN IN QGC\n" +
+        "1  Choose Survey, then Basic for a simple four-corner area.\n" +
+        "2  Cover the village and hillside homes with the survey area. Set altitude to 50 m and choose Calculated Above Terrain (CalcT).\n" +
+        "3  Keep the grid and terrain tolerance at their defaults; camera setup is optional. Check the profile stays above the terrain.\n" +
+        "4  Add Return to Launch, Upload and slide to confirm. Start it in Fly View when ready; LV2 will watch for mission telemetry.";
+    private const string LV2MissionReceivedMessage =
+        "SURVEY MISSION REPORTED\n" +
+        "The vehicle is reporting a mission. In QGC, review it in Fly View and start it when ready.\n" +
+        "If you change the battery during a flight, land safely, then use Resume Mission from Waypoint.";
     public float LevelStartedAt { get; private set; } = -1f;
     public float LevelCompletedAt { get; private set; } = -1f;
     public bool HasLevelStarted => LevelStartedAt >= 0f;
@@ -145,6 +144,7 @@ public class Level1Manager : MonoBehaviour
         }
 
         deliveryScoreManager.TargetsRemainingChanged += UpdateObjective;
+        deliveryScoreManager.DeliveryTargetDiscovered += OnLV2DeliveryTargetDiscovered;
         deliveryScoreManager.LevelCompleted += CompleteLevel;
         deliveryScoreManager.SetTutorialLockout(showTutorial);
         deliveryScoreManager.SetDeliveryStatusSuppressed(showTutorial);
@@ -237,6 +237,7 @@ public class Level1Manager : MonoBehaviour
         if (deliveryScoreManager != null)
         {
             deliveryScoreManager.TargetsRemainingChanged -= UpdateObjective;
+            deliveryScoreManager.DeliveryTargetDiscovered -= OnLV2DeliveryTargetDiscovered;
             deliveryScoreManager.LevelCompleted -= CompleteLevel;
             deliveryScoreManager.SetTutorialLockout(false);
         }
@@ -308,12 +309,12 @@ public class Level1Manager : MonoBehaviour
         textRect.anchorMax = new Vector2(0.5f, 0.5f);
         textRect.pivot = new Vector2(0.5f, 0.5f);
         textRect.anchoredPosition = Vector2.zero;
-        textRect.sizeDelta = new Vector2(1500f, 340f);
+        textRect.sizeDelta = new Vector2(1580f, 430f);
 
         levelStatusText.alignment = TMPro.TextAlignmentOptions.Center;
-        levelStatusText.fontSize = 44f;
-        levelStatusText.fontSizeMin = 34f;
-        levelStatusText.fontSizeMax = 44f;
+        levelStatusText.fontSize = 34f;
+        levelStatusText.fontSizeMin = 26f;
+        levelStatusText.fontSizeMax = 34f;
         levelStatusText.enableAutoSizing = true;
         levelStatusText.characterSpacing = 0f;
         levelStatusText.wordSpacing = 0f;
@@ -328,14 +329,16 @@ public class Level1Manager : MonoBehaviour
             return;
         }
 
+        if (mavlinkReceiver != null && mavlinkReceiver.IsAutoMode && mavlinkReceiver.IsArmed)
+        {
+            lv2PlanningTutorialStep = LV2PlanningTutorialStep.Finished;
+            SetStatusText("");
+            return;
+        }
+
         if (lv2PlanningTutorialStep == LV2PlanningTutorialStep.MissionDetected)
         {
-            if (Time.time - lv2MissionDetectedAt >= LV2MissionDetectedMessageSeconds)
-            {
-                lv2PlanningTutorialStep = LV2PlanningTutorialStep.Finished;
-                SetStatusText("");
-            }
-
+            SetStatusText(LV2MissionReceivedMessage);
             return;
         }
 
@@ -370,12 +373,7 @@ public class Level1Manager : MonoBehaviour
         if (vehicleHasMission && missionChangedSinceLV2Started && missionTelemetryUpdated)
         {
             lv2PlanningTutorialStep = LV2PlanningTutorialStep.MissionDetected;
-            lv2MissionDetectedAt = Time.time;
-            SetStatusText(
-                $"Mission received: {missionTotal} items.\n" +
-                "If the battery runs low, land safely and change it.\n" +
-                "Then choose Resume Mission from Waypoint to continue."
-            );
+            SetStatusText(LV2MissionReceivedMessage);
         }
     }
 
@@ -612,6 +610,19 @@ public class Level1Manager : MonoBehaviour
         }
     }
 
+    private void OnLV2DeliveryTargetDiscovered(int targetNumber, float roofAltitudeAMSL, float deliveryAltitudeAMSL)
+    {
+        if (!isLV2PlanningTutorial || deliveryScoreManager == null)
+        {
+            return;
+        }
+
+        int found = deliveryScoreManager.DiscoveredDeliveryTargetCount;
+        int total = Mathf.Max(1, deliveryScoreManager.targetBuildingCount);
+        SetStatusText($"HOUSE FOUND  |  {found}/{total} delivery houses discovered");
+        RefreshDeliveryObjective();
+    }
+
     void ShowStruggleHintIfNeeded()
     {
         if (struggleHintShown ||
@@ -753,8 +764,14 @@ public class Level1Manager : MonoBehaviour
             ? deliveryScoreManager.TotalTargets
             : deliveryScoreManager.targetBuildingCount;
 
-        objectiveText.text =
-            $"{GetObjectiveLabel()}: {completedTargets}/{Mathf.Max(1, totalTargets)}";
+        bool isLV2Scene = string.Equals(
+            SceneManager.GetActiveScene().name,
+            LV2SceneName,
+            StringComparison.OrdinalIgnoreCase);
+        int displayTotal = Mathf.Max(1, deliveryScoreManager.targetBuildingCount);
+        objectiveText.text = isLV2Scene
+            ? $"Houses to deliver found: {deliveryScoreManager.DiscoveredDeliveryTargetCount}/{displayTotal}"
+            : $"{GetObjectiveLabel()}: {completedTargets}/{Mathf.Max(1, totalTargets)}";
 
         ResolvePresentProgressUI();
         if (presentProgressUI != null)

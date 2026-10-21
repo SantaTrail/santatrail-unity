@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Text;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -50,6 +52,9 @@ public class MinimapOverlayController : MonoBehaviour
     [Header("Refresh")]
     [Min(0.1f)]
     [SerializeField] private float missionRefreshInterval = 1f;
+    [Header("LV2 Survey Results")]
+    [SerializeField] private bool showLV2SurveyAltitudeEstimates = true;
+    [SerializeField] private float surveyAltitudePanelWidth = 330f;
 
     private RectTransform rectTransform;
     private RectTransform markerLayer;
@@ -58,12 +63,19 @@ public class MinimapOverlayController : MonoBehaviour
     private RectTransform guidanceRay;
     private RectTransform guidanceRingOutline;
     private RectTransform guidanceRing;
+    private RectTransform surveyAltitudePanel;
+    private TextMeshProUGUI surveyAltitudeText;
     private readonly Dictionary<Transform, RectTransform> missionMarkers =
         new Dictionary<Transform, RectTransform>();
     private readonly Dictionary<Transform, ManualDeliveryTarget> missionTargetSources =
         new Dictionary<Transform, ManualDeliveryTarget>();
     private readonly HashSet<Transform> seenMissionTargets =
         new HashSet<Transform>();
+    private readonly Dictionary<Transform, Vector3> deliveryMarkerPositions =
+        new Dictionary<Transform, Vector3>();
+    private readonly List<DeliveryScoreManager.DeliveryTargetMapInfo> deliveryTargetInfo =
+        new List<DeliveryScoreManager.DeliveryTargetMapInfo>();
+    private readonly StringBuilder surveyAltitudeTextBuilder = new StringBuilder(512);
     private Sprite defaultSprite;
     private Sprite playerTextureSprite;
     private Sprite missionTextureSprite;
@@ -85,6 +97,7 @@ public class MinimapOverlayController : MonoBehaviour
         guidanceArrowSprite = CreateGuidanceArrowSprite();
         EnsureMarkerLayer();
         EnsureGuidanceVisuals();
+        EnsureSurveyAltitudePanel();
     }
 
     private static Sprite CreateFallbackSprite()
@@ -117,6 +130,7 @@ public class MinimapOverlayController : MonoBehaviour
         UpdatePlayerMarker();
         UpdateMissionMarkers();
         UpdateTargetGuidance();
+        UpdateSurveyAltitudePanel();
     }
 
     private void OnDestroy()
@@ -255,11 +269,6 @@ public class MinimapOverlayController : MonoBehaviour
 
     private void RefreshMissionTargets(bool force)
     {
-        if (!force && !autoFindManualDeliveryTargets)
-        {
-            return;
-        }
-
         seenMissionTargets.Clear();
 
         if (autoFindManualDeliveryTargets)
@@ -291,6 +300,37 @@ public class MinimapOverlayController : MonoBehaviour
             AddMissionTarget(extraMissionTargets[i], missionColor);
         }
 
+        if (deliveryScoreManager == null)
+        {
+            deliveryScoreManager = Object.FindFirstObjectByType<DeliveryScoreManager>();
+        }
+
+        if (deliveryScoreManager != null && deliveryScoreManager.isActiveAndEnabled)
+        {
+            deliveryScoreManager.GetDeliveryTargetsForMinimap(deliveryTargetInfo);
+            for (int i = 0; i < deliveryTargetInfo.Count; i++)
+            {
+                DeliveryScoreManager.DeliveryTargetMapInfo target = deliveryTargetInfo[i];
+                if (target.Root == null || !target.Discovered)
+                {
+                    continue;
+                }
+
+                AddMissionTarget(target.Root, new Color(1f, 0.72f, 0.12f, 1f));
+                deliveryMarkerPositions[target.Root] = target.RoofPoint;
+                if (missionMarkers.TryGetValue(target.Root, out RectTransform discoveredMarker) &&
+                    discoveredMarker != null)
+                {
+                    discoveredMarker.sizeDelta = new Vector2(20f, 20f);
+                    Image markerImage = discoveredMarker.GetComponent<Image>();
+                    if (markerImage != null)
+                    {
+                        markerImage.color = new Color(1f, 0.72f, 0.12f, 1f);
+                    }
+                }
+            }
+        }
+
         List<Transform> deadTargets = new List<Transform>();
         foreach (KeyValuePair<Transform, RectTransform> pair in missionMarkers)
         {
@@ -315,6 +355,7 @@ public class MinimapOverlayController : MonoBehaviour
             {
                 missionMarkers.Remove(target);
                 missionTargetSources.Remove(target);
+                deliveryMarkerPositions.Remove(target);
             }
         }
     }
@@ -494,6 +535,10 @@ public class MinimapOverlayController : MonoBehaviour
             }
 
             Vector3 worldPosition = GetMissionTargetWorldPosition(target);
+            if (deliveryMarkerPositions.TryGetValue(target, out Vector3 roofPosition))
+            {
+                worldPosition = roofPosition;
+            }
             Vector3 viewport = minimapCamera.WorldToViewportPoint(worldPosition);
             if (viewport.z < 0f)
             {
@@ -524,6 +569,126 @@ public class MinimapOverlayController : MonoBehaviour
 
             marker.anchoredPosition = anchoredPosition;
         }
+    }
+
+    private void EnsureSurveyAltitudePanel()
+    {
+        if (surveyAltitudePanel != null || !showLV2SurveyAltitudeEstimates)
+        {
+            return;
+        }
+
+        GameObject panelObject = new GameObject(
+            "SurveyDeliveryAltitudePanel",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image));
+        panelObject.transform.SetParent(transform, false);
+        surveyAltitudePanel = panelObject.GetComponent<RectTransform>();
+        surveyAltitudePanel.anchorMin = new Vector2(1f, 1f);
+        surveyAltitudePanel.anchorMax = new Vector2(1f, 1f);
+        surveyAltitudePanel.pivot = new Vector2(0f, 1f);
+        surveyAltitudePanel.anchoredPosition = new Vector2(12f, 0f);
+        surveyAltitudePanel.sizeDelta = new Vector2(surveyAltitudePanelWidth, 86f);
+        panelObject.GetComponent<Image>().color = new Color(0.035f, 0.055f, 0.07f, 0.9f);
+        panelObject.GetComponent<Image>().raycastTarget = false;
+
+        GameObject textObject = new GameObject(
+            "AltitudeEstimates",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(TextMeshProUGUI));
+        textObject.transform.SetParent(panelObject.transform, false);
+        RectTransform textRect = textObject.GetComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = new Vector2(10f, 8f);
+        textRect.offsetMax = new Vector2(-10f, -8f);
+        surveyAltitudeText = textObject.GetComponent<TextMeshProUGUI>();
+        surveyAltitudeText.font = TMP_Settings.defaultFontAsset;
+        surveyAltitudeText.fontSize = 14f;
+        surveyAltitudeText.color = Color.white;
+        surveyAltitudeText.alignment = TextAlignmentOptions.TopLeft;
+        surveyAltitudeText.textWrappingMode = TextWrappingModes.Normal;
+        surveyAltitudeText.raycastTarget = false;
+        panelObject.SetActive(false);
+    }
+
+    private void UpdateSurveyAltitudePanel()
+    {
+        if (!showLV2SurveyAltitudeEstimates)
+        {
+            if (surveyAltitudePanel != null) surveyAltitudePanel.gameObject.SetActive(false);
+            return;
+        }
+
+        EnsureSurveyAltitudePanel();
+        if (surveyAltitudePanel == null || surveyAltitudeText == null)
+        {
+            return;
+        }
+
+        if (deliveryScoreManager == null)
+        {
+            deliveryScoreManager = Object.FindFirstObjectByType<DeliveryScoreManager>();
+        }
+
+        bool isLV2 = deliveryScoreManager != null &&
+            string.Equals(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
+                "LV2", System.StringComparison.OrdinalIgnoreCase);
+        if (!isLV2 || deliveryScoreManager == null || !deliveryScoreManager.isActiveAndEnabled)
+        {
+            surveyAltitudePanel.gameObject.SetActive(false);
+            return;
+        }
+
+        deliveryScoreManager.GetDeliveryTargetsForMinimap(deliveryTargetInfo);
+        int discovered = deliveryScoreManager.DiscoveredDeliveryTargetCount;
+        int total = deliveryScoreManager.TotalDeliveryTargetCount;
+        if (discovered == 0)
+        {
+            surveyAltitudePanel.gameObject.SetActive(false);
+            return;
+        }
+
+        surveyAltitudeTextBuilder.Clear();
+        surveyAltitudeTextBuilder.Append("SURVEY DISCOVERY  ")
+            .Append(discovered).Append('/').Append(total).Append(" houses\n");
+
+        for (int i = 0; i < deliveryTargetInfo.Count; i++)
+        {
+            DeliveryScoreManager.DeliveryTargetMapInfo target = deliveryTargetInfo[i];
+            if (!target.Discovered) continue;
+            surveyAltitudeTextBuilder.Append("H").Append(target.Number).Append("  Roof ~");
+            if (float.IsNaN(target.EstimatedRoofAltitudeAMSL))
+            {
+                surveyAltitudeTextBuilder.Append("unknown");
+            }
+            else
+            {
+                surveyAltitudeTextBuilder.Append(target.EstimatedRoofAltitudeAMSL.ToString("F0"))
+                    .Append(" m AMSL  Suggested ~")
+                    .Append(target.RecommendedDeliveryAltitudeAMSL.ToString("F0"))
+                    .Append(" m AMSL");
+            }
+            surveyAltitudeTextBuilder.Append('\n');
+        }
+
+        if (discovered < total)
+        {
+            surveyAltitudeTextBuilder.Append("Fly the Survey pattern to reveal more.");
+        }
+        else if (total == 0)
+        {
+            surveyAltitudeTextBuilder.Append("Waiting for delivery houses to load.");
+        }
+
+        surveyAltitudeText.text = surveyAltitudeTextBuilder.ToString();
+        int rowCount = Mathf.Max(2, discovered + (discovered < total ? 2 : 1));
+        surveyAltitudePanel.sizeDelta = new Vector2(
+            surveyAltitudePanelWidth,
+            24f + rowCount * 23f);
+        surveyAltitudePanel.gameObject.SetActive(true);
     }
 
     private void UpdateTargetGuidance()

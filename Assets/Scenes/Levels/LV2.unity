@@ -4678,7 +4678,7 @@ MonoBehaviour:
   restoreGuidedModeAfterSafetyHold: 1
   buildingCollisionRetreatMeters: 1
   enforceMaximumAltitude: 1
-  maximumRelativeAltitudeMeters: 45
+  maximumRelativeAltitudeMeters: 160
   altitudeLimitBufferMeters: 3
 --- !u!4 &1214233501
 Transform:
@@ -7424,11 +7424,14 @@ MonoBehaviour:
   scoreText: {fileID: 1482932111}
   statusText: {fileID: 1267712440}
   deliveryStatusText: {fileID: 785339298}
-  targetBuildingCount: 5
+  targetBuildingCount: 8
   allowedHouseSetNames: []
-  targetSpawnRadiusFromDroneStart: 180
-  preferNearestTargetsToDroneHome: 1
-  fallbackToNearestTargetsWhenRadiusEmpty: 1
+  targetSpawnRadiusFromDroneStart: 700
+  minimumTargetDistanceFromDroneStart: 150
+  preferNearestTargetsToDroneHome: 0
+  preferTargetsFarFromDroneHome: 1
+  minimumTargetSeparationMeters: 80
+  fallbackToNearestTargetsWhenRadiusEmpty: 0
   buildingScanRetrySeconds: 1
   buildingScanTimeoutSeconds: 60
   hoverSecondsRequired: 3
@@ -7753,7 +7756,7 @@ MonoBehaviour:
   skipGeneratedGpsObjectsInManualLevel: 1
   mapOriginLongitude: 6.370749299289542
   mapOriginLatitude: 45.79619316475242
-  mapOriginAltitude: 930
+  mapOriginAltitude: 1002
   limitMapExtent: 1
   mapExtentSizeMeters: 350
   arcGISConverter: {fileID: 1663710037}
@@ -7940,7 +7943,7 @@ MonoBehaviour:
   skipGeneratedGpsObjectsInManualLevel: 1
   mapOriginLongitude: 6.370749299289542
   mapOriginLatitude: 45.79619316475242
-  mapOriginAltitude: 930
+  mapOriginAltitude: 1002
   limitMapExtent: 1
   mapExtentSizeMeters: 350
   arcGISConverter: {fileID: 1663710037}

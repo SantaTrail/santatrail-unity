@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using System.Collections;
 using System.Net;
 using System.Net.Sockets;
@@ -784,6 +785,14 @@ public class MAVLinkReceiver : MonoBehaviour
 
     void CheckAltitudeLimit()
     {
+        // Temporary LV2-only gameplay override while terrain and mission
+        // altitude alignment are being tuned. Other levels keep the ceiling.
+        if (SceneManager.GetActiveScene().name == "LV2")
+        {
+            altitudeLimitTriggered = false;
+            return;
+        }
+
         if (!enforceMaximumAltitude ||
             !hasTargetPosition ||
             !hbArmed ||
