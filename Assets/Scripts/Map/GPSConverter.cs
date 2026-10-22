@@ -28,7 +28,7 @@ public class GPSConverter : MonoBehaviour
             lon,
             lat,
             alt,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         var worldPos = arcGISMap.View.GeographicToWorld(point);

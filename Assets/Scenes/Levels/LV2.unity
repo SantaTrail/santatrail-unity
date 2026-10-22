@@ -3119,6 +3119,8 @@ MonoBehaviour:
   targetRingPulseAmount: 0.08
   targetRingPulseSpeed: 2.5
   missionRefreshInterval: 1
+  showLV2SurveyAltitudeEstimates: 1
+  surveyAltitudePanelWidth: 330
 --- !u!1 &785339296
 GameObject:
   m_ObjectHideFlags: 0
@@ -4631,6 +4633,7 @@ MonoBehaviour:
   udpListenPort: 14551
   udpReconnectSeconds: 1
   requestedPositionRateHz: 10
+  requestedAttitudeRateHz: 10
   locationComponent: {fileID: 0}
   alignToMapOriginOnStart: 1
   showDebugOverlay: 0
@@ -7426,14 +7429,19 @@ MonoBehaviour:
   deliveryStatusText: {fileID: 785339298}
   targetBuildingCount: 8
   allowedHouseSetNames: []
-  targetSpawnRadiusFromDroneStart: 700
-  minimumTargetDistanceFromDroneStart: 150
+  targetSpawnRadiusFromDroneStart: 200
+  minimumTargetDistanceFromDroneStart: 100
   preferNearestTargetsToDroneHome: 0
   preferTargetsFarFromDroneHome: 1
-  minimumTargetSeparationMeters: 80
+  minimumTargetSeparationMeters: 40
   fallbackToNearestTargetsWhenRadiusEmpty: 0
   buildingScanRetrySeconds: 1
-  buildingScanTimeoutSeconds: 60
+  buildingScanTimeoutSeconds: 90
+  revealLV2TargetsBySurvey: 1
+  surveyCameraFieldOfViewDegrees: 65
+  surveyMinimumClearanceMeters: 2
+  surveyMaximumFootprintRadiusMeters: 40
+  surveyDiscoveryCheckSeconds: 0.25
   hoverSecondsRequired: 3
   rewardPerDelivery: 100
   scanInterval: 1
@@ -9889,31 +9897,31 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -15.232379
+      value: -96267.5
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.y
-      value: -0.00011670403
+      value: -40044.676
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 35.553562
+      value: 706668.25
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 1
+      value: 0.9983851
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.x
-      value: 0.0000027545045
+      value: 0.05546743
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.000001524682
+      value: 0.009261454
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.z
-      value: 0.0000011871256
+      value: 0.008057618
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x

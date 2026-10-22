@@ -54,7 +54,7 @@ public partial class SceneLoaderArcgis
             );
 
             ApplyLayerVisibilityOverrides();
-            EnsureArcGISMapLoading(arcGISMap);
+            StartCoroutine(ConfigureAltitudeReferenceAndLoadMap(arcGISMap));
         }
         else
         {
@@ -72,6 +72,56 @@ public partial class SceneLoaderArcgis
         }
         if (arcGISConverter == null)
             Debug.LogWarning("⚠️ ArcGISConverter not found in Awake (will keep retrying)");
+    }
+
+    IEnumerator ConfigureAltitudeReferenceAndLoadMap(
+        ArcGISMapComponent mapComponent
+    )
+    {
+        // ArcGISMapComponent creates its View in OnEnable. Wait for it before
+        // changing the map's spatial reference, then load the map only after
+        // LV2's vertical datum has been applied.
+        float waitStartedAt = Time.realtimeSinceStartup;
+        while (mapComponent != null &&
+               (mapComponent.View == null || mapComponent.View.Map == null) &&
+               Time.realtimeSinceStartup - waitStartedAt < 10f)
+        {
+            yield return null;
+        }
+
+        if (mapComponent == null)
+        {
+            yield break;
+        }
+
+        if (ArcGISAltitudeReference.UsesEgm96ForActiveLevel &&
+            mapComponent.View != null && mapComponent.View.Map != null)
+        {
+            mapComponent.CustomMapSpatialReference =
+                ArcGISAltitudeReference.ForActiveLevel();
+            mapComponent.UseCustomMapSpatialReference = true;
+
+            // A scene-serialized origin can still carry a horizontal-only
+            // WGS84 reference. Reapply its coordinates with EGM96 so the map
+            // origin, streamed terrain, and MAVLink heights share one datum.
+            ArcGISPoint currentOrigin = mapComponent.OriginPosition;
+            if (currentOrigin != null)
+            {
+                mapComponent.OriginPosition = new ArcGISPoint(
+                    currentOrigin.X,
+                    currentOrigin.Y,
+                    currentOrigin.Z,
+                    ArcGISAltitudeReference.ForActiveLevel()
+                );
+            }
+
+            Debug.Log(
+                "🗺️ LV2 map vertical reference set to EGM96 (WKID 5773) " +
+                "to align terrain and ArduPilot MSL altitude."
+            );
+        }
+
+        EnsureArcGISMapLoading(mapComponent);
     }
 
     void OnDisable()
@@ -158,7 +208,7 @@ public partial class SceneLoaderArcgis
                     GameManager.homeLon,
                     GameManager.homeLat,
                     GameManager.homeAlt,
-                    ArcGISSpatialReference.WGS84()
+                    ArcGISAltitudeReference.ForActiveLevel()
                 );
 
                 ApplyConfiguredMapExtent(
@@ -198,7 +248,7 @@ public partial class SceneLoaderArcgis
             mapOriginLongitude,
             mapOriginLatitude,
             mapOriginAltitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
@@ -1692,7 +1742,7 @@ public partial class SceneLoaderArcgis
             originWaypoint.lon,
             originWaypoint.lat,
             originWaypoint.alt,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(

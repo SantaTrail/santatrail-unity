@@ -659,7 +659,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     GameManager.homeLon,
                     GameManager.homeLat,
                     GameManager.homeAlt,
-                    ArcGISSpatialReference.WGS84()
+                    ArcGISAltitudeReference.ForActiveLevel()
                 );
 
                 ApplyConfiguredMapExtent(
@@ -699,7 +699,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             mapOriginLongitude,
             mapOriginLatitude,
             mapOriginAltitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
@@ -1300,7 +1300,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             originWaypoint.lon,
             originWaypoint.lat,
             originWaypoint.alt,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
@@ -2308,7 +2308,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             longitude,
             latitude,
             altitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
         ArcGISLocationComponent location =
             target.AddComponent<ArcGISLocationComponent>();
@@ -5549,7 +5549,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 wp0.lon,
                 wp0.lat,
                 0,
-                ArcGISSpatialReference.WGS84()
+                ArcGISAltitudeReference.ForActiveLevel()
             );
         }
         else

@@ -972,9 +972,9 @@ MonoBehaviour:
     homeYaw: 0
   - label: Level 2 - Charvin Christmas Village
     sceneName: LV2
-    homeLatitude: 45.7975
-    homeLongitude: 6.3636
-    homeAltitude: 930
+    homeLatitude: 45.79619316475242
+    homeLongitude: 6.370749299289542
+    homeAltitude: 1002
     homeYaw: 0
   - label: Level 3 - Sandbox
     sceneName: SampleScene

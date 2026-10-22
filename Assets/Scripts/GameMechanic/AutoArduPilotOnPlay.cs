@@ -164,7 +164,7 @@ public static class AutoArduPilotOnPlay
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
                 if (ResolveWindowsSitlExecutable() != null)
                 {
-                    ownedSitlProcess = StartWindowsSitl(homeLat, homeLon, homeAlt, homeYaw);
+                    ownedSitlProcess = StartWindowsSitl(homeLat, homeLon, homeAlt, homeYaw, sceneName);
                     UnityEngine.Debug.Log("AutoArduPilotOnPlay: launched native Windows ArduPilot SITL.");
                 }
                 else
@@ -200,7 +200,8 @@ public static class AutoArduPilotOnPlay
                     FileName = "/bin/bash",
                     Arguments =
                         $"{QuoteShellArgument(scriptPath)} " +
-                        $"{homeLat} {homeLon} {homeAlt} {homeYaw}",
+                        $"{homeLat} {homeLon} {homeAlt} {homeYaw} " +
+                        QuoteShellArgument(sceneName),
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
@@ -342,7 +343,8 @@ public static class AutoArduPilotOnPlay
         string homeLat,
         string homeLon,
         string homeAlt,
-        string homeYaw
+        string homeYaw,
+        string sceneName
     )
     {
         string sitlExecutable = ResolveWindowsSitlExecutable();
@@ -360,7 +362,9 @@ public static class AutoArduPilotOnPlay
         string defaultsFile = Path.Combine(
             Application.streamingAssetsPath,
             "SITL",
-            "sitl_unity_safe.parm"
+            string.Equals(sceneName, "LV2", StringComparison.OrdinalIgnoreCase)
+                ? "sitl_unity_lv2.parm"
+                : "sitl_unity_safe.parm"
         );
         if (!File.Exists(defaultsFile))
         {
