@@ -16,9 +16,16 @@ public class FlightLogger : MonoBehaviour
     bool hasLastPosition;
     bool levelCompleted;
     float levelCompletedAt = -1f;
+    float nextSampleAt;
+    float lastSampleAt;
 
     void Start()
     {
+        if (!BehavioralAnalyticsCollector.HasConsent)
+        {
+            return;
+        }
+
         string folder = Path.Combine(
             Application.persistentDataPath,
             "SantaTrail",
@@ -54,6 +61,8 @@ public class FlightLogger : MonoBehaviour
             path,
             "time,x,y,z,vel,roll,pitch,yaw,terrainHeight,altitudeAboveGround,reward,completedTargets,totalTargets,remainingTargets,levelCompleted,levelCompletedAt,missionState\n"
         );
+        nextSampleAt = Time.unscaledTime;
+        lastSampleAt = Time.unscaledTime;
     }
 
     void OnDestroy()
@@ -72,7 +81,12 @@ public class FlightLogger : MonoBehaviour
 
     void Update()
     {
-        if (PauseMenuController.IsPaused || Time.deltaTime <= 0f) return;
+        if (!BehavioralAnalyticsCollector.HasConsent || string.IsNullOrEmpty(path) ||
+            PauseMenuController.IsPaused || Time.deltaTime <= 0f ||
+            Time.unscaledTime < nextSampleAt) return;
+        float sampleDelta = Mathf.Max(0.01f, Time.unscaledTime - lastSampleAt);
+        lastSampleAt = Time.unscaledTime;
+        nextSampleAt = Time.unscaledTime + 0.1f;
         // ✅ auto-find terrain if not assigned
         if (terrain == null)
         {
@@ -92,7 +106,7 @@ public class FlightLogger : MonoBehaviour
         }
 
         // ✅ FIX: manual velocity (NO Rigidbody)
-        Vector3 rawVel = (pos - lastPosition) / Time.deltaTime;
+        Vector3 rawVel = (pos - lastPosition) / sampleDelta;
         velocity = Vector3.Lerp(velocity, rawVel, 0.5f);
         lastPosition = pos;
 

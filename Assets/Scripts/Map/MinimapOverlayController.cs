@@ -316,7 +316,10 @@ public class MinimapOverlayController : MonoBehaviour
                     continue;
                 }
 
-                AddMissionTarget(target.Root, new Color(1f, 0.72f, 0.12f, 1f));
+                Color markerColor = target.Delivered
+                    ? new Color(0.15f, 0.85f, 0.28f, 1f)
+                    : new Color(1f, 0.72f, 0.12f, 1f);
+                AddMissionTarget(target.Root, markerColor);
                 deliveryMarkerPositions[target.Root] = target.RoofPoint;
                 if (missionMarkers.TryGetValue(target.Root, out RectTransform discoveredMarker) &&
                     discoveredMarker != null)
@@ -325,7 +328,7 @@ public class MinimapOverlayController : MonoBehaviour
                     Image markerImage = discoveredMarker.GetComponent<Image>();
                     if (markerImage != null)
                     {
-                        markerImage.color = new Color(1f, 0.72f, 0.12f, 1f);
+                        markerImage.color = markerColor;
                     }
                 }
             }
@@ -633,10 +636,11 @@ public class MinimapOverlayController : MonoBehaviour
             deliveryScoreManager = Object.FindFirstObjectByType<DeliveryScoreManager>();
         }
 
-        bool isLV2 = deliveryScoreManager != null &&
-            string.Equals(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
-                "LV2", System.StringComparison.OrdinalIgnoreCase);
-        if (!isLV2 || deliveryScoreManager == null || !deliveryScoreManager.isActiveAndEnabled)
+        string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        bool isScanLevel = string.Equals(sceneName, "LV2", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(sceneName, "LV3", System.StringComparison.OrdinalIgnoreCase);
+        bool isLV3StructureScan = string.Equals(sceneName, "LV3", System.StringComparison.OrdinalIgnoreCase);
+        if (!isScanLevel || deliveryScoreManager == null || !deliveryScoreManager.isActiveAndEnabled)
         {
             surveyAltitudePanel.gameObject.SetActive(false);
             return;
@@ -645,21 +649,30 @@ public class MinimapOverlayController : MonoBehaviour
         deliveryScoreManager.GetDeliveryTargetsForMinimap(deliveryTargetInfo);
         int discovered = deliveryScoreManager.DiscoveredDeliveryTargetCount;
         int total = deliveryScoreManager.TotalDeliveryTargetCount;
-        if (discovered == 0)
+        if (discovered == 0 && !isLV3StructureScan)
         {
             surveyAltitudePanel.gameObject.SetActive(false);
             return;
         }
 
         surveyAltitudeTextBuilder.Clear();
-        surveyAltitudeTextBuilder.Append("SURVEY DISCOVERY  ")
-            .Append(discovered).Append('/').Append(total).Append(" houses\n");
+        surveyAltitudeTextBuilder.Append(isLV3StructureScan ? "ROOM DELIVERY  " : "SURVEY DISCOVERY  ")
+            .Append(discovered).Append('/').Append(total)
+            .Append(isLV3StructureScan ? " rooms\n" : " houses\n");
+
+        if (isLV3StructureScan && discovered < total)
+        {
+            surveyAltitudeTextBuilder.Append("Coverage: ")
+                .Append(deliveryScoreManager.StructureScanCellsCompleted)
+                .Append("/12 views\n");
+        }
 
         for (int i = 0; i < deliveryTargetInfo.Count; i++)
         {
             DeliveryScoreManager.DeliveryTargetMapInfo target = deliveryTargetInfo[i];
             if (!target.Discovered) continue;
-            surveyAltitudeTextBuilder.Append("H").Append(target.Number).Append("  Roof ~");
+            surveyAltitudeTextBuilder.Append(isLV3StructureScan ? "R" : "H")
+                .Append(target.Number).Append(isLV3StructureScan ? "  Room floor ~" : "  Roof ~");
             if (float.IsNaN(target.EstimatedRoofAltitudeAMSL))
             {
                 surveyAltitudeTextBuilder.Append("unknown");
@@ -676,15 +689,20 @@ public class MinimapOverlayController : MonoBehaviour
 
         if (discovered < total)
         {
-            surveyAltitudeTextBuilder.Append("Fly the Survey pattern to reveal more.");
+            surveyAltitudeTextBuilder.Append(isLV3StructureScan
+                ? "Scan every side at low, middle, and roof height to reveal all rooms."
+                : "Fly the Survey pattern to reveal more.");
         }
         else if (total == 0)
         {
-            surveyAltitudeTextBuilder.Append("Waiting for delivery houses to load.");
+            surveyAltitudeTextBuilder.Append(isLV3StructureScan
+                ? "Waiting for tall buildings to load."
+                : "Waiting for delivery houses to load.");
         }
 
         surveyAltitudeText.text = surveyAltitudeTextBuilder.ToString();
-        int rowCount = Mathf.Max(2, discovered + (discovered < total ? 2 : 1));
+        int rowCount = Mathf.Max(2, discovered + (discovered < total ? 2 : 1) +
+            (isLV3StructureScan && discovered < total ? 1 : 0));
         surveyAltitudePanel.sizeDelta = new Vector2(
             surveyAltitudePanelWidth,
             24f + rowCount * 23f);

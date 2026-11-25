@@ -8,6 +8,7 @@ public class CameraFollow : MonoBehaviour
     public Camera cameraComponent;
     [Tooltip("If true, camera is mounted to drone at local offset (no chase follow).")]
     public bool attachToDrone = true;
+    [Tooltip("Camera offset in meters when mounted to the drone.")]
     public Vector3 offset = new Vector3(0, 2, -5);
     [Tooltip("Local-space point on the drone that the camera should look at when mounted.")]
     public Vector3 lookAtLocalOffset = new Vector3(0f, 0.35f, 0f);
@@ -91,7 +92,14 @@ public class CameraFollow : MonoBehaviour
 
             // This is the player's view: keep it mounted behind the drone, rather
             // than using the top-down world-space pose used by a minimap camera.
-            transform.localPosition = offset;
+            // Drone prefabs are scaled down for their visual model (LV2 uses
+            // 0.08). A raw local offset would therefore put this camera only
+            // centimeters from the drone. Compensate for the parent scale so
+            // the configured offset remains a world-space distance in meters.
+            transform.localPosition = GetScaleCompensatedLocalOffset(
+                offset,
+                drone
+            );
             if (cameraComponent != null && applyMountedFieldOfView)
             {
                 cameraComponent.fieldOfView = mountedFieldOfView;
@@ -216,6 +224,28 @@ public class CameraFollow : MonoBehaviour
 
         float rotT = 1f - Mathf.Exp(-rotationSmoothSpeed * Time.deltaTime);
         transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, rotT);
+    }
+
+    static Vector3 GetScaleCompensatedLocalOffset(
+        Vector3 worldOffset,
+        Transform scaledParent)
+    {
+        if (scaledParent == null)
+        {
+            return worldOffset;
+        }
+
+        Vector3 scale = scaledParent.lossyScale;
+        return new Vector3(
+            worldOffset.x / SafeScaleMagnitude(scale.x),
+            worldOffset.y / SafeScaleMagnitude(scale.y),
+            worldOffset.z / SafeScaleMagnitude(scale.z)
+        );
+    }
+
+    static float SafeScaleMagnitude(float scale)
+    {
+        return Mathf.Abs(scale) > 0.0001f ? scale : 1f;
     }
 
     private static bool IsFinite(Vector3 value)

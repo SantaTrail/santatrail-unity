@@ -623,11 +623,7 @@ public class FlightLogDashboardUI : MonoBehaviour
             20f
         );
 
-        AlignGeneratedTextToHeader(rowObject.transform, "DateText", "DateHeader");
-        AlignGeneratedTextToHeader(rowObject.transform, "MissionNameText", "MissionHeader");
-        AlignGeneratedTextToHeader(rowObject.transform, "ScoreText", "ScoreHeader");
-        AlignGeneratedTextToHeader(rowObject.transform, "FlightTimeText", "FlightTimeHeader");
-        AlignGeneratedTextToHeader(rowObject.transform, "OutcomeText", "OutcomeHeader");
+        AlignGeneratedRowColumns(rowObject.transform);
 
         rows.Add(new FlightLogRowWidgets(rowObject.transform));
         rowTemplate = rowObject.transform;
@@ -696,6 +692,15 @@ public class FlightLogDashboardUI : MonoBehaviour
         generatedRect.position += horizontalOffset;
     }
 
+    private void AlignGeneratedRowColumns(Transform row)
+    {
+        AlignGeneratedTextToHeader(row, "DateText", "DateHeader");
+        AlignGeneratedTextToHeader(row, "MissionNameText", "MissionHeader");
+        AlignGeneratedTextToHeader(row, "ScoreText", "ScoreHeader");
+        AlignGeneratedTextToHeader(row, "FlightTimeText", "FlightTimeHeader");
+        AlignGeneratedTextToHeader(row, "OutcomeText", "OutcomeHeader");
+    }
+
     private static TMP_Text FindText(Transform root, string textName)
     {
         foreach (TMP_Text text in root.GetComponentsInChildren<TMP_Text>(true))
@@ -750,6 +755,10 @@ public class FlightLogDashboardUI : MonoBehaviour
             RectTransform previousRect = rows[rows.Count - 1].root.GetComponent<RectTransform>();
             cloneRect.anchoredPosition = previousRect.anchoredPosition +
                 new Vector2(0f, -rowSpacing);
+            if (generatedRowTemplate)
+            {
+                AlignGeneratedRowColumns(clone.transform);
+            }
             rows.Add(new FlightLogRowWidgets(clone.transform));
         }
 

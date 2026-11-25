@@ -10,8 +10,13 @@ FS_DR_ENABLE 0
 FS_EKF_ACTION 0
 WPNAV_SPEED 700
 WPNAV_ACCEL 250
+# LV2 survey needs faster vertical transitions and slightly smoother waypoint
+# pass-throughs so the aircraft does not crawl/settle at every survey leg.
+WPNAV_SPEED_UP 400
+WPNAV_SPEED_DN 300
+# Reduce vertical acceleration so altitude changes ramp more smoothly.
 WPNAV_ACCEL_Z 150
-WPNAV_RADIUS 200
+WPNAV_RADIUS 500
 GUID_OPTIONS 0
 GUID_TIMEOUT 0
 FS_OPTIONS 0

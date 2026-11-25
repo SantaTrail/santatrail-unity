@@ -290,6 +290,21 @@ public class ModularHouseGenerator : MonoBehaviour
         int deterministicSeed,
         out Transform deliveryTarget)
     {
+        return GenerateHouse(
+            buildingRoot,
+            localFootprintPoints,
+            deterministicSeed,
+            0,
+            out deliveryTarget);
+    }
+
+    public bool GenerateHouse(
+        Transform buildingRoot,
+        List<Vector3> localFootprintPoints,
+        int deterministicSeed,
+        int forcedFloorCount,
+        out Transform deliveryTarget)
+    {
         deliveryTarget = null;
 
         if (buildingRoot == null)
@@ -325,12 +340,14 @@ public class ModularHouseGenerator : MonoBehaviour
         int safeMinimumFloors = Mathf.Max(1, minimumFloors);
         int safeMaximumFloors = Mathf.Max(safeMinimumFloors, maximumFloors);
         System.Random random = new System.Random(deterministicSeed);
-        int floorCount = ChooseFloorCount(
-            safeMinimumFloors,
-            safeMaximumFloors,
-            shapeInfo,
-            random
-        );
+        int floorCount = forcedFloorCount > 0
+            ? Mathf.Max(1, forcedFloorCount)
+            : ChooseFloorCount(
+                safeMinimumFloors,
+                safeMaximumFloors,
+                shapeInfo,
+                random
+            );
         float totalWallHeight = floorCount * Mathf.Max(0.5f, floorHeight);
 
         GameObject generatedRootObject = new GameObject("GeneratedModules");

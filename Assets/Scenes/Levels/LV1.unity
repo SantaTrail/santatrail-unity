@@ -3698,7 +3698,7 @@ Light:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 900508955}
-  m_Enabled: 1
+  m_Enabled: 0
   serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 0.95686275, b: 0.8392157, a: 1}
@@ -3986,7 +3986,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: basemap
-      value: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/osm/standard
+      value: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/arcgis/imagery/standard
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: enableExtent
@@ -7871,7 +7871,7 @@ MonoBehaviour:
   - {fileID: 5917764883595587885, guid: 28a975aa8310cae41add1e09a208bd6e, type: 3}
   - {fileID: 5917764883595587885, guid: d606c02a095ed03439719ba47e0c3033, type: 3}
   spawnEnvironmentDetail: 1
-  spawnEnvironmentTrees: 0
+  spawnEnvironmentTrees: 1
   spawnEnvironmentBushes: 0
   spawnFieldPatches: 0
   spawnBackgroundTrees: 0
@@ -7882,9 +7882,9 @@ MonoBehaviour:
   environmentTreeScaleMin: 0.45
   environmentTreeScaleMax: 0.8
   environmentTreeMaximumHeight: 4.5
-  fieldTreeChancePerBuilding: 0.18
-  spawnStreetLights: 0
-  spawnStreetLightsAlongRoads: 0
+  fieldTreeChancePerBuilding: 0.32
+  spawnStreetLights: 1
+  spawnStreetLightsAlongRoads: 1
   roadsideStreetLightSpacingMeters: 32
   roadsideStreetLightOffsetMeters: 4
   roadsideStreetLightMaximumCount: 40
@@ -8057,8 +8057,8 @@ MonoBehaviour:
   - {fileID: 5917764883595587885, guid: 1c5940ef19fcfe8459baeb233edc1583, type: 3}
   - {fileID: 5917764883595587885, guid: 28a975aa8310cae41add1e09a208bd6e, type: 3}
   - {fileID: 5917764883595587885, guid: d606c02a095ed03439719ba47e0c3033, type: 3}
-  spawnEnvironmentDetail: 0
-  spawnEnvironmentTrees: 0
+  spawnEnvironmentDetail: 1
+  spawnEnvironmentTrees: 1
   spawnEnvironmentBushes: 0
   spawnFieldPatches: 0
   spawnBackgroundTrees: 0
@@ -8069,13 +8069,13 @@ MonoBehaviour:
   environmentTreeScaleMin: 0.45
   environmentTreeScaleMax: 0.8
   environmentTreeMaximumHeight: 4.5
-  fieldTreeChancePerBuilding: 0.18
-  spawnStreetLights: 0
-  spawnStreetLightsAlongRoads: 0
+  fieldTreeChancePerBuilding: 0.32
+  spawnStreetLights: 1
+  spawnStreetLightsAlongRoads: 1
   roadsideStreetLightSpacingMeters: 32
   roadsideStreetLightOffsetMeters: 4
   roadsideStreetLightMaximumCount: 40
-  roadsideStreetLightsOnBothSides: 0
+  roadsideStreetLightsOnBothSides: 1
   environmentBushesPerBuildingMin: 2
   environmentBushesPerBuildingMax: 5
   environmentBushScaleMin: 1.1
@@ -8107,6 +8107,19 @@ MonoBehaviour:
   houseSimpleLodDetailDistance: 600
   houseSimpleLodCullDistance: 900
   houseSimpleLodRefreshSeconds: 0.5
+  useCustomMapTexture: 1
+  customMapTexture: {fileID: 2800000, guid: 5e332c5873204da48f537adf8b3fbf4d, type: 3}
+  arcGISFallbackBasemapURL: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/arcgis/imagery/standard
+  customMapMeshResolution: 64
+  customMapSurfaceOffsetMeters: 0.18
+  useNightLevelLook: 1
+  nightSkyTexture: {fileID: 2800000, guid: 7e68d01a3e9a4d38ac9e7e0dbe72c9e7, type: 3}
+  nightAmbientColor: {r: 0.20, g: 0.23, b: 0.34, a: 1}
+  nightAmbientIntensity: 0.82
+  nightWindowLitChance: 0.68
+  nightWindowGlowStrength: 2.2
+  droneNavigationLightSize: 0.16
+  droneHeadlightIntensity: 4
 --- !u!114 &1924139589
 MonoBehaviour:
   m_ObjectHideFlags: 0

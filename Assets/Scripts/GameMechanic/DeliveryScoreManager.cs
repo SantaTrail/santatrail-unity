@@ -7,9 +7,17 @@ using Esri.ArcGISMapsSDK.Components;
 using Esri.HPFramework;
 using UnityEngine.Serialization;
 using UnityEngine.SceneManagement;
+using Esri.GameEngine.Geometry;
+using UnityEngine.UI;
 
 public class DeliveryScoreManager : MonoBehaviour
 {
+    private const int LV2DeliveryTargetCount = 5;
+    private const int LV3StructureSideCount = 4;
+    private const int LV3StructureHeightBandCount = 3;
+    private const float LV2MinimumNonAdjacentGapMeters = 8f;
+    private const float LV2MaximumTargetGroupDiameterMeters = 120f;
+
     public event Action<int> ScoreChanged;
     public event Action<int> TargetsRemainingChanged;
     public event Action LevelCompleted;
@@ -30,13 +38,17 @@ public class DeliveryScoreManager : MonoBehaviour
     [FormerlySerializedAs("maxTargetDistanceFromDroneStart")]
     [Tooltip("Only select delivery targets within this many meters of the drone's ArcGIS home position. This position is captured after generated buildings appear. Set to 0 to disable the distance filter.")]
     [Min(0f)] public float targetSpawnRadiusFromDroneStart = 350f;
-    [Tooltip("For remote delivery levels, exclude houses closer than this distance to the drone home. Set to 0 to disable.")]
+    [Tooltip("In LV2 only, require delivery houses to lie inside this square centered on the drone home. Other levels ignore this boundary.")]
+    public bool confineLV2TargetsToSquare = false;
+    [Min(1f)] public float lv2DeliveryAreaWidthMeters = 150f;
+    [Min(1f)] public float lv2DeliveryAreaHeightMeters = 150f;
+    [Tooltip("For LV2, this marks the near-home zone; at most two targets may be inside it. Other levels exclude houses closer than this distance. Set to 0 to disable the near-home zone.")]
     [Min(0f)] public float minimumTargetDistanceFromDroneStart = 0f;
     [Tooltip("When spread-out selection is off, choose closest eligible houses before considering farther ones.")]
     public bool preferNearestTargetsToDroneHome = true;
     [Tooltip("Prefer houses farther from the drone home and maximize spacing between selected houses.")]
     public bool preferTargetsFarFromDroneHome = false;
-    [Tooltip("Try to keep selected delivery houses at least this far apart. This is relaxed only if needed to reach the target count.")]
+    [Tooltip("Try to keep selected delivery houses at least this far apart. Spacing is relaxed only if the loaded village cannot provide enough targets.")]
     [Min(0f)] public float minimumTargetSeparationMeters = 0f;
     [Tooltip("If ArcGIS reports no houses inside the radius, use eligible houses outside it so the level still has delivery targets.")]
     public bool fallbackToNearestTargetsWhenRadiusEmpty = true;
@@ -250,6 +262,15 @@ public class DeliveryScoreManager : MonoBehaviour
         public float chimneyOpeningWidth;
         public bool discovered;
         public int displayNumber;
+        public int structureScanCells;
+        public bool isRoomDelivery;
+        public int roomNumber;
+        public Vector3 roomDeliveryPoint;
+        public Transform mapMarkerRoot;
+        public int roomWindowScanCell;
+        public Renderer roomWindowHighlight;
+        public Image roomWindowPresentIcon;
+        public GameObject roomWindowIconRoot;
     }
 
     public struct DeliveryTargetMapInfo
@@ -258,6 +279,7 @@ public class DeliveryScoreManager : MonoBehaviour
         public Vector3 RoofPoint;
         public int Number;
         public bool Discovered;
+        public bool Delivered;
         public float EstimatedRoofAltitudeAMSL;
         public float RecommendedDeliveryAltitudeAMSL;
     }
@@ -299,6 +321,28 @@ public class DeliveryScoreManager : MonoBehaviour
         ? lv2SurveyTargets.Count
         : activeTargets.Count;
 
+    public int StructureScanCellsCompleted
+    {
+        get
+        {
+            if (!isLV3StructureScanLevel || activeTargets.Count == 0 || activeTargets[0] == null)
+            {
+                return 0;
+            }
+
+            int completed = 0;
+            for (int cell = 0; cell < LV3StructureSideCount * LV3StructureHeightBandCount; cell++)
+            {
+                if ((activeTargets[0].structureScanCells & (1 << cell)) != 0)
+                {
+                    completed++;
+                }
+            }
+
+            return completed;
+        }
+    }
+
     public void GetDeliveryTargetsForMinimap(List<DeliveryTargetMapInfo> results)
     {
         if (results == null)
@@ -307,31 +351,37 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         results.Clear();
-        List<SpawnedBuildingTarget> targets = isLV2SurveyLevel && revealLV2TargetsBySurvey
+        List<SpawnedBuildingTarget> targets = UsesProgressiveTargetDiscovery
             ? lv2SurveyTargets
             : activeTargets;
         for (int i = 0; i < targets.Count; i++)
         {
             SpawnedBuildingTarget target = targets[i];
             if (target == null || target.root == null ||
-                (isLV2SurveyLevel && revealLV2TargetsBySurvey && !target.discovered))
+                (UsesProgressiveTargetDiscovery && !target.discovered))
             {
                 continue;
             }
 
+            Vector3 targetPoint = target.isRoomDelivery
+                ? target.roomDeliveryPoint
+                : target.roofTarget;
             float roofAltitudeAMSL = float.NaN;
             if (hasDroneStartPos && GameManager.hasHomeLocation)
             {
                 roofAltitudeAMSL = (float)(GameManager.homeAlt +
-                    target.roofTarget.y - droneStartPos.y);
+                    targetPoint.y - droneStartPos.y);
             }
 
             results.Add(new DeliveryTargetMapInfo
             {
-                Root = target.root,
-                RoofPoint = target.roofTarget,
+                Root = target.mapMarkerRoot != null
+                    ? target.mapMarkerRoot
+                    : target.root,
+                RoofPoint = targetPoint,
                 Number = target.displayNumber > 0 ? target.displayNumber : i + 1,
                 Discovered = target.discovered,
+                Delivered = deliveredBuildingKeys.Contains(target.key),
                 EstimatedRoofAltitudeAMSL = roofAltitudeAMSL,
                 RecommendedDeliveryAltitudeAMSL = float.IsNaN(roofAltitudeAMSL)
                     ? float.NaN
@@ -370,7 +420,7 @@ public class DeliveryScoreManager : MonoBehaviour
 
         if (currentNearestBuilding != null &&
             activeTargets.Contains(currentNearestBuilding) &&
-            (!isLV2SurveyLevel || !revealLV2TargetsBySurvey ||
+            (!UsesProgressiveTargetDiscovery ||
                 currentNearestBuilding.discovered))
         {
             return currentNearestBuilding;
@@ -384,7 +434,7 @@ public class DeliveryScoreManager : MonoBehaviour
         {
             SpawnedBuildingTarget candidate = activeTargets[i];
             if (candidate == null || candidate.root == null ||
-                (isLV2SurveyLevel && revealLV2TargetsBySurvey && !candidate.discovered))
+                (UsesProgressiveTargetDiscovery && !candidate.discovered))
             {
                 continue;
             }
@@ -434,6 +484,9 @@ public class DeliveryScoreManager : MonoBehaviour
     private bool hasLoggedDeliveryHome;
     private bool hasLoggedNoDeliveryCandidates;
     private bool isLV2SurveyLevel;
+    private bool isLV3StructureScanLevel;
+    private bool UsesProgressiveTargetDiscovery =>
+        (isLV2SurveyLevel && revealLV2TargetsBySurvey) || isLV3StructureScanLevel;
     private float nextSurveyDiscoveryCheckTime;
     private float currentSpeed;
     private float altitudeTrackedSeconds;
@@ -449,8 +502,23 @@ public class DeliveryScoreManager : MonoBehaviour
             "LV2",
             StringComparison.OrdinalIgnoreCase
         );
+        isLV3StructureScanLevel = string.Equals(
+            SceneManager.GetActiveScene().name,
+            "LV3",
+            StringComparison.OrdinalIgnoreCase
+        );
 
-        if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
+        if (isLV2SurveyLevel)
+        {
+            // LV2 is a fixed five-present tutorial, independent of a count
+            // carried over from another level or the main menu.
+            targetBuildingCount = LV2DeliveryTargetCount;
+        }
+        else if (isLV3StructureScanLevel)
+        {
+            targetBuildingCount = 5;
+        }
+        else if (GameManager.hasActiveDeliveryCount && GameManager.activeDeliveryCount > 0)
         {
             targetBuildingCount = Mathf.Max(1, GameManager.activeDeliveryCount);
         }
@@ -501,6 +569,8 @@ public class DeliveryScoreManager : MonoBehaviour
 
         float elapsed = 0f;
         int requestedCount = Mathf.Max(1, targetBuildingCount);
+        float activeScanTimeoutSeconds = buildingScanTimeoutSeconds;
+        bool attemptedNearbyVillageFallback = false;
 
         while (!buildingsInitialized)
         {
@@ -530,10 +600,10 @@ public class DeliveryScoreManager : MonoBehaviour
                             $"from {cachedBuildings.Count} detected buildings."
                         );
 
-                        if (targetCountToSelect < requestedCount)
+                        if (activeTargets.Count < requestedCount)
                         {
                             Debug.LogWarning(
-                                $"Only {targetCountToSelect} delivery houses were available; " +
+                                $"Only {activeTargets.Count} delivery targets were available; " +
                                 $"starting the mission with the safe houses that were generated."
                             );
                         }
@@ -542,13 +612,36 @@ public class DeliveryScoreManager : MonoBehaviour
                 }
             }
 
-            if (buildingScanTimeoutSeconds > 0f && elapsed >= buildingScanTimeoutSeconds)
+            if (activeScanTimeoutSeconds > 0f && elapsed >= activeScanTimeoutSeconds)
             {
+                if (isLV2SurveyLevel && !attemptedNearbyVillageFallback)
+                {
+                    attemptedNearbyVillageFallback = true;
+                    SceneLoaderArcgis[] sceneLoaders = FindObjectsByType<SceneLoaderArcgis>(
+                        FindObjectsInactive.Exclude,
+                        FindObjectsSortMode.None);
+                    SceneLoaderArcgis activeSceneLoader = Array.Find(
+                        sceneLoaders,
+                        loader => loader != null && loader.isActiveAndEnabled);
+
+                    if (activeSceneLoader != null &&
+                        activeSceneLoader.TrySpawnNearbyDeliveryVillage())
+                    {
+                        Debug.LogWarning(
+                            "No delivery building targets were detected after the scan timeout. " +
+                            "Spawned the LV2 nearby delivery village and will scan it now.");
+                        activeScanTimeoutSeconds = 5f;
+                        elapsed = 0f;
+                        yield return null;
+                        continue;
+                    }
+                }
+
                 initializationFinished = true;
                 initializationCoroutine = null;
                 Debug.LogWarning(
                     $"DeliveryScoreManager found no spawned building targets after " +
-                    $"{buildingScanTimeoutSeconds:0.0} seconds."
+                    $"{elapsed:0.0} seconds."
                 );
                 yield break;
             }
@@ -734,10 +827,12 @@ public class DeliveryScoreManager : MonoBehaviour
 
     private void UpdateLV2SurveyDiscovery()
     {
-        if (!isLV2SurveyLevel || !revealLV2TargetsBySurvey ||
+        if ((!isLV2SurveyLevel && !isLV3StructureScanLevel) ||
+            (isLV2SurveyLevel && !revealLV2TargetsBySurvey) ||
             !buildingsInitialized || drone == null || mavReceiver == null ||
             !mavReceiver.HasRecentTelemetry || !mavReceiver.IsArmed ||
-            !mavReceiver.IsAutoMode || Time.time < nextSurveyDiscoveryCheckTime)
+            (!isLV3StructureScanLevel && !mavReceiver.IsAutoMode) ||
+            Time.time < nextSurveyDiscoveryCheckTime)
         {
             return;
         }
@@ -759,14 +854,16 @@ public class DeliveryScoreManager : MonoBehaviour
             }
 
             float clearanceAboveRoof = dronePosition.y - target.bounds.max.y;
-            if (clearanceAboveRoof < Mathf.Max(1f, surveyMinimumClearanceMeters))
+            if (isLV2SurveyLevel &&
+                clearanceAboveRoof < Mathf.Max(1f, surveyMinimumClearanceMeters))
             {
                 continue;
             }
 
-            float footprintRadius = Mathf.Min(
-                maximumRadius,
-                clearanceAboveRoof * Mathf.Tan(halfFovRadians));
+            float footprintRadius = isLV3StructureScanLevel
+                ? 0f
+                : Mathf.Min(maximumRadius,
+                    clearanceAboveRoof * Mathf.Tan(halfFovRadians));
             float targetFootprintRadius = new Vector2(
                 target.bounds.extents.x,
                 target.bounds.extents.z).magnitude;
@@ -774,7 +871,57 @@ public class DeliveryScoreManager : MonoBehaviour
                 new Vector2(dronePosition.x, dronePosition.z),
                 new Vector2(target.bounds.center.x, target.bounds.center.z));
 
-            if (horizontalDistance > footprintRadius + targetFootprintRadius)
+            if (isLV3StructureScanLevel)
+            {
+                // LV3 requires an orbit outside the building footprint and
+                // observations from all four sides at three height bands.
+                float structureFootprintRadius = new Vector2(
+                    target.bounds.extents.x,
+                    target.bounds.extents.z).magnitude;
+                if (horizontalDistance < structureFootprintRadius + 4f ||
+                    horizontalDistance > structureFootprintRadius + 24f)
+                {
+                    continue;
+                }
+
+                float buildingHeight = Mathf.Max(3f, target.bounds.size.y);
+                float relativeHeight = dronePosition.y - target.bounds.min.y;
+                int heightBand = Mathf.FloorToInt(
+                    relativeHeight / buildingHeight * LV3StructureHeightBandCount);
+                if (heightBand < 0 || heightBand >= LV3StructureHeightBandCount)
+                {
+                    continue;
+                }
+
+                Vector2 fromBuilding = new Vector2(
+                    dronePosition.x - target.bounds.center.x,
+                    dronePosition.z - target.bounds.center.z);
+                float angle = Mathf.Atan2(fromBuilding.y, fromBuilding.x) * Mathf.Rad2Deg;
+                int side = Mathf.FloorToInt((angle + 360f + 45f) % 360f / 90f);
+                int cell = side * LV3StructureHeightBandCount + heightBand;
+                target.structureScanCells |= 1 << cell;
+                if (isLV3StructureScanLevel && target.isRoomDelivery &&
+                    target.roomWindowHighlight != null &&
+                    (target.structureScanCells & (1 << target.roomWindowScanCell)) != 0)
+                {
+                    target.roomWindowHighlight.gameObject.SetActive(true);
+                    if (target.roomWindowIconRoot != null)
+                    {
+                        target.roomWindowIconRoot.SetActive(true);
+                    }
+                    if (target.roomWindowPresentIcon != null)
+                    {
+                        target.roomWindowPresentIcon.gameObject.SetActive(true);
+                    }
+                }
+                int requiredCells =
+                    (1 << (LV3StructureSideCount * LV3StructureHeightBandCount)) - 1;
+                if (target.structureScanCells != requiredCells)
+                {
+                    continue;
+                }
+            }
+            else if (horizontalDistance > footprintRadius + targetFootprintRadius)
             {
                 continue;
             }
@@ -784,7 +931,9 @@ public class DeliveryScoreManager : MonoBehaviour
             if (hasDroneStartPos && GameManager.hasHomeLocation)
             {
                 roofAltitudeAMSL = (float)(GameManager.homeAlt +
-                    target.roofTarget.y - droneStartPos.y);
+                    (target.isRoomDelivery
+                        ? target.roomDeliveryPoint.y
+                        : target.roofTarget.y) - droneStartPos.y);
             }
 
             int targetNumber = target.displayNumber > 0 ? target.displayNumber : i + 1;
@@ -796,7 +945,8 @@ public class DeliveryScoreManager : MonoBehaviour
                 roofAltitudeAMSL,
                 deliveryAltitudeAMSL);
             Debug.Log(
-                $"LV2 survey discovered delivery house {targetNumber}; " +
+                $"{(isLV3StructureScanLevel ? "LV3 scan mapped room" : "LV2 survey discovered delivery house")} " +
+                $"{targetNumber}; " +
                 (float.IsNaN(roofAltitudeAMSL)
                     ? "altitude estimate unavailable."
                     : $"estimated roof altitude {roofAltitudeAMSL:F1} m AMSL."));
@@ -1059,12 +1209,18 @@ public class DeliveryScoreManager : MonoBehaviour
         List<SpawnedBuildingTarget> candidates =
             new List<SpawnedBuildingTarget>(cachedBuildings);
         candidates.RemoveAll(target => !IsTargetInAllowedHouseSet(target));
-        int allowedCandidateCount = candidates.Count;
+        int allowedHouseSetCandidateCount = candidates.Count;
+        if (isLV2SurveyLevel && confineLV2TargetsToSquare)
+        {
+            candidates.RemoveAll(target => !IsInsideLV2DeliveryArea(target));
+        }
+        int deliveryAreaCandidateCount = candidates.Count;
         bool usedNearestFallback = false;
 
         List<SpawnedBuildingTarget> allEligibleCandidates =
             new List<SpawnedBuildingTarget>(candidates);
-        if (HasTargetDistanceOrigin() && minimumTargetDistanceFromDroneStart > 0f)
+        if (!isLV2SurveyLevel && HasTargetDistanceOrigin() &&
+            minimumTargetDistanceFromDroneStart > 0f)
         {
             candidates.RemoveAll(target =>
                 target == null ||
@@ -1129,6 +1285,20 @@ public class DeliveryScoreManager : MonoBehaviour
                 }
             }
 
+            // LV2's radius and separation are deliberate tutorial constraints.
+            // Falling back to houses outside the radius would make the mission
+            // contradict its map/tutorial rules.
+            if (isLV2SurveyLevel)
+            {
+                Debug.LogWarning(
+                    $"No LV2 delivery houses were available within " +
+                    $"{targetSpawnRadiusFromDroneStart:0.#}m while respecting the " +
+                    $"{minimumTargetSeparationMeters:0.#}m spacing. " +
+                    "Keeping the target area constraints instead of selecting " +
+                    "out-of-radius houses.");
+                return;
+            }
+
             candidates = eligibleCandidates;
             usedNearestFallback = true;
 
@@ -1147,14 +1317,21 @@ public class DeliveryScoreManager : MonoBehaviour
         {
             if (!hasLoggedNoDeliveryCandidates)
             {
-                string reason = allowedCandidateCount == 0
+                string reason = allowedHouseSetCandidateCount == 0
                     ? "No generated houses matched the allowed house-set filter."
-                    : $"No delivery houses were found within " +
-                      $"{targetSpawnRadiusFromDroneStart:0.#}m of the drone home.";
+                    : (isLV2SurveyLevel && confineLV2TargetsToSquare &&
+                       deliveryAreaCandidateCount == 0)
+                        ? $"No generated houses were inside the LV2 " +
+                          $"{lv2DeliveryAreaWidthMeters:0.#}m × " +
+                          $"{lv2DeliveryAreaHeightMeters:0.#}m delivery area."
+                        : $"No delivery houses were found within " +
+                          $"{targetSpawnRadiusFromDroneStart:0.#}m of the drone home.";
 
                 Debug.LogWarning(
-                    $"{reason} Increase Target Spawn Radius From Drone Start " +
-                    "in the Inspector if a wider level area is desired."
+                    isLV2SurveyLevel && confineLV2TargetsToSquare
+                        ? $"{reason} Widen the LV2 delivery area in the Inspector if needed."
+                        : $"{reason} Increase Target Spawn Radius From Drone Start " +
+                          "in the Inspector if a wider level area is desired."
                 );
                 hasLoggedNoDeliveryCandidates = true;
             }
@@ -1166,7 +1343,25 @@ public class DeliveryScoreManager : MonoBehaviour
             hasLoggedNoDeliveryCandidates = false;
         }
 
-        if (preferTargetsFarFromDroneHome || minimumTargetSeparationMeters > 0f)
+        if (isLV3StructureScanLevel)
+        {
+            // LV3 scans one physical high-rise, then treats five exterior
+            // window/balcony drop points on separate floors as room targets.
+            candidates.Sort((a, b) => b.bounds.size.y.CompareTo(a.bounds.size.y));
+            if (candidates.Count > 0)
+            {
+                AddLV3RoomTargets(candidates[0]);
+            }
+        }
+        else if (isLV2SurveyLevel && minimumTargetSeparationMeters > 0f)
+        {
+            // LV2 targets should be distributed across the allowed area. A
+            // strict gap prevents adjacent buildings from both becoming
+            // delivery houses; if the map is too sparse, select fewer rather
+            // than silently collapsing the spacing to zero.
+            SelectLV2SpreadTargets(candidates, amount);
+        }
+        else if (preferTargetsFarFromDroneHome)
         {
             SelectSpreadTargets(candidates, amount);
             if (preferTargetsFarFromDroneHome && activeTargets.Count < amount)
@@ -1189,12 +1384,7 @@ public class DeliveryScoreManager : MonoBehaviour
         }
         else
         {
-            candidates.Sort((a, b) =>
-            {
-                float aDistance = GetDistanceFromDroneStart(a);
-                float bDistance = GetDistanceFromDroneStart(b);
-                return aDistance.CompareTo(bDistance);
-            });
+            candidates.Sort((a, b) => GetDistanceFromDroneStart(a).CompareTo(GetDistanceFromDroneStart(b)));
 
             while (candidates.Count > 0 && activeTargets.Count < amount)
             {
@@ -1210,6 +1400,11 @@ public class DeliveryScoreManager : MonoBehaviour
         lv2SurveyTargets.AddRange(activeTargets);
         totalTargets = activeTargets.Count;
         flightSessionId = Guid.NewGuid().ToString("N");
+        string levelId = SceneManager.GetActiveScene().name;
+        BehavioralAnalyticsCollector.BeginAttempt(
+            levelId, "v1", 0, drone,
+            FindFirstObjectByType<Terrain>(), totalTargets
+        );
         RefreshTargetChimneys();
         RefreshDeliveryRings();
         TargetsRemainingChanged?.Invoke(RemainingTargets);
@@ -1218,10 +1413,31 @@ public class DeliveryScoreManager : MonoBehaviour
         string selectionDescription = usedNearestFallback
             ? "using the farthest eligible-house fallback"
             : $"within {targetSpawnRadiusFromDroneStart:0.#}m of the drone home";
+        float closestTargetToHomeMeters = float.PositiveInfinity;
+        float closestTargetPairMeters = float.PositiveInfinity;
+        for (int i = 0; i < activeTargets.Count; i++)
+        {
+            closestTargetToHomeMeters = Mathf.Min(
+                closestTargetToHomeMeters,
+                GetDistanceFromDroneStart(activeTargets[i]));
+            for (int j = i + 1; j < activeTargets.Count; j++)
+            {
+                closestTargetPairMeters = Mathf.Min(
+                    closestTargetPairMeters,
+                    GetTargetSeparationMeters(activeTargets[i], activeTargets[j]));
+            }
+        }
+
         Debug.Log(
-            $"Selected {totalTargets} delivery buildings {selectionDescription}; " +
-            $"minimum home distance {minimumTargetDistanceFromDroneStart:0.#}m, " +
-            $"target spacing {minimumTargetSeparationMeters:0.#}m."
+            $"Selected {totalTargets} delivery targets {selectionDescription}; " +
+            (isLV2SurveyLevel
+                ? $"near-home zone {minimumTargetDistanceFromDroneStart:0.#}m (up to 2 targets), "
+                : $"minimum home distance {minimumTargetDistanceFromDroneStart:0.#}m, ") +
+            $"requested target spacing {minimumTargetSeparationMeters:0.#}m. " +
+            $"Actual closest home distance: " +
+            $"{(float.IsPositiveInfinity(closestTargetToHomeMeters) ? 0f : closestTargetToHomeMeters):0.#}m; " +
+            $"actual closest target pair: " +
+            $"{(float.IsPositiveInfinity(closestTargetPairMeters) ? 0f : closestTargetPairMeters):0.#}m."
         );
 
         if (verboseDebugLogs)
@@ -1233,6 +1449,55 @@ public class DeliveryScoreManager : MonoBehaviour
         }
     }
 
+    bool IsInsideLV2DeliveryArea(SpawnedBuildingTarget target)
+    {
+        if (!isLV2SurveyLevel || !confineLV2TargetsToSquare)
+        {
+            return true;
+        }
+
+        if (target == null || target.root == null)
+        {
+            return false;
+        }
+
+        float halfWidth = Mathf.Max(0.5f, lv2DeliveryAreaWidthMeters * 0.5f);
+        float halfHeight = Mathf.Max(0.5f, lv2DeliveryAreaHeightMeters * 0.5f);
+        ArcGISLocationComponent location =
+            target.root.GetComponent<ArcGISLocationComponent>();
+
+        if (hasGeographicHomePosition && location != null && location.Position != null)
+        {
+            ArcGISPoint point = location.Position;
+            double latitude = point.Y;
+            double longitude = point.X;
+            if (!IsValidGeographicPosition(latitude, longitude))
+            {
+                return false;
+            }
+
+            const double metersPerDegreeLatitude = 111320d;
+            double eastMeters =
+                (longitude - homeLongitude) * metersPerDegreeLatitude *
+                Math.Cos(homeLatitude * Math.PI / 180d);
+            double northMeters =
+                (latitude - homeLatitude) * metersPerDegreeLatitude;
+            return Math.Abs(eastMeters) <= halfWidth &&
+                   Math.Abs(northMeters) <= halfHeight;
+        }
+
+        if (hasDroneStartPos)
+        {
+            Vector3 delta = target.bounds.center - droneStartPos;
+            return Mathf.Abs(delta.x) <= halfWidth &&
+                   Mathf.Abs(delta.z) <= halfHeight;
+        }
+
+        // If LV2 has no usable home origin, do not silently select targets
+        // outside the requested area.
+        return false;
+    }
+
     private void AddSelectedTarget(SpawnedBuildingTarget target)
     {
         if (target == null)
@@ -1242,6 +1507,462 @@ public class DeliveryScoreManager : MonoBehaviour
 
         target.displayNumber = activeTargets.Count + 1;
         activeTargets.Add(target);
+    }
+
+    private void AddLV3RoomTargets(SpawnedBuildingTarget building)
+    {
+        if (building == null || building.root == null)
+        {
+            return;
+        }
+
+        Vector3[] sideDirections =
+        {
+            Vector3.right, Vector3.forward, Vector3.left, Vector3.back, Vector3.right
+        };
+        float[] floorFractions = { 0.14f, 0.32f, 0.50f, 0.68f, 0.86f };
+        float sideClearance = Mathf.Max(3f, deliveryRadius * 0.45f);
+        Transform[] descendants = building.root.GetComponentsInChildren<Transform>(true);
+        List<Transform> windowAnchors = new List<Transform>();
+        for (int i = 0; i < descendants.Length; i++)
+        {
+            if (descendants[i] != building.root &&
+                descendants[i].name.StartsWith("Window_E", StringComparison.OrdinalIgnoreCase))
+            {
+                windowAnchors.Add(descendants[i]);
+            }
+        }
+        HashSet<Transform> usedWindows = new HashSet<Transform>();
+
+        activeTargets.Clear();
+        for (int i = 0; i < 5; i++)
+        {
+            Transform window = FindLV3RoomWindow(
+                windowAnchors, usedWindows, building.bounds, sideDirections[i], floorFractions[i]);
+            Vector3 windowCenter;
+            Vector3 outward;
+            Vector3 roomPoint;
+            if (window != null)
+            {
+                usedWindows.Add(window);
+                GetLV3WindowBounds(window, out Bounds windowBounds);
+                windowCenter = windowBounds.center;
+                outward = Vector3.ProjectOnPlane(window.forward, Vector3.up).normalized;
+                if (outward.sqrMagnitude < 0.01f)
+                {
+                    outward = sideDirections[i];
+                }
+                roomPoint = windowCenter + outward * sideClearance;
+            }
+            else
+            {
+                // Fallback keeps LV3 playable if the selected building has no
+                // generated window modules in its hierarchy.
+                outward = sideDirections[i];
+                windowCenter = building.bounds.center + outward * (
+                    outward.x != 0f ? building.bounds.extents.x : building.bounds.extents.z);
+                windowCenter.y = building.bounds.min.y +
+                    Mathf.Max(2f, building.bounds.size.y) * floorFractions[i];
+                roomPoint = windowCenter + outward * sideClearance;
+            }
+
+            int windowSide = Mathf.FloorToInt((Mathf.Atan2(outward.z, outward.x) * Mathf.Rad2Deg +
+                360f + 45f) % 360f / 90f);
+            int windowBand = Mathf.Clamp(Mathf.FloorToInt(
+                (windowCenter.y - building.bounds.min.y) /
+                Mathf.Max(3f, building.bounds.size.y) * LV3StructureHeightBandCount),
+                0, LV3StructureHeightBandCount - 1);
+            int windowScanCell = windowSide * LV3StructureHeightBandCount + windowBand;
+
+            GameObject markerObject = new GameObject($"LV3RoomMarker_{i + 1}");
+            markerObject.transform.SetParent(building.root, true);
+            markerObject.transform.position = roomPoint;
+            CreateLV3WindowHighlight(
+                building.root, windowCenter, outward, window, i + 1, out Renderer highlightRenderer,
+                out Image presentIcon, out GameObject iconRoot);
+
+            activeTargets.Add(new SpawnedBuildingTarget
+            {
+                root = building.root,
+                representativeRenderer = building.representativeRenderer,
+                bounds = building.bounds,
+                roofTarget = building.roofTarget,
+                key = $"{building.key}_room_{i + 1}",
+                houseSetName = building.houseSetName,
+                displayNumber = i + 1,
+                isRoomDelivery = true,
+                roomNumber = i + 1,
+                roomDeliveryPoint = roomPoint,
+                mapMarkerRoot = markerObject.transform,
+                roomWindowScanCell = windowScanCell,
+                roomWindowHighlight = highlightRenderer,
+                roomWindowPresentIcon = presentIcon,
+                roomWindowIconRoot = iconRoot
+            });
+        }
+    }
+
+    private static Transform FindLV3RoomWindow(
+        List<Transform> windows, HashSet<Transform> used, Bounds buildingBounds,
+        Vector3 preferredSide, float floorFraction)
+    {
+        Transform best = null;
+        float bestScore = float.MaxValue;
+        Vector3 preferred = preferredSide.normalized;
+        float targetY = buildingBounds.min.y + buildingBounds.size.y * floorFraction;
+        for (int i = 0; i < windows.Count; i++)
+        {
+            Transform candidate = windows[i];
+            if (candidate == null || used.Contains(candidate)) continue;
+            Vector3 outward = Vector3.ProjectOnPlane(candidate.forward, Vector3.up).normalized;
+            if (outward.sqrMagnitude < 0.01f) continue;
+            GetLV3WindowBounds(candidate, out Bounds bounds);
+            float sidePenalty = (1f - Mathf.Clamp01(Vector3.Dot(outward, preferred))) * buildingBounds.size.y;
+            float score = Mathf.Abs(bounds.center.y - targetY) + sidePenalty;
+            if (score < bestScore)
+            {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    private static void GetLV3WindowBounds(Transform window, out Bounds bounds)
+    {
+        Renderer[] renderers = window != null
+            ? window.GetComponentsInChildren<Renderer>(true)
+            : Array.Empty<Renderer>();
+        bool hasBounds = false;
+        bounds = new Bounds(window != null ? window.position + Vector3.up * 1.4f : Vector3.zero,
+            new Vector3(1.2f, 1.5f, 0.15f));
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] == null) continue;
+            if (!hasBounds)
+            {
+                bounds = renderers[i].bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+        }
+    }
+
+    private static GameObject CreateLV3WindowHighlight(
+        Transform buildingRoot, Vector3 windowCenter, Vector3 outward, Transform window, int roomNumber,
+        out Renderer highlightRenderer, out Image presentIcon, out GameObject iconRoot)
+    {
+        GetLV3WindowBounds(window, out Bounds windowBounds);
+        float horizontalSize = Mathf.Abs(outward.x) > 0.5f
+            ? windowBounds.size.z
+            : windowBounds.size.x;
+        float width = Mathf.Clamp(horizontalSize, 0.7f, 2.2f);
+        float height = Mathf.Clamp(windowBounds.size.y, 0.8f, 2.0f);
+        GameObject highlight = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        highlight.name = $"LV3RoomWindowHighlight_{roomNumber}";
+        highlight.transform.SetParent(buildingRoot, true);
+        highlight.transform.position = windowCenter + outward * 0.10f;
+        highlight.transform.rotation = Quaternion.LookRotation(outward, Vector3.up);
+        highlight.transform.localScale = new Vector3(width, height, 0.06f);
+        Collider collider = highlight.GetComponent<Collider>();
+        if (collider != null) Destroy(collider);
+        highlightRenderer = highlight.GetComponent<Renderer>();
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
+            Shader.Find("Unlit/Color") ?? Shader.Find("Sprites/Default") ?? Shader.Find("Standard");
+        Material material = new Material(shader);
+        material.color = new Color(1f, 0.82f, 0.05f, 1f);
+        highlightRenderer.sharedMaterial = material;
+        highlight.SetActive(false);
+
+        GameObject canvasObject = new GameObject($"LV3RoomPresentIcon_{roomNumber}", typeof(RectTransform), typeof(Canvas));
+        canvasObject.transform.SetParent(buildingRoot, true);
+        canvasObject.transform.position = windowCenter + outward * 0.20f + Vector3.up * (height * 0.68f);
+        canvasObject.transform.rotation = Quaternion.LookRotation(outward, Vector3.up);
+        canvasObject.transform.localScale = Vector3.one * 0.01f;
+        Canvas canvas = canvasObject.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.WorldSpace;
+        canvas.overrideSorting = true;
+        canvas.sortingOrder = 20;
+        RectTransform canvasRect = canvasObject.GetComponent<RectTransform>();
+        canvasRect.sizeDelta = new Vector2(100f, 100f);
+        iconRoot = canvasObject;
+        iconRoot.SetActive(false);
+
+        GameObject iconPrefab = Resources.Load<GameObject>("SantaTrailDeliveryPresentIcon");
+        if (iconPrefab != null)
+        {
+            GameObject iconObject = Instantiate(iconPrefab, canvasObject.transform, false);
+            iconObject.name = "PresentIcon";
+            RectTransform iconRect = iconObject.GetComponent<RectTransform>();
+            if (iconRect != null)
+            {
+                iconRect.anchorMin = Vector2.zero;
+                iconRect.anchorMax = Vector2.one;
+                iconRect.offsetMin = Vector2.zero;
+                iconRect.offsetMax = Vector2.zero;
+            }
+            presentIcon = iconObject.GetComponent<Image>();
+            if (presentIcon == null) presentIcon = iconObject.GetComponentInChildren<Image>(true);
+            if (presentIcon != null) presentIcon.gameObject.SetActive(false);
+        }
+        else
+        {
+            presentIcon = null;
+        }
+        return highlight;
+    }
+
+    private void SelectLV2SpreadTargets(List<SpawnedBuildingTarget> candidates, int amount)
+    {
+        const int maxNearHomeTargets = 2;
+        float configuredSpacing = Mathf.Max(0f, minimumTargetSeparationMeters);
+        float nearHomeDistance = Mathf.Max(0f, minimumTargetDistanceFromDroneStart);
+        const float preferredHomeRadius = 80f;
+
+        // The 150 m radius is a hard limit for LV2. Houses closer than the
+        // usual 45 m preference are allowed, but no more than two are chosen.
+        candidates.RemoveAll(target => target == null ||
+            (targetSpawnRadiusFromDroneStart > 0f &&
+             GetDistanceFromDroneStart(target) > targetSpawnRadiusFromDroneStart));
+
+        candidates.Sort((left, right) =>
+            GetDistanceFromDroneStart(left).CompareTo(GetDistanceFromDroneStart(right)));
+
+        // Search each area completely before expanding outward. In particular,
+        // relax spacing inside the preferred home area before considering a
+        // farther house; otherwise a distant target can win at a larger gap.
+        float preferredRadius = Mathf.Min(preferredHomeRadius,
+            targetSpawnRadiusFromDroneStart > 0f
+                ? targetSpawnRadiusFromDroneStart
+                : preferredHomeRadius);
+        float spacingStart = Mathf.Max(configuredSpacing,
+            LV2MinimumNonAdjacentGapMeters);
+        List<float> searchRadii = new List<float> { preferredRadius };
+        if (targetSpawnRadiusFromDroneStart > preferredRadius)
+        {
+            searchRadii.Add(targetSpawnRadiusFromDroneStart);
+        }
+
+        List<SpawnedBuildingTarget> selected = null;
+        foreach (float searchRadius in searchRadii)
+        {
+            // Fully relax spacing in the nearer search area before admitting
+            // a farther target. Keeping radius as the outer loop prevents an
+            // outlying house from winning just because it permits a wider gap.
+            float spacing = spacingStart;
+            while (true)
+            {
+                selected = FindBestLV2TargetSet(
+                    candidates,
+                    amount,
+                    searchRadius,
+                    nearHomeDistance,
+                    maxNearHomeTargets,
+                    spacing,
+                    LV2MaximumTargetGroupDiameterMeters);
+
+                if (selected != null)
+                {
+                    break;
+                }
+
+                if (spacing <= LV2MinimumNonAdjacentGapMeters)
+                {
+                    break;
+                }
+
+                spacing = Mathf.Max(LV2MinimumNonAdjacentGapMeters, spacing - 5f);
+            }
+
+            if (selected != null)
+            {
+                break;
+            }
+        }
+
+        activeTargets.Clear();
+        if (selected != null)
+        {
+            foreach (SpawnedBuildingTarget target in selected)
+            {
+                AddSelectedTarget(target);
+            }
+        }
+
+        if (activeTargets.Count < amount)
+        {
+            Debug.LogWarning(
+                $"LV2 found {activeTargets.Count} of {amount} non-adjacent delivery " +
+                $"houses within {targetSpawnRadiusFromDroneStart:0.#}m. It allowed up " +
+                $"to {maxNearHomeTargets} houses within {nearHomeDistance:0.#}m of home; " +
+                "more generated houses may be needed to reach five.");
+        }
+    }
+
+    private List<SpawnedBuildingTarget> FindBestLV2TargetSet(
+        List<SpawnedBuildingTarget> candidates,
+        int amount,
+        float maximumHomeDistance,
+        float nearHomeDistance,
+        int maxNearHomeTargets,
+        float requestedSpacing,
+        float maximumGroupDiameter)
+    {
+        if (amount <= 0)
+        {
+            return new List<SpawnedBuildingTarget>();
+        }
+
+        List<SpawnedBuildingTarget> inRange = candidates.FindAll(target =>
+            target != null && GetDistanceFromDroneStart(target) <= maximumHomeDistance);
+        if (inRange.Count < amount)
+        {
+            return null;
+        }
+
+        List<SpawnedBuildingTarget> best = null;
+        List<SpawnedBuildingTarget> current = new List<SpawnedBuildingTarget>(amount);
+        float bestFarthestDistance = float.PositiveInfinity;
+        float bestTotalDistance = float.PositiveInfinity;
+
+        SearchLV2TargetCombinations(
+            inRange,
+            amount,
+            nearHomeDistance,
+            maxNearHomeTargets,
+            requestedSpacing,
+            maximumGroupDiameter,
+            0,
+            0,
+            0f,
+            current,
+            ref best,
+            ref bestFarthestDistance,
+            ref bestTotalDistance);
+
+        return best;
+    }
+
+    private void SearchLV2TargetCombinations(
+        List<SpawnedBuildingTarget> candidates,
+        int amount,
+        float nearHomeDistance,
+        int maxNearHomeTargets,
+        float requestedSpacing,
+        float maximumGroupDiameter,
+        int startIndex,
+        int nearCount,
+        float totalHomeDistance,
+        List<SpawnedBuildingTarget> current,
+        ref List<SpawnedBuildingTarget> best,
+        ref float bestFarthestDistance,
+        ref float bestTotalDistance)
+    {
+        if (current.Count == amount)
+        {
+            float farthestDistance = 0f;
+            foreach (SpawnedBuildingTarget selected in current)
+            {
+                farthestDistance = Mathf.Max(
+                    farthestDistance,
+                    GetDistanceFromDroneStart(selected));
+            }
+
+            if (farthestDistance < bestFarthestDistance ||
+                (Mathf.Approximately(farthestDistance, bestFarthestDistance) &&
+                 totalHomeDistance < bestTotalDistance))
+            {
+                best = new List<SpawnedBuildingTarget>(current);
+                bestFarthestDistance = farthestDistance;
+                bestTotalDistance = totalHomeDistance;
+            }
+            return;
+        }
+
+        int remainingNeeded = amount - current.Count;
+        if (candidates.Count - startIndex < remainingNeeded)
+        {
+            return;
+        }
+
+        for (int i = startIndex; i <= candidates.Count - remainingNeeded; i++)
+        {
+            SpawnedBuildingTarget candidate = candidates[i];
+            float homeDistance = GetDistanceFromDroneStart(candidate);
+            if (homeDistance > bestFarthestDistance)
+            {
+                // Candidates are sorted nearest-to-farthest, so later options
+                // cannot improve the maximum home distance.
+                break;
+            }
+
+            bool candidateIsNear = homeDistance < nearHomeDistance;
+            if (candidateIsNear && nearCount >= maxNearHomeTargets)
+            {
+                continue;
+            }
+
+            bool hasRequiredGap = true;
+            foreach (SpawnedBuildingTarget selected in current)
+            {
+                float separation = GetTargetSeparationMeters(candidate, selected);
+                float requiredGap = Mathf.Max(
+                    requestedSpacing,
+                    GetMinimumNonAdjacentGap(candidate, selected));
+                if (separation < requiredGap || separation > maximumGroupDiameter)
+                {
+                    hasRequiredGap = false;
+                    break;
+                }
+            }
+
+            if (!hasRequiredGap)
+            {
+                continue;
+            }
+
+            float nextTotalDistance = totalHomeDistance + homeDistance;
+            if (Mathf.Approximately(homeDistance, bestFarthestDistance) &&
+                nextTotalDistance >= bestTotalDistance)
+            {
+                continue;
+            }
+
+            current.Add(candidate);
+            SearchLV2TargetCombinations(
+                candidates,
+                amount,
+                nearHomeDistance,
+                maxNearHomeTargets,
+                requestedSpacing,
+                maximumGroupDiameter,
+                i + 1,
+                nearCount + (candidateIsNear ? 1 : 0),
+                nextTotalDistance,
+                current,
+                ref best,
+                ref bestFarthestDistance,
+                ref bestTotalDistance);
+            current.RemoveAt(current.Count - 1);
+        }
+    }
+
+    private float GetMinimumNonAdjacentGap(
+        SpawnedBuildingTarget first,
+        SpawnedBuildingTarget second)
+    {
+        float firstRadius = first != null
+            ? new Vector2(first.bounds.extents.x, first.bounds.extents.z).magnitude
+            : 0f;
+        float secondRadius = second != null
+            ? new Vector2(second.bounds.extents.x, second.bounds.extents.z).magnitude
+            : 0f;
+        return Mathf.Max(
+            LV2MinimumNonAdjacentGapMeters,
+            firstRadius + secondRadius + 6f);
     }
 
     private void SelectSpreadTargets(List<SpawnedBuildingTarget> candidates, int amount)
@@ -1272,9 +1993,7 @@ public class DeliveryScoreManager : MonoBehaviour
                         continue;
                     }
 
-                    float separation = Vector2.Distance(
-                        new Vector2(candidate.bounds.center.x, candidate.bounds.center.z),
-                        new Vector2(selected.bounds.center.x, selected.bounds.center.z));
+                    float separation = GetTargetSeparationMeters(candidate, selected);
                     nearestSelectedDistance = Mathf.Min(nearestSelectedDistance, separation);
                 }
 
@@ -1323,6 +2042,69 @@ public class DeliveryScoreManager : MonoBehaviour
         }
     }
 
+    private void SelectNearestSeparatedTargets(
+        List<SpawnedBuildingTarget> candidates,
+        int amount)
+    {
+        float requiredSeparation = Mathf.Max(0f, minimumTargetSeparationMeters);
+        int relaxationPasses = 0;
+
+        while (candidates.Count > 0 && activeTargets.Count < amount)
+        {
+            candidates.Sort((a, b) =>
+                GetDistanceFromDroneStart(a).CompareTo(GetDistanceFromDroneStart(b)));
+
+            int selectedIndex = -1;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                SpawnedBuildingTarget candidate = candidates[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                bool hasRequiredGap = true;
+                for (int j = 0; j < activeTargets.Count; j++)
+                {
+                    if (GetTargetSeparationMeters(candidate, activeTargets[j]) < requiredSeparation)
+                    {
+                        hasRequiredGap = false;
+                        break;
+                    }
+                }
+
+                if (hasRequiredGap)
+                {
+                    selectedIndex = i;
+                    break;
+                }
+            }
+
+            if (selectedIndex >= 0)
+            {
+                AddSelectedTarget(candidates[selectedIndex]);
+                candidates.RemoveAt(selectedIndex);
+                continue;
+            }
+
+            if (requiredSeparation <= 1f)
+            {
+                requiredSeparation = 0f;
+                continue;
+            }
+
+            requiredSeparation *= 0.75f;
+            relaxationPasses++;
+        }
+
+        if (relaxationPasses > 0)
+        {
+            Debug.LogWarning(
+                $"LV2 target spacing was reduced from {minimumTargetSeparationMeters:0.#}m " +
+                $"to {requiredSeparation:0.#}m to select {activeTargets.Count} of {amount} requested houses.");
+        }
+    }
+
     float GetDistanceFromDroneStart(SpawnedBuildingTarget target)
     {
         if (target == null)
@@ -1351,6 +2133,44 @@ public class DeliveryScoreManager : MonoBehaviour
         Vector2 targetPos = new Vector2(target.bounds.center.x, target.bounds.center.z);
         Vector2 originPos = new Vector2(origin.x, origin.z);
         return Vector2.Distance(originPos, targetPos);
+    }
+
+    float GetTargetSeparationMeters(
+        SpawnedBuildingTarget first,
+        SpawnedBuildingTarget second)
+    {
+        if (first != null && second != null && first.root != null && second.root != null)
+        {
+            ArcGISLocationComponent firstLocation =
+                first.root.GetComponent<ArcGISLocationComponent>();
+            ArcGISLocationComponent secondLocation =
+                second.root.GetComponent<ArcGISLocationComponent>();
+
+            if (firstLocation != null && firstLocation.Position != null &&
+                secondLocation != null && secondLocation.Position != null)
+            {
+                ArcGISPoint firstPosition = firstLocation.Position;
+                ArcGISPoint secondPosition = secondLocation.Position;
+                if (IsValidGeographicPosition(firstPosition.Y, firstPosition.X) &&
+                    IsValidGeographicPosition(secondPosition.Y, secondPosition.X))
+                {
+                    return (float)CalculateGeographicDistanceMeters(
+                        firstPosition.Y,
+                        firstPosition.X,
+                        secondPosition.Y,
+                        secondPosition.X);
+                }
+            }
+        }
+
+        if (first == null || second == null)
+        {
+            return 0f;
+        }
+
+        return Vector2.Distance(
+            new Vector2(first.bounds.center.x, first.bounds.center.z),
+            new Vector2(second.bounds.center.x, second.bounds.center.z));
     }
 
     bool HasTargetDistanceOrigin()
@@ -1494,14 +2314,18 @@ public class DeliveryScoreManager : MonoBehaviour
             bool hasHouseMarker =
                 t.GetComponent<House>() != null;
 
-            bool generatedWorldModularName =
-                t.name.IndexOf("ModularHouse_WorldBuilding_", StringComparison.OrdinalIgnoreCase) >= 0;
+            // A House component is the strongest marker and is used by both
+            // OSM-built homes and the guaranteed fallback village. Accept it
+            // regardless of root naming so generated targets remain discoverable
+            // if a generator changes its naming convention.
+            if (hasHouseMarker)
+            {
+                return t;
+            }
 
-            // ArcGIS-anchored generated buildings use ArcGISLocationComponent.
-            // House-marked world-space modular roots are also accepted as a
-            // compatibility fallback for scenes created with an older version.
-            if ((hasArcGISLocation && (generatedBuildingName || hasHouseMarker)) ||
-                (hasHouseMarker && (generatedBuildingName || generatedWorldModularName)))
+            // Older generated ArcGIS building roots may have the location
+            // component and conventional name but no House component.
+            if (hasArcGISLocation && generatedBuildingName)
             {
                 return t;
             }
@@ -1567,7 +2391,7 @@ public class DeliveryScoreManager : MonoBehaviour
             roofTarget = new Vector3(combinedBounds.center.x, combinedBounds.max.y, combinedBounds.center.z),
             key = MakeBuildingKey(combinedBounds.center),
             houseSetName = GetHouseSetName(root),
-            discovered = !isLV2SurveyLevel || !revealLV2TargetsBySurvey
+            discovered = !UsesProgressiveTargetDiscovery
         };
 
         return true;
@@ -1642,6 +2466,11 @@ public class DeliveryScoreManager : MonoBehaviour
             return Vector3.zero;
         }
 
+        if (target.isRoomDelivery)
+        {
+            return target.roomDeliveryPoint;
+        }
+
         if (target.chimneyDropPoint != null)
         {
             return target.chimneyDropPoint.position +
@@ -1668,6 +2497,11 @@ public class DeliveryScoreManager : MonoBehaviour
             new Vector2(drone.position.x, drone.position.z),
             new Vector2(deliveryPoint.x, deliveryPoint.z)
         );
+
+        if (target.isRoomDelivery)
+        {
+            return horizontalDistance <= GetTargetDeliveryRadius(target);
+        }
 
         if (target.chimneyDropPoint != null)
         {
@@ -1707,7 +2541,7 @@ public class DeliveryScoreManager : MonoBehaviour
         {
             SpawnedBuildingTarget target = activeTargets[i];
             if (target == null || target.root == null ||
-                (isLV2SurveyLevel && revealLV2TargetsBySurvey && !target.discovered))
+                (UsesProgressiveTargetDiscovery && !target.discovered))
             {
                 continue;
             }
@@ -1875,7 +2709,7 @@ public class DeliveryScoreManager : MonoBehaviour
         {
             SpawnedBuildingTarget target = activeTargets[i];
             if (target == null || target.root == null ||
-                (isLV2SurveyLevel && revealLV2TargetsBySurvey && !target.discovered))
+                (UsesProgressiveTargetDiscovery && !target.discovered))
             {
                 continue;
             }
@@ -2081,7 +2915,7 @@ public class DeliveryScoreManager : MonoBehaviour
         for (int i = 0; i < activeTargets.Count; i++)
         {
             SpawnedBuildingTarget target = activeTargets[i];
-            if (target == null || target.root == null ||
+            if (target == null || target.root == null || target.isRoomDelivery ||
                 targetChimneys.ContainsKey(target.key))
             {
                 continue;
@@ -2931,7 +3765,19 @@ public class DeliveryScoreManager : MonoBehaviour
 
         score += rewardPerDelivery;
         deliveredBuildingKeys.Add(key);
+        if (building.isRoomDelivery)
+        {
+            if (building.roomWindowHighlight != null)
+            {
+                building.roomWindowHighlight.material.color = new Color(0.2f, 1f, 0.3f, 1f);
+            }
+            if (building.roomWindowPresentIcon != null)
+            {
+                building.roomWindowPresentIcon.color = new Color(0.2f, 1f, 0.3f, 1f);
+            }
+        }
         completedDeliveries++;
+        BehavioralAnalyticsCollector.AddEvent("delivery_attempted", "{\"success\":true}");
         hoverTimers.Remove(key);
         activeTargets.Remove(building);
         RemoveDeliveryRing(key);
@@ -2959,6 +3805,13 @@ public class DeliveryScoreManager : MonoBehaviour
                 Mathf.Max(completeMessageDuration, 3f)
             );
             LevelCompleted?.Invoke();
+            BehavioralAnalyticsCollector.EndAttempt(
+                "completed", true, score, completedDeliveries,
+                averageAltitudeAgl: altitudeTrackedSeconds > 0.01f
+                    ? altitudeTotal / altitudeTrackedSeconds : -1,
+                minimumAltitudeAgl: altitudeMinimum < float.MaxValue ? altitudeMinimum : -1,
+                maximumAltitudeAgl: altitudeMaximum > float.MinValue ? altitudeMaximum : -1
+            );
             Debug.Log("✅ Level 1 Complete");
         }
 
@@ -3359,12 +4212,27 @@ public class DeliveryScoreManager : MonoBehaviour
     {
         if (pauseStatus)
         {
+            BehavioralAnalyticsCollector.NotifyApplicationPause(true);
             SaveProgress(level1Completed);
+        }
+        else
+        {
+            BehavioralAnalyticsCollector.NotifyApplicationPause(false);
         }
     }
 
     void OnApplicationQuit()
     {
+        BehavioralAnalyticsCollector.EndAttempt(
+            level1Completed ? "completed" : "quit",
+            level1Completed,
+            score,
+            completedDeliveries,
+            averageAltitudeAgl: altitudeTrackedSeconds > 0.01f
+                ? altitudeTotal / altitudeTrackedSeconds : -1,
+            minimumAltitudeAgl: altitudeMinimum < float.MaxValue ? altitudeMinimum : -1,
+            maximumAltitudeAgl: altitudeMaximum > float.MinValue ? altitudeMaximum : -1
+        );
         SaveProgress(level1Completed);
     }
 
@@ -3376,7 +4244,7 @@ public class DeliveryScoreManager : MonoBehaviour
         }
 
         float elapsedSeconds = -1f;
-        Level1Manager levelManager = FindFirstObjectByType<Level1Manager>();
+        LevelManager levelManager = FindFirstObjectByType<LevelManager>();
         if (levelManager != null && levelManager.HasLevelStarted)
         {
             float endTime = levelCompleted && levelManager.HasLevelCompleted

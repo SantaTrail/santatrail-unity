@@ -5,7 +5,7 @@ using UnityEngine.SceneManagement;
 
 /// <summary>
 /// Optional level manager for scenes that use ManualDeliveryScoreManager.
-/// Use this instead of a Level1Manager field that requires DeliveryScoreManager.
+/// Use this instead of a LevelManager field that requires DeliveryScoreManager.
 /// </summary>
 public class ManualDeliveryLevelManager : MonoBehaviour
 {

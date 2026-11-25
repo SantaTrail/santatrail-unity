@@ -36,6 +36,13 @@ public partial class SceneLoaderArcgis
             limitMapExtent && !fitDroneBoundaryToGeneratedVillage;
         configuredMapExtentRadiusMeters =
             System.Math.Max(1.0, mapExtentSizeMeters);
+        configuredDroneFlightBoundaryRadiusMeters =
+            droneFlightBoundaryRadiusMeters > 0f
+                ? System.Math.Min(
+                    configuredMapExtentRadiusMeters,
+                    droneFlightBoundaryRadiusMeters
+                )
+                : configuredMapExtentRadiusMeters;
 
         TryResolveArcGISConverter();
         ResolveModularHouseGenerator();
@@ -138,6 +145,7 @@ public partial class SceneLoaderArcgis
         configuredMapExtentSource = null;
         hasConfiguredMapExtent = false;
         configuredMapExtentRadiusMeters = 0.0;
+        configuredDroneFlightBoundaryRadiusMeters = 0.0;
     }
 
     void OnDrawGizmosSelected()
@@ -435,6 +443,7 @@ public partial class SceneLoaderArcgis
     void Start()
     {
         Debug.Log("🏘 Visible-only village test mode enabled");
+        ApplyNightLevelLook();
 
         if (loadingScreen == null)
         {
@@ -473,6 +482,7 @@ public partial class SceneLoaderArcgis
             "main.py",
             "parser.py",
             "osm.py",
+            "arcgis_buildings.py",
             "elevation.py",
             "features.py",
             "classifier.py"
@@ -767,12 +777,24 @@ public partial class SceneLoaderArcgis
 
         RunPython();
         int backendAttempt = 1;
-        const int maximumBackendAttempts = 2;
+        // LV2 must have delivery houses to teach the survey and delivery loop.
+        // When Overpass returns a valid map with no footprints, its second
+        // network attempt can run long enough to outlast delivery discovery.
+        // Use the generated local village immediately for LV2; retain the
+        // cold-start retry for the other levels.
+        int maximumBackendAttempts = string.Equals(
+            SceneManager.GetActiveScene().name,
+            "LV2",
+            System.StringComparison.OrdinalIgnoreCase
+        ) ? 1 : 2;
         float backendAttemptStartedAt = Time.realtimeSinceStartup;
 
         Debug.Log("⏳ Waiting for JSON + ArcGIS (production-safe)...");
 
-        float timeout = 120f;
+        // LV2's ArcGIS terrain can take over two minutes to become usable,
+        // while its enlarged OSM request may need a timeout and endpoint
+        // retry. Keep the loading gate open long enough for both to finish.
+        float timeout = 240f;
         float timer = 0f;
 
         bool jsonReady = !string.IsNullOrWhiteSpace(validatedJsonContent);
@@ -835,8 +857,10 @@ public partial class SceneLoaderArcgis
                             jsonReady = true;
                             TrySetFallbackOriginFromJson(content);
                             Debug.LogWarning(
-                                "⚠️ OSM returned no buildings after two attempts; " +
-                                "using the built-in delivery village."
+                                "⚠️ No building footprints were available after " +
+                                $"backend attempt {backendAttempt}/" +
+                                $"{maximumBackendAttempts}; using the built-in " +
+                                "delivery village."
                             );
                         }
                     }
