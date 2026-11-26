@@ -27,6 +27,15 @@ NavMeshSettings:
   serializedVersion: 2
   m_ObjectHideFlags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1001 &5200
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 2244e4320323c0e41b27e5240251a69a, type: 3}
 --- !u!1 &5000
 GameObject:
   m_ObjectHideFlags: 0
@@ -65,7 +74,7 @@ AudioListener:
 Transform:
   m_GameObject: {fileID: 5000}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 0, y: 0, z: -10}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
 --- !u!114 &5002
@@ -78,3 +87,5 @@ MonoBehaviour:
   m_GameObject: {fileID: 5000}
   m_Enabled: 1
   m_Script: {fileID: 11500000, guid: 62ed68d714f5d4176b8e0b0e343fe7c2, type: 3}
+  santaPrefab: {fileID: 100100000, guid: 2244e4320323c0e41b27e5240251a69a, type: 3}
+  santaController: {fileID: 9100000, guid: 7c07c290ac5b8e748a30c061dc5f5af5, type: 2}
