@@ -1013,7 +1013,7 @@ GameObject:
   - component: {fileID: 237289116}
   - component: {fileID: 237289117}
   m_Layer: 0
-  m_Name: Level3Manager
+  m_Name: Level2Manager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1063,9 +1063,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 237289113}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3f8b09c99c0145e486b7b5a21d0bb69a, type: 3}
+  m_Script: {fileID: 11500000, guid: 5dc8d88a15f242b59da6c4210d633c86, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Level3Manager
+  m_EditorClassIdentifier: Assembly-CSharp::Level2Manager
   deliveryScoreManager: {fileID: 0}
   objectiveText: {fileID: 1111008509}
   levelStatusText: {fileID: 1267712440}
@@ -3710,7 +3710,7 @@ Light:
   m_InnerSpotAngle: 21.80208
   m_CookieSize2D: {x: 0.5, y: 0.5}
   m_Shadows:
-    m_Type: 0
+    m_Type: 2
     m_Resolution: -1
     m_CustomResolution: -1
     m_Strength: 1
@@ -3996,15 +3996,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: originPosition.X
-      value: 16.384627
+      value: 6.368578
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: originPosition.Y
-      value: 48.180702
-      objectReference: {fileID: 0}
-    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
-      propertyPath: originPosition.Z
-      value: 15
+      value: 45.797171
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: layers.Array.size
@@ -4016,7 +4012,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: extent.ShapeDimensions.x
-      value: 400
+      value: 350
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: extent.ShapeDimensions.y
@@ -4044,19 +4040,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: mapElevation.ExaggerationFactor
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: layers.Array.data[0].AuthenticationType
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
-      propertyPath: mapElevation.ElevationSources.Array.data[0].IsEnabled
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: mapElevation.ElevationSources.Array.size
-      value: 0
+      value: 2
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: mapElevation.ElevationSources.Array.data[1].Name
@@ -7438,14 +7430,14 @@ MonoBehaviour:
   deliveryStatusText: {fileID: 785339298}
   targetBuildingCount: 5
   allowedHouseSetNames: []
-  targetSpawnRadiusFromDroneStart: 300
-  confineLV2TargetsToSquare: 0
+  targetSpawnRadiusFromDroneStart: 150
+  confineLV2TargetsToSquare: 1
   lv2DeliveryAreaWidthMeters: 300
   lv2DeliveryAreaHeightMeters: 300
-  minimumTargetDistanceFromDroneStart: 0
+  minimumTargetDistanceFromDroneStart: 45
   preferNearestTargetsToDroneHome: 1
   preferTargetsFarFromDroneHome: 0
-  minimumTargetSeparationMeters: 0
+  minimumTargetSeparationMeters: 60
   fallbackToNearestTargetsWhenRadiusEmpty: 1
   buildingScanRetrySeconds: 1
   buildingScanTimeoutSeconds: 90
@@ -7773,12 +7765,12 @@ MonoBehaviour:
   lockSceneMapOriginForManualBuildings: 0
   keepManuallyPlacedDronePosition: 1
   skipGeneratedGpsObjectsInManualLevel: 1
-  mapOriginLongitude: 16.384627
-  mapOriginLatitude: 48.180702
-  mapOriginAltitude: 15
+  mapOriginLongitude: 6.368578
+  mapOriginLatitude: 45.797171
+  mapOriginAltitude: 934
   limitMapExtent: 1
-  mapExtentSizeMeters: 400
-  droneFlightBoundaryRadiusMeters: 300
+  mapExtentSizeMeters: 300
+  droneFlightBoundaryRadiusMeters: 220
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
@@ -7790,7 +7782,7 @@ MonoBehaviour:
   arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
-  buildingSpawnRadius: 350
+  buildingSpawnRadius: 140
   fitDroneBoundaryToGeneratedVillage: 0
   droneBoundaryPastLastHouseMeters: 25
   minimumGeneratedVillageBoundaryMeters: 60
@@ -7807,7 +7799,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1
+  osmWallFootprintScale: 1.15
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -7883,7 +7875,7 @@ MonoBehaviour:
   pythonPath: 
   fetchMoreOsmBuildings: 1
   expandedBuildingScriptName: main_with_more_buildings.py
-  osmQueryRadiusMeters: 350
+  osmQueryRadiusMeters: 200
   treePrefab: {fileID: 5917764883595587885, guid: 736422f8743be4b4f9b0455b7ba85096, type: 3}
   environmentTreePrefabs:
   - {fileID: 5917764883595587885, guid: 956e26a3af980354097d662d3a60ccf7, type: 3}
@@ -7909,9 +7901,9 @@ MonoBehaviour:
   fieldTreeChancePerBuilding: 0.32
   spawnStreetLights: 1
   spawnStreetLightsAlongRoads: 1
-  roadsideStreetLightSpacingMeters: 18
-  roadsideStreetLightOffsetMeters: 3
-  roadsideStreetLightMaximumCount: 80
+  roadsideStreetLightSpacingMeters: 32
+  roadsideStreetLightOffsetMeters: 4
+  roadsideStreetLightMaximumCount: 40
   roadsideStreetLightsOnBothSides: 0
   environmentBushesPerBuildingMin: 2
   environmentBushesPerBuildingMax: 5
@@ -7962,12 +7954,12 @@ MonoBehaviour:
   lockSceneMapOriginForManualBuildings: 0
   keepManuallyPlacedDronePosition: 1
   skipGeneratedGpsObjectsInManualLevel: 1
-  mapOriginLongitude: 16.384627
-  mapOriginLatitude: 48.180702
-  mapOriginAltitude: 15
+  mapOriginLongitude: 6.368578
+  mapOriginLatitude: 45.797171
+  mapOriginAltitude: 934
   limitMapExtent: 1
-  mapExtentSizeMeters: 400
-  droneFlightBoundaryRadiusMeters: 300
+  mapExtentSizeMeters: 300
+  droneFlightBoundaryRadiusMeters: 250
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
@@ -7979,7 +7971,7 @@ MonoBehaviour:
   arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
-  buildingSpawnRadius: 350
+  buildingSpawnRadius: 140
   fitDroneBoundaryToGeneratedVillage: 0
   droneBoundaryPastLastHouseMeters: 25
   minimumGeneratedVillageBoundaryMeters: 60
@@ -7996,7 +7988,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1
+  osmWallFootprintScale: 1.15
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -8072,7 +8064,7 @@ MonoBehaviour:
   pythonPath: 
   fetchMoreOsmBuildings: 1
   expandedBuildingScriptName: main_with_more_buildings.py
-  osmQueryRadiusMeters: 350
+  osmQueryRadiusMeters: 200
   treePrefab: {fileID: 5917764883595587885, guid: 736422f8743be4b4f9b0455b7ba85096, type: 3}
   environmentTreePrefabs:
   - {fileID: 5917764883595587885, guid: 956e26a3af980354097d662d3a60ccf7, type: 3}
@@ -8098,9 +8090,9 @@ MonoBehaviour:
   fieldTreeChancePerBuilding: 0.32
   spawnStreetLights: 1
   spawnStreetLightsAlongRoads: 1
-  roadsideStreetLightSpacingMeters: 18
-  roadsideStreetLightOffsetMeters: 3
-  roadsideStreetLightMaximumCount: 80
+  roadsideStreetLightSpacingMeters: 32
+  roadsideStreetLightOffsetMeters: 4
+  roadsideStreetLightMaximumCount: 40
   roadsideStreetLightsOnBothSides: 1
   environmentBushesPerBuildingMin: 2
   environmentBushesPerBuildingMax: 5
@@ -8138,16 +8130,17 @@ MonoBehaviour:
   arcGISFallbackBasemapURL: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/arcgis/imagery/standard
   customMapMeshResolution: 64
   customMapSurfaceOffsetMeters: 0.18
-  flattenCustomMapGround: 1
   useNightLevelLook: 1
   nightSkyTexture: {fileID: 2800000, guid: 7e68d01a3e9a4d38ac9e7e0dbe72c9e7, type: 3}
-  nightAmbientColor: {r: 0.20, g: 0.23, b: 0.34, a: 1}
-  nightAmbientIntensity: 0.82
-  nightWindowLitChance: 0.82
-  nightWindowGlowStrength: 3.2
-  nightWindowLightChance: 0.22
-  nightWindowLightIntensity: 0.65
-  nightWindowLightRange: 6
+  nightAmbientColor: {r: 0.24, g: 0.29, b: 0.43, a: 1}
+  nightAmbientIntensity: 1.08
+  nightFogColor: {r: 0.035, g: 0.055, b: 0.12, a: 1}
+  nightFogDensity: 0.00055
+  nightWindowLitChance: 1
+  nightWindowGlowStrength: 3.5
+  nightWindowLightChance: 1
+  nightWindowLightIntensity: 0.8
+  nightWindowLightRange: 8
   droneNavigationLightSize: 0.16
   droneHeadlightIntensity: 4
 --- !u!114 &1924139589
@@ -8169,8 +8162,8 @@ MonoBehaviour:
   preferredModuleWidth: 1.8
   wallThickness: 0.2
   floorHeight: 3
-  minimumFloors: 2
-  maximumFloors: 5
+  minimumFloors: 1
+  maximumFloors: 2
   fitPrefabThickness: 1
   normalizePrefabBounds: 1
   useNearestModuleCount: 1

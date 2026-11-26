@@ -970,17 +970,22 @@ MonoBehaviour:
     homeLongitude: 4.964212
     homeAltitude: 0
     homeYaw: 0
-  - label: Level 2 - Charvin Christmas Village
+  - label: Level 2 - QGC Survey Planning
     sceneName: LV2
-    homeLatitude: 45.805705
-    homeLongitude: 6.377266
-    homeAltitude: 1002
+    homeLatitude: 52.155719
+    homeLongitude: 4.964212
+    homeAltitude: 0
     homeYaw: 0
-  - label: Level 3 - Sandbox
-    sceneName: SampleScene
-    homeLatitude: 13.8455
-    homeLongitude: 100.5688
-    homeAltitude: 10
+  - label: Level 3 - Survey02
+    sceneName: LV3
+    homeLatitude: 45.797171
+    homeLongitude: 6.368578
+    homeAltitude: 934
+  - label: Level 4 - Franz Joseph Room Scan
+    sceneName: LV4
+    homeLatitude: 48.180702
+    homeLongitude: 16.384627
+    homeAltitude: 15
     homeYaw: 0
   playButton: {fileID: 568253864}
   gameStory: 'Christmas is at risk. The reindeer are grounded and you are the last

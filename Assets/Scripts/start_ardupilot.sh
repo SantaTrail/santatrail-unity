@@ -9,7 +9,7 @@ HOME_LON="${2:-4.964212}"
 HOME_ALT="${3:-10}"
 HOME_YAW="${4:-0}"
 SCENE_NAME="${5:-}"
-if [ "$SCENE_NAME" = "LV2" ]; then
+if [ "$SCENE_NAME" = "LV2" ] || [ "$SCENE_NAME" = "LV3" ]; then
   PARAM_FILE="${SCRIPT_DIR}/sitl_unity_lv2.parm"
 fi
 

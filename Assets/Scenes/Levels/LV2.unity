@@ -1072,27 +1072,6 @@ MonoBehaviour:
   objectivePrefix: Deliver presents
   completedMessage: Nice work! You finished the guided-flight tutorial.
   presentProgressUI: {fileID: 2113456702}
-  showTutorial: 1
-  welcomeMessage: "Welcome! Connect to the drone in QGroundControl. I\u2019ll guide
-    you through the first flight."
-  mapModeMessage: In QGroundControl, open Application Settings > Maps and set Type
-    to Street Map. If it already shows Street Map, the tutorial will continue automatically.
-  findTargetMessage: "Open the flight-mode menu in QGC Fly View. If Guided isn\u2019t
-    listed, enable Edit Displayed Flight Modes and add it with Configure. Then select
-    Guided."
-  approachMessage: Choose Guided mode and Takeoff in QGroundControl and enter 12
-    m as the target altitude.
-  holdPositionMessage: Move the drone a short distance, then release the controls
-    and let it hover.
-  transitionMessage: Tutorial complete! Delivery targets are unlocked. Follow the
-    highlighted house to make your first delivery.
-  struggleHintMessage: Need a hand? Stay around 12 m while traveling. Above the highlighted
-    house, descend to no more than 3 m above the roof and hover to deliver.
-  connectionHoldSeconds: 8
-  mapModeDisplaySeconds: 4
-  takeoffAltitudeMeters: 1.5
-  controlMovementMeters: 2
-  struggleHintDelaySeconds: 30
   autoLoadNextScene: 0
   nextSceneName: 
   nextSceneDelaySeconds: 2
@@ -3996,11 +3975,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: originPosition.X
-      value: 6.368578
+      value: 4.964212
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: originPosition.Y
-      value: 45.797171
+      value: 52.155719
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: layers.Array.size
@@ -4040,7 +4019,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: mapElevation.ExaggerationFactor
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 4026134674846757496, guid: 8caac29e92b404fc3bf55427b15ea7d3, type: 3}
       propertyPath: layers.Array.data[0].AuthenticationType
@@ -4658,7 +4637,7 @@ MonoBehaviour:
   positionSmoothTime: 0.18
   relativeAltitudeSmoothTime: 0.3
   extrapolationTime: 0.03
-  maxExtrapolationGap: 0.25
+  maxExtrapolationGap: 10
   snapDistanceMeters: 0.8
   staleSpeedThreshold: 0.15
   coastSeconds: 2
@@ -4674,7 +4653,7 @@ MonoBehaviour:
   geofenceCommandIntervalSeconds: 1
   preserveGuidedModeOnMapBoundary: 1
   enforceBuildingCollision: 1
-  droneCollisionRadiusMeters: 0.35
+  droneCollisionRadiusMeters: 0.8
   buildingCollisionLayers:
     serializedVersion: 2
     m_Bits: 4294967295
@@ -4682,7 +4661,7 @@ MonoBehaviour:
   restoreGuidedModeAfterSafetyHold: 1
   buildingCollisionRetreatMeters: 1
   enforceMaximumAltitude: 1
-  maximumRelativeAltitudeMeters: 160
+  maximumRelativeAltitudeMeters: 45
   altitudeLimitBufferMeters: 3
 --- !u!4 &1214233501
 Transform:
@@ -6085,7 +6064,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LevelCompletionStatsUI
   deliveryScoreManager: {fileID: 1879311153}
-  level1Manager: {fileID: 237289117}
+  levelManager: {fileID: 237289117}
   panel: {fileID: 1625187250}
   titleText: {fileID: 2083291870}
   totalScoreText: {fileID: 117053826}
@@ -6375,7 +6354,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ArcGISConverter
   requiredStableDrawSeconds: 2
-  allowLoadedMapFallback: 1
+  allowLoadedMapFallback: 0
   loadedMapFallbackSeconds: 15
 --- !u!4 &1663710038
 Transform:
@@ -7430,17 +7409,17 @@ MonoBehaviour:
   deliveryStatusText: {fileID: 785339298}
   targetBuildingCount: 5
   allowedHouseSetNames: []
-  targetSpawnRadiusFromDroneStart: 150
-  confineLV2TargetsToSquare: 1
-  lv2DeliveryAreaWidthMeters: 300
-  lv2DeliveryAreaHeightMeters: 300
-  minimumTargetDistanceFromDroneStart: 45
+  targetSpawnRadiusFromDroneStart: 180
+  confineLV2TargetsToSquare: 0
+  lv2DeliveryAreaWidthMeters: 150
+  lv2DeliveryAreaHeightMeters: 150
+  minimumTargetDistanceFromDroneStart: 0
   preferNearestTargetsToDroneHome: 1
   preferTargetsFarFromDroneHome: 0
-  minimumTargetSeparationMeters: 60
+  minimumTargetSeparationMeters: 0
   fallbackToNearestTargetsWhenRadiusEmpty: 1
   buildingScanRetrySeconds: 1
-  buildingScanTimeoutSeconds: 90
+  buildingScanTimeoutSeconds: 60
   revealLV2TargetsBySurvey: 1
   surveyCameraFieldOfViewDegrees: 65
   surveyMinimumClearanceMeters: 2
@@ -7744,7 +7723,8 @@ Transform:
   m_LocalPosition: {x: -0.05042, y: 0.50338, z: -3}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 2062993035}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1924139587
@@ -7762,15 +7742,15 @@ MonoBehaviour:
   droneCamera: {fileID: 0}
   scale: 1000
   overrideMapOrigin: 0
-  lockSceneMapOriginForManualBuildings: 0
+  lockSceneMapOriginForManualBuildings: 1
   keepManuallyPlacedDronePosition: 1
   skipGeneratedGpsObjectsInManualLevel: 1
-  mapOriginLongitude: 6.368578
-  mapOriginLatitude: 45.797171
-  mapOriginAltitude: 934
+  mapOriginLongitude: 4.964212
+  mapOriginLatitude: 52.155719
+  mapOriginAltitude: 0
   limitMapExtent: 1
-  mapExtentSizeMeters: 300
-  droneFlightBoundaryRadiusMeters: 220
+  mapExtentSizeMeters: 350
+  droneFlightBoundaryRadiusMeters: 0
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
@@ -7782,14 +7762,16 @@ MonoBehaviour:
   arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
-  buildingSpawnRadius: 140
+  generateManualFootprintOverrides: 1
+  manualFootprintOverrides: []
+  buildingSpawnRadius: 350
   fitDroneBoundaryToGeneratedVillage: 0
   droneBoundaryPastLastHouseMeters: 25
   minimumGeneratedVillageBoundaryMeters: 60
   filterBuildingsByDroneDistance: 0
   showSpawnRadius: 1
   hideOsmBuildingLayer: 1
-  useArcGISSceneFootprintsAsOsmFallback: 1
+  useArcGISSceneFootprintsAsOsmFallback: 0
   logLayerVisibilityChanges: 1
   buildingYawCorrectionDegrees: 0
   placementValidator: {fileID: 0}
@@ -7799,7 +7781,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1.15
+  osmWallFootprintScale: 1.3
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -7875,7 +7857,7 @@ MonoBehaviour:
   pythonPath: 
   fetchMoreOsmBuildings: 1
   expandedBuildingScriptName: main_with_more_buildings.py
-  osmQueryRadiusMeters: 200
+  osmQueryRadiusMeters: 500
   treePrefab: {fileID: 5917764883595587885, guid: 736422f8743be4b4f9b0455b7ba85096, type: 3}
   environmentTreePrefabs:
   - {fileID: 5917764883595587885, guid: 956e26a3af980354097d662d3a60ccf7, type: 3}
@@ -7936,6 +7918,28 @@ MonoBehaviour:
   houseSimpleLodDetailDistance: 600
   houseSimpleLodCullDistance: 900
   houseSimpleLodRefreshSeconds: 0.5
+  useCustomMapTexture: 1
+  customMapTexture: {fileID: 0}
+  arcGISFallbackBasemapURL: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/arcgis/imagery/standard
+  customMapMeshResolution: 64
+  customMapSurfaceOffsetMeters: 0.18
+  flattenCustomMapGround: 0
+  useNightLevelLook: 1
+  nightSkyTexture: {fileID: 0}
+  nightAmbientColor: {r: 0.2, g: 0.23, b: 0.34, a: 1}
+  nightAmbientIntensity: 0.82
+  nightFogColor: {r: 0.025, g: 0.04, b: 0.09, a: 1}
+  nightFogDensity: 0.0012
+  nightWindowLitChance: 1
+  nightWindowGlowStrength: 3.5
+  nightWindowLightChance: 1
+  nightWindowLightIntensity: 0.8
+  nightWindowLightRange: 8
+  droneNavigationLightSize: 0.16
+  droneHeadlightIntensity: 4
+  spawnOsmRoadSurfaces: 1
+  roadSurfaceShoulderMeters: 0.65
+  roadSurfaceGroundOffsetMeters: 0.12
 --- !u!114 &1924139588
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -7954,12 +7958,12 @@ MonoBehaviour:
   lockSceneMapOriginForManualBuildings: 0
   keepManuallyPlacedDronePosition: 1
   skipGeneratedGpsObjectsInManualLevel: 1
-  mapOriginLongitude: 6.368578
-  mapOriginLatitude: 45.797171
-  mapOriginAltitude: 934
+  mapOriginLongitude: 4.964212
+  mapOriginLatitude: 52.155719
+  mapOriginAltitude: 0
   limitMapExtent: 1
-  mapExtentSizeMeters: 300
-  droneFlightBoundaryRadiusMeters: 250
+  mapExtentSizeMeters: 350
+  droneFlightBoundaryRadiusMeters: 0
   arcGISConverter: {fileID: 1663710037}
   loadingScreen: {fileID: 1156569488}
   minimumLoadingScreenSeconds: 1
@@ -7971,14 +7975,16 @@ MonoBehaviour:
   arcGISStartupGraceSeconds: 45
   useArcGISTerrainOnly: 1
   spawnOsmBuildings: 1
-  buildingSpawnRadius: 140
+  generateManualFootprintOverrides: 1
+  manualFootprintOverrides: []
+  buildingSpawnRadius: 350
   fitDroneBoundaryToGeneratedVillage: 0
   droneBoundaryPastLastHouseMeters: 25
   minimumGeneratedVillageBoundaryMeters: 60
   filterBuildingsByDroneDistance: 0
   showSpawnRadius: 1
   hideOsmBuildingLayer: 1
-  useArcGISSceneFootprintsAsOsmFallback: 1
+  useArcGISSceneFootprintsAsOsmFallback: 0
   logLayerVisibilityChanges: 1
   buildingYawCorrectionDegrees: 0
   placementValidator: {fileID: 0}
@@ -7988,7 +7994,7 @@ MonoBehaviour:
   replacementRulesForceCompletePrefabs: 0
   modularBuildingYawCorrectionDegrees: 0
   modularBuildingGroundOffset: 0.05
-  osmWallFootprintScale: 1.15
+  osmWallFootprintScale: 1.3
   buildingOrientationRules:
   - prefab: {fileID: 8363527818248484803, guid: cdc0be50f730cb247a7118a0f01596bf, type: 3}
     buildingNameContains: Fire Station
@@ -8064,7 +8070,7 @@ MonoBehaviour:
   pythonPath: 
   fetchMoreOsmBuildings: 1
   expandedBuildingScriptName: main_with_more_buildings.py
-  osmQueryRadiusMeters: 200
+  osmQueryRadiusMeters: 500
   treePrefab: {fileID: 5917764883595587885, guid: 736422f8743be4b4f9b0455b7ba85096, type: 3}
   environmentTreePrefabs:
   - {fileID: 5917764883595587885, guid: 956e26a3af980354097d662d3a60ccf7, type: 3}
@@ -8125,19 +8131,28 @@ MonoBehaviour:
   houseSimpleLodDetailDistance: 600
   houseSimpleLodCullDistance: 900
   houseSimpleLodRefreshSeconds: 0.5
-  useCustomMapTexture: 1
+  useCustomMapTexture: 0
   customMapTexture: {fileID: 2800000, guid: 5e332c5873204da48f537adf8b3fbf4d, type: 3}
   arcGISFallbackBasemapURL: https://basemapstyles-api.arcgis.com/arcgis/rest/services/styles/v2/webmaps/arcgis/imagery/standard
   customMapMeshResolution: 64
   customMapSurfaceOffsetMeters: 0.18
+  flattenCustomMapGround: 0
   useNightLevelLook: 1
   nightSkyTexture: {fileID: 2800000, guid: 7e68d01a3e9a4d38ac9e7e0dbe72c9e7, type: 3}
-  nightAmbientColor: {r: 0.20, g: 0.23, b: 0.34, a: 1}
-  nightAmbientIntensity: 0.82
-  nightWindowLitChance: 0.68
-  nightWindowGlowStrength: 2.2
-  droneNavigationLightSize: 0.16
-  droneHeadlightIntensity: 4
+  nightAmbientColor: {r: 0.24, g: 0.29, b: 0.43, a: 1}
+  nightAmbientIntensity: 1.446
+  nightFogColor: {r: 0.035, g: 0.055, b: 0.12, a: 1}
+  nightFogDensity: 0.00055
+  nightWindowLitChance: 1
+  nightWindowGlowStrength: 5
+  nightWindowLightChance: 1
+  nightWindowLightIntensity: 6
+  nightWindowLightRange: 8
+  droneNavigationLightSize: 9.8
+  droneHeadlightIntensity: 19
+  spawnOsmRoadSurfaces: 1
+  roadSurfaceShoulderMeters: 0.65
+  roadSurfaceGroundOffsetMeters: 0.12
 --- !u!114 &1924139589
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8155,7 +8170,7 @@ MonoBehaviour:
   doorWallPrefab: {fileID: 8692689845880093328, guid: b8826a17e47b2450d9aa4b185c932ddd, type: 3}
   moduleLocalRotationEuler: {x: 0, y: 0, z: 0}
   preferredModuleWidth: 1.8
-  wallThickness: 0.2
+  wallThickness: 0.25
   floorHeight: 3
   minimumFloors: 1
   maximumFloors: 2
@@ -9016,6 +9031,37 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 330900418}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2062993034
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2062993035}
+  m_Layer: 0
+  m_Name: BuildingModules
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2062993035
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2062993034}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1924139586}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2064572401
 GameObject:
@@ -9886,31 +9932,31 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -96119
+      value: -15.232379
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.y
-      value: -40030.06
+      value: -0.00011670403
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 706557.5
+      value: 35.553562
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0.9983857
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.x
-      value: 0.055458914
+      value: 0.0000027545045
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.009247188
+      value: 0.000001524682
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalRotation.z
-      value: 0.00804511
+      value: 0.0000011871256
       objectReference: {fileID: 0}
     - target: {fileID: 9112486900663173755, guid: 3bf6959a0db4a457e9f73f50aee872c9, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x

@@ -20,7 +20,9 @@ public partial class SceneLoaderArcgis
     [SerializeField] bool useNightLevelLook = true;
     [SerializeField] Texture2D nightSkyTexture;
     [SerializeField] Color nightAmbientColor = new Color(0.20f, 0.23f, 0.34f, 1f);
-    [SerializeField, Range(0.1f, 1f)] float nightAmbientIntensity = 0.82f;
+    [SerializeField, Range(0.1f, 1.5f)] float nightAmbientIntensity = 0.82f;
+    [SerializeField] Color nightFogColor = new Color(0.025f, 0.04f, 0.09f, 1f);
+    [SerializeField, Range(0f, 0.01f)] float nightFogDensity = 0.0012f;
 
     static Material customGroundMaterial;
     static Material nightSkyMaterial;
@@ -78,8 +80,8 @@ public partial class SceneLoaderArcgis
         RenderSettings.reflectionIntensity = 0.3f;
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.ExponentialSquared;
-        RenderSettings.fogColor = new Color(0.025f, 0.04f, 0.09f, 1f);
-        RenderSettings.fogDensity = 0.0012f;
+        RenderSettings.fogColor = nightFogColor;
+        RenderSettings.fogDensity = nightFogDensity;
         DynamicGI.UpdateEnvironment();
 
         Debug.Log("🌙 Applied SantaTrail night lighting and sky.");

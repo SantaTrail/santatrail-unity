@@ -362,7 +362,8 @@ public static class AutoArduPilotOnPlay
         string defaultsFile = Path.Combine(
             Application.streamingAssetsPath,
             "SITL",
-            string.Equals(sceneName, "LV2", StringComparison.OrdinalIgnoreCase)
+            (string.Equals(sceneName, "LV2", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(sceneName, "LV3", StringComparison.OrdinalIgnoreCase))
                 ? "sitl_unity_lv2.parm"
                 : "sitl_unity_safe.parm"
         );

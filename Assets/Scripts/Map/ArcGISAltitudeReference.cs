@@ -3,13 +3,13 @@ using Esri.ArcGISMapsSDK.Utils.GeoCoord;
 using Esri.GameEngine.Geometry;
 
 /// <summary>
-/// Keeps GPS/MSL heights in LV2 explicit so ArcGIS can convert them to the
+/// Keeps GPS/MSL heights in the Charvin level explicit so ArcGIS can convert them to the
 /// same vertical datum used by the terrain. Other levels keep their existing
 /// WGS84-without-VCS behavior.
 /// </summary>
 public static class ArcGISAltitudeReference
 {
-    const string HillsideLevelName = "LV2";
+    const string HillsideLevelName = "LV3";
 
     public static bool UsesEgm96ForActiveLevel =>
         SceneManager.GetActiveScene().name == HillsideLevelName;

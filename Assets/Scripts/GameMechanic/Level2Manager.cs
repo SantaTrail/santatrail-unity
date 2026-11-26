@@ -5,7 +5,14 @@ using UnityEngine;
 /// <summary>LV2 QGroundControl survey-planning lesson.</summary>
 public sealed class Level2Manager : LevelManager
 {
-    private enum TutorialState { WaitingForConnection, PlanningSurvey, MissionUploaded, Complete }
+    private enum TutorialState
+    {
+        WaitingForConnection,
+        PlanningSurvey,
+        MissionUploaded,
+        MissionRunning,
+        Complete
+    }
     private TutorialState state;
     private bool allHousesDiscovered;
     private bool hadMissionAtStart;
@@ -15,17 +22,23 @@ public sealed class Level2Manager : LevelManager
     private int initialMissionUpdateCount;
 
     private const string ConnectMessage =
-        "BASIC SURVEY\nConnect the vehicle in QGroundControl. Open Plan View to begin.";
+        "LET’S PLAN A SURVEY\n" +
+        "In QGroundControl, wait until your vehicle is connected, then choose Plan View.";
     private const string PlanMessage =
-        "BASIC SURVEY\n" +
-        "1  In QGC, choose Plan Flight, then Survey > Basic to draw a four-corner area over the village.\n" +
-        "2  Keep the area roughly within 150 m of home. Set the terrain-following altitude to Calculated Above Terrain.\n" +
-        "3  Leave Grid and Tolerance at their defaults; camera setup is optional.\n" +
-        "4  Upload the plan, review it in Fly View, then start the mission.";
+        "PLAN YOUR FLIGHT IN QGC\n" +
+        "1  In Plan View, open Plan Tools > Pattern Tool > Survey.\n" +
+        "2  Draw a small four-corner area over the nearby houses.\n" +
+        "3  Check the grid and altitude. Keep the route near home; use terrain following if available.\n" +
+        "4  Select Upload. Then open Fly View and review your route.";
     private const string MissionMessage =
-        "SURVEY MISSION READY\nReview and start the uploaded mission in QGC Fly View. After landing, resume from the current waypoint if needed.";
+        "NICE WORK — YOUR PLAN IS UPLOADED\n" +
+        "In Fly View, check the route and vehicle status. When ready, choose Start Mission and confirm.";
+    private const string MissionRunningMessage =
+        "YOUR SURVEY IS FLYING\n" +
+        "Watch the drone in QGC Fly View. The houses appear as the survey passes over them.";
     private const string FoundMessage =
-        "ALL DELIVERY HOUSES FOUND\nSwitch to Guided mode in QGC, then deliver each present one at a time.";
+        "SURVEY COMPLETE — 5 HOUSES FOUND\n" +
+        "After the survey lands, choose Guided in Fly View. Deliver one present to each house, then land safely.";
 
     protected override void OnLevelInitialized()
     {
@@ -58,8 +71,8 @@ public sealed class Level2Manager : LevelManager
         }
         if (MavlinkReceiver.IsAutoMode && MavlinkReceiver.IsArmed)
         {
-            state = TutorialState.Complete;
-            SetStatusText("");
+            state = TutorialState.MissionRunning;
+            SetStatusText(MissionRunningMessage);
             return;
         }
         if (HasNewMission())
@@ -89,7 +102,7 @@ public sealed class Level2Manager : LevelManager
         }
         else
         {
-            SetStatusText($"HOUSE FOUND  |  {found}/{total} delivery houses discovered");
+            SetStatusText($"HOUSES FOUND  |  {found}/{total} — keep following your survey route");
         }
         RefreshDeliveryObjective();
     }

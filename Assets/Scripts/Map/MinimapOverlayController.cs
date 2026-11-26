@@ -52,7 +52,7 @@ public class MinimapOverlayController : MonoBehaviour
     [Header("Refresh")]
     [Min(0.1f)]
     [SerializeField] private float missionRefreshInterval = 1f;
-    [Header("LV2 Survey Results")]
+    [Header("Survey Results")]
     [SerializeField] private bool showLV2SurveyAltitudeEstimates = true;
     [SerializeField] private float surveyAltitudePanelWidth = 330f;
 
@@ -638,8 +638,9 @@ public class MinimapOverlayController : MonoBehaviour
 
         string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
         bool isScanLevel = string.Equals(sceneName, "LV2", System.StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(sceneName, "LV3", System.StringComparison.OrdinalIgnoreCase);
-        bool isLV3StructureScan = string.Equals(sceneName, "LV3", System.StringComparison.OrdinalIgnoreCase);
+            string.Equals(sceneName, "LV3", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(sceneName, "LV4", System.StringComparison.OrdinalIgnoreCase);
+        bool isLV4StructureScan = string.Equals(sceneName, "LV4", System.StringComparison.OrdinalIgnoreCase);
         if (!isScanLevel || deliveryScoreManager == null || !deliveryScoreManager.isActiveAndEnabled)
         {
             surveyAltitudePanel.gameObject.SetActive(false);
@@ -649,18 +650,18 @@ public class MinimapOverlayController : MonoBehaviour
         deliveryScoreManager.GetDeliveryTargetsForMinimap(deliveryTargetInfo);
         int discovered = deliveryScoreManager.DiscoveredDeliveryTargetCount;
         int total = deliveryScoreManager.TotalDeliveryTargetCount;
-        if (discovered == 0 && !isLV3StructureScan)
+        if (discovered == 0 && !isLV4StructureScan)
         {
             surveyAltitudePanel.gameObject.SetActive(false);
             return;
         }
 
         surveyAltitudeTextBuilder.Clear();
-        surveyAltitudeTextBuilder.Append(isLV3StructureScan ? "ROOM DELIVERY  " : "SURVEY DISCOVERY  ")
+        surveyAltitudeTextBuilder.Append(isLV4StructureScan ? "ROOM DELIVERY  " : "SURVEY DISCOVERY  ")
             .Append(discovered).Append('/').Append(total)
-            .Append(isLV3StructureScan ? " rooms\n" : " houses\n");
+            .Append(isLV4StructureScan ? " rooms\n" : " houses\n");
 
-        if (isLV3StructureScan && discovered < total)
+        if (isLV4StructureScan && discovered < total)
         {
             surveyAltitudeTextBuilder.Append("Coverage: ")
                 .Append(deliveryScoreManager.StructureScanCellsCompleted)
@@ -671,8 +672,8 @@ public class MinimapOverlayController : MonoBehaviour
         {
             DeliveryScoreManager.DeliveryTargetMapInfo target = deliveryTargetInfo[i];
             if (!target.Discovered) continue;
-            surveyAltitudeTextBuilder.Append(isLV3StructureScan ? "R" : "H")
-                .Append(target.Number).Append(isLV3StructureScan ? "  Room floor ~" : "  Roof ~");
+            surveyAltitudeTextBuilder.Append(isLV4StructureScan ? "R" : "H")
+                .Append(target.Number).Append(isLV4StructureScan ? "  Room floor ~" : "  Roof ~");
             if (float.IsNaN(target.EstimatedRoofAltitudeAMSL))
             {
                 surveyAltitudeTextBuilder.Append("unknown");
@@ -689,20 +690,20 @@ public class MinimapOverlayController : MonoBehaviour
 
         if (discovered < total)
         {
-            surveyAltitudeTextBuilder.Append(isLV3StructureScan
+            surveyAltitudeTextBuilder.Append(isLV4StructureScan
                 ? "Scan every side at low, middle, and roof height to reveal all rooms."
                 : "Fly the Survey pattern to reveal more.");
         }
         else if (total == 0)
         {
-            surveyAltitudeTextBuilder.Append(isLV3StructureScan
+            surveyAltitudeTextBuilder.Append(isLV4StructureScan
                 ? "Waiting for tall buildings to load."
                 : "Waiting for delivery houses to load.");
         }
 
         surveyAltitudeText.text = surveyAltitudeTextBuilder.ToString();
         int rowCount = Mathf.Max(2, discovered + (discovered < total ? 2 : 1) +
-            (isLV3StructureScan && discovered < total ? 1 : 0));
+            (isLV4StructureScan && discovered < total ? 1 : 0));
         surveyAltitudePanel.sizeDelta = new Vector2(
             surveyAltitudePanelWidth,
             24f + rowCount * 23f);

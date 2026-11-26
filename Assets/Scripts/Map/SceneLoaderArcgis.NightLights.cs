@@ -5,11 +5,11 @@ using UnityEngine.Rendering;
 public partial class SceneLoaderArcgis
 {
     [Header("Night Window and Drone Lighting")]
-    [SerializeField, Range(0f, 1f)] float nightWindowLitChance = 0.68f;
-    [SerializeField] float nightWindowGlowStrength = 2.2f;
-    [SerializeField, Range(0f, 1f)] float nightWindowLightChance = 0.22f;
-    [SerializeField] float nightWindowLightIntensity = 0.65f;
-    [SerializeField] float nightWindowLightRange = 6f;
+    [SerializeField, Range(0f, 1f)] float nightWindowLitChance = 1f;
+    [SerializeField] float nightWindowGlowStrength = 3.5f;
+    [SerializeField, Range(0f, 1f)] float nightWindowLightChance = 1f;
+    [SerializeField] float nightWindowLightIntensity = 0.8f;
+    [SerializeField] float nightWindowLightRange = 8f;
     [SerializeField] float droneNavigationLightSize = 0.16f;
     [SerializeField] float droneHeadlightIntensity = 4f;
 

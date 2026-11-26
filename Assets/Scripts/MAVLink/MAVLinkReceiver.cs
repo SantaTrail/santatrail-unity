@@ -1005,7 +1005,7 @@ public class MAVLinkReceiver : MonoBehaviour
     {
         // Temporary LV2-only gameplay override while terrain and mission
         // altitude alignment are being tuned. Other levels keep the ceiling.
-        if (SceneManager.GetActiveScene().name == "LV2")
+        if (SceneManager.GetActiveScene().name == "LV3")
         {
             altitudeLimitTriggered = false;
             return;

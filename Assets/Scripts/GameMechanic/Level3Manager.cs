@@ -1,14 +1,14 @@
 using TMPro;
 using UnityEngine;
 
-/// <summary>LV3 QGroundControl controls and multi-height room-delivery lesson.</summary>
+/// <summary>LV4 QGroundControl controls and multi-height room-delivery lesson.</summary>
 public sealed class Level3Manager : LevelManager
 {
     private enum TutorialState { WaitingForConnection, SelectGuided, Takeoff, Scan, StructureMapped }
     private TutorialState state;
 
     private const string ConnectMessage =
-        "LV3: HIGH-RISE ROOM DELIVERY\n" +
+        "LV4: HIGH-RISE ROOM DELIVERY\n" +
         "Connect the drone in QGroundControl. In Fly View, confirm the vehicle and telemetry are connected.";
     private const string GuidedMessage =
         "QGC FLY VIEW\n" +

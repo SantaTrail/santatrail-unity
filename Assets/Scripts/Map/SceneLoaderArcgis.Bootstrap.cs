@@ -87,7 +87,7 @@ public partial class SceneLoaderArcgis
     {
         // ArcGISMapComponent creates its View in OnEnable. Wait for it before
         // changing the map's spatial reference, then load the map only after
-        // LV2's vertical datum has been applied.
+        // the hillside level's vertical datum has been applied.
         float waitStartedAt = Time.realtimeSinceStartup;
         while (mapComponent != null &&
                (mapComponent.View == null || mapComponent.View.Map == null) &&
@@ -123,7 +123,7 @@ public partial class SceneLoaderArcgis
             }
 
             Debug.Log(
-                "🗺️ LV2 map vertical reference set to EGM96 (WKID 5773) " +
+                "🗺️ Hillside map vertical reference set to EGM96 (WKID 5773) " +
                 "to align terrain and ArduPilot MSL altitude."
             );
         }
@@ -782,11 +782,10 @@ public partial class SceneLoaderArcgis
         // network attempt can run long enough to outlast delivery discovery.
         // Use the generated local village immediately for LV2; retain the
         // cold-start retry for the other levels.
-        int maximumBackendAttempts = string.Equals(
-            SceneManager.GetActiveScene().name,
-            "LV2",
-            System.StringComparison.OrdinalIgnoreCase
-        ) ? 1 : 2;
+        string activeSceneName = SceneManager.GetActiveScene().name;
+        bool isSurveyLevel = string.Equals(activeSceneName, "LV2", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(activeSceneName, "LV3", System.StringComparison.OrdinalIgnoreCase);
+        int maximumBackendAttempts = isSurveyLevel ? 1 : 2;
         float backendAttemptStartedAt = Time.realtimeSinceStartup;
 
         Debug.Log("⏳ Waiting for JSON + ArcGIS (production-safe)...");

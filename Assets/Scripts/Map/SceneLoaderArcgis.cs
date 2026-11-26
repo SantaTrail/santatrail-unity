@@ -2599,9 +2599,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         int spawned = 0;
         ResolveOsmPlacementValidator();
         placementValidator.ResetPlacements();
-        int lv3HighRiseBuildingIndex =
+        int lv4HighRiseBuildingIndex =
             string.Equals(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
-                "LV3", System.StringComparison.OrdinalIgnoreCase)
+                "LV4", System.StringComparison.OrdinalIgnoreCase)
                 ? FindClosestFootprintIndex(
                     result.buildings,
                     48.180143,
@@ -2959,7 +2959,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     uprightObject.transform,
                     localFootprint,
                     i,
-                    i == lv3HighRiseBuildingIndex ? 28 : 0,
+                    i == lv4HighRiseBuildingIndex ? 28 : 0,
                     out Transform deliveryTarget
                 );
 
@@ -3099,8 +3099,6 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 prefabToUse,
                 buildingRoot.name
             );
-            AddNightWindowGlows(buildingRoot.transform, buildingModel, i);
-
             bool shouldFitThisPrefab =
                 fitBuildingModelToFootprint &&
                 (orientationRule == null ||
@@ -3118,6 +3116,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     orientationRule
                 );
             }
+
+            // FitBuildingModelToFootprint changes the prefab bounds/scale, so
+            // build the facade glow mesh only after the final model placement.
+            AddNightWindowGlows(buildingRoot.transform, buildingModel, i);
 
             House completeHouse = buildingRoot.GetComponent<House>();
             if (completeHouse == null)
@@ -3834,11 +3836,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             new Vector2(-25f, -20f),
             new Vector2(26f, -20f)
         };
-        bool isLV3RoomDeliveryLevel = string.Equals(
+        bool isLV4RoomDeliveryLevel = string.Equals(
             UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
-            "LV3",
+            "LV4",
             System.StringComparison.OrdinalIgnoreCase);
-        int count = isLV3RoomDeliveryLevel ? 0 : fallbackOffsetsMeters.Length;
+        int count = isLV4RoomDeliveryLevel ? 0 : fallbackOffsetsMeters.Length;
 
         Transform clusterParent = GetGeneratedBuildingsRoot();
         GameObject clusterRoot = new GameObject("VisibleVillageCluster");
@@ -3874,7 +3876,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             );
         }
 
-        // LV3 uses one clear procedural target only when mapped footprints
+        // LV4 uses one clear procedural target only when mapped footprints
         // are unavailable; other levels keep the surrounding fallback village.
         float heroWidth = 12f;
         float heroDepth = 10f;
@@ -3885,7 +3887,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             heroScale
         );
         Vector3 heroLocalPosition;
-        if (isLV3RoomDeliveryLevel && hasGeoAnchor)
+        if (isLV4RoomDeliveryLevel && hasGeoAnchor)
         {
             double metersPerDegreeLongitude = 111320.0 *
                 System.Math.Cos(anchorLatitude * System.Math.PI / 180.0);
@@ -3919,7 +3921,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             anchorLatitude,
             anchorLongitude,
             string.Equals(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
-                "LV3", System.StringComparison.OrdinalIgnoreCase) ? 28 : 0
+                "LV4", System.StringComparison.OrdinalIgnoreCase) ? 28 : 0
         );
         Debug.Log(
             $"🏠 Hero fallback delivery building spawned at " +
@@ -3984,8 +3986,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
 
         Debug.Log(
-            isLV3RoomDeliveryLevel
-                ? "🏙 LV3 spawned one tall fallback delivery target instead of a synthetic village."
+            isLV4RoomDeliveryLevel
+                ? "🏙 LV4 spawned one tall fallback delivery target instead of a synthetic village."
                 : "🏙 Visible fallback village cluster spawned as fixed delivery buildings."
         );
 

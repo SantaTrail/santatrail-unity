@@ -13,8 +13,8 @@ using UnityEngine.UI;
 public class DeliveryScoreManager : MonoBehaviour
 {
     private const int LV2DeliveryTargetCount = 5;
-    private const int LV3StructureSideCount = 4;
-    private const int LV3StructureHeightBandCount = 3;
+    private const int LV4StructureSideCount = 4;
+    private const int LV4StructureHeightBandCount = 3;
     private const float LV2MinimumNonAdjacentGapMeters = 8f;
     private const float LV2MaximumTargetGroupDiameterMeters = 120f;
 
@@ -325,13 +325,13 @@ public class DeliveryScoreManager : MonoBehaviour
     {
         get
         {
-            if (!isLV3StructureScanLevel || activeTargets.Count == 0 || activeTargets[0] == null)
+            if (!isLV4StructureScanLevel || activeTargets.Count == 0 || activeTargets[0] == null)
             {
                 return 0;
             }
 
             int completed = 0;
-            for (int cell = 0; cell < LV3StructureSideCount * LV3StructureHeightBandCount; cell++)
+            for (int cell = 0; cell < LV4StructureSideCount * LV4StructureHeightBandCount; cell++)
             {
                 if ((activeTargets[0].structureScanCells & (1 << cell)) != 0)
                 {
@@ -484,9 +484,9 @@ public class DeliveryScoreManager : MonoBehaviour
     private bool hasLoggedDeliveryHome;
     private bool hasLoggedNoDeliveryCandidates;
     private bool isLV2SurveyLevel;
-    private bool isLV3StructureScanLevel;
+    private bool isLV4StructureScanLevel;
     private bool UsesProgressiveTargetDiscovery =>
-        (isLV2SurveyLevel && revealLV2TargetsBySurvey) || isLV3StructureScanLevel;
+        (isLV2SurveyLevel && revealLV2TargetsBySurvey) || isLV4StructureScanLevel;
     private float nextSurveyDiscoveryCheckTime;
     private float currentSpeed;
     private float altitudeTrackedSeconds;
@@ -497,14 +497,12 @@ public class DeliveryScoreManager : MonoBehaviour
 
     void Start()
     {
-        isLV2SurveyLevel = string.Equals(
-            SceneManager.GetActiveScene().name,
-            "LV2",
-            StringComparison.OrdinalIgnoreCase
-        );
-        isLV3StructureScanLevel = string.Equals(
-            SceneManager.GetActiveScene().name,
-            "LV3",
+        string activeSceneName = SceneManager.GetActiveScene().name;
+        isLV2SurveyLevel = string.Equals(activeSceneName, "LV2", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(activeSceneName, "LV3", StringComparison.OrdinalIgnoreCase);
+        isLV4StructureScanLevel = string.Equals(
+            activeSceneName,
+            "LV4",
             StringComparison.OrdinalIgnoreCase
         );
 
@@ -514,7 +512,7 @@ public class DeliveryScoreManager : MonoBehaviour
             // carried over from another level or the main menu.
             targetBuildingCount = LV2DeliveryTargetCount;
         }
-        else if (isLV3StructureScanLevel)
+        else if (isLV4StructureScanLevel)
         {
             targetBuildingCount = 5;
         }
@@ -827,11 +825,11 @@ public class DeliveryScoreManager : MonoBehaviour
 
     private void UpdateLV2SurveyDiscovery()
     {
-        if ((!isLV2SurveyLevel && !isLV3StructureScanLevel) ||
+        if ((!isLV2SurveyLevel && !isLV4StructureScanLevel) ||
             (isLV2SurveyLevel && !revealLV2TargetsBySurvey) ||
             !buildingsInitialized || drone == null || mavReceiver == null ||
             !mavReceiver.HasRecentTelemetry || !mavReceiver.IsArmed ||
-            (!isLV3StructureScanLevel && !mavReceiver.IsAutoMode) ||
+            (!isLV4StructureScanLevel && !mavReceiver.IsAutoMode) ||
             Time.time < nextSurveyDiscoveryCheckTime)
         {
             return;
@@ -860,7 +858,7 @@ public class DeliveryScoreManager : MonoBehaviour
                 continue;
             }
 
-            float footprintRadius = isLV3StructureScanLevel
+            float footprintRadius = isLV4StructureScanLevel
                 ? 0f
                 : Mathf.Min(maximumRadius,
                     clearanceAboveRoof * Mathf.Tan(halfFovRadians));
@@ -871,9 +869,9 @@ public class DeliveryScoreManager : MonoBehaviour
                 new Vector2(dronePosition.x, dronePosition.z),
                 new Vector2(target.bounds.center.x, target.bounds.center.z));
 
-            if (isLV3StructureScanLevel)
+            if (isLV4StructureScanLevel)
             {
-                // LV3 requires an orbit outside the building footprint and
+                // LV4 requires an orbit outside the building footprint and
                 // observations from all four sides at three height bands.
                 float structureFootprintRadius = new Vector2(
                     target.bounds.extents.x,
@@ -887,8 +885,8 @@ public class DeliveryScoreManager : MonoBehaviour
                 float buildingHeight = Mathf.Max(3f, target.bounds.size.y);
                 float relativeHeight = dronePosition.y - target.bounds.min.y;
                 int heightBand = Mathf.FloorToInt(
-                    relativeHeight / buildingHeight * LV3StructureHeightBandCount);
-                if (heightBand < 0 || heightBand >= LV3StructureHeightBandCount)
+                    relativeHeight / buildingHeight * LV4StructureHeightBandCount);
+                if (heightBand < 0 || heightBand >= LV4StructureHeightBandCount)
                 {
                     continue;
                 }
@@ -898,9 +896,9 @@ public class DeliveryScoreManager : MonoBehaviour
                     dronePosition.z - target.bounds.center.z);
                 float angle = Mathf.Atan2(fromBuilding.y, fromBuilding.x) * Mathf.Rad2Deg;
                 int side = Mathf.FloorToInt((angle + 360f + 45f) % 360f / 90f);
-                int cell = side * LV3StructureHeightBandCount + heightBand;
+                int cell = side * LV4StructureHeightBandCount + heightBand;
                 target.structureScanCells |= 1 << cell;
-                if (isLV3StructureScanLevel && target.isRoomDelivery &&
+                if (isLV4StructureScanLevel && target.isRoomDelivery &&
                     target.roomWindowHighlight != null &&
                     (target.structureScanCells & (1 << target.roomWindowScanCell)) != 0)
                 {
@@ -915,7 +913,7 @@ public class DeliveryScoreManager : MonoBehaviour
                     }
                 }
                 int requiredCells =
-                    (1 << (LV3StructureSideCount * LV3StructureHeightBandCount)) - 1;
+                    (1 << (LV4StructureSideCount * LV4StructureHeightBandCount)) - 1;
                 if (target.structureScanCells != requiredCells)
                 {
                     continue;
@@ -945,7 +943,7 @@ public class DeliveryScoreManager : MonoBehaviour
                 roofAltitudeAMSL,
                 deliveryAltitudeAMSL);
             Debug.Log(
-                $"{(isLV3StructureScanLevel ? "LV3 scan mapped room" : "LV2 survey discovered delivery house")} " +
+                $"{(isLV4StructureScanLevel ? "LV4 scan mapped room" : "LV2 survey discovered delivery house")} " +
                 $"{targetNumber}; " +
                 (float.IsNaN(roofAltitudeAMSL)
                     ? "altitude estimate unavailable."
@@ -1343,14 +1341,14 @@ public class DeliveryScoreManager : MonoBehaviour
             hasLoggedNoDeliveryCandidates = false;
         }
 
-        if (isLV3StructureScanLevel)
+        if (isLV4StructureScanLevel)
         {
-            // LV3 scans one physical high-rise, then treats five exterior
+            // LV4 scans one physical high-rise, then treats five exterior
             // window/balcony drop points on separate floors as room targets.
             candidates.Sort((a, b) => b.bounds.size.y.CompareTo(a.bounds.size.y));
             if (candidates.Count > 0)
             {
-                AddLV3RoomTargets(candidates[0]);
+                AddLV4RoomTargets(candidates[0]);
             }
         }
         else if (isLV2SurveyLevel && minimumTargetSeparationMeters > 0f)
@@ -1509,7 +1507,7 @@ public class DeliveryScoreManager : MonoBehaviour
         activeTargets.Add(target);
     }
 
-    private void AddLV3RoomTargets(SpawnedBuildingTarget building)
+    private void AddLV4RoomTargets(SpawnedBuildingTarget building)
     {
         if (building == null || building.root == null)
         {
@@ -1537,7 +1535,7 @@ public class DeliveryScoreManager : MonoBehaviour
         activeTargets.Clear();
         for (int i = 0; i < 5; i++)
         {
-            Transform window = FindLV3RoomWindow(
+            Transform window = FindLV4RoomWindow(
                 windowAnchors, usedWindows, building.bounds, sideDirections[i], floorFractions[i]);
             Vector3 windowCenter;
             Vector3 outward;
@@ -1545,7 +1543,7 @@ public class DeliveryScoreManager : MonoBehaviour
             if (window != null)
             {
                 usedWindows.Add(window);
-                GetLV3WindowBounds(window, out Bounds windowBounds);
+                GetLV4WindowBounds(window, out Bounds windowBounds);
                 windowCenter = windowBounds.center;
                 outward = Vector3.ProjectOnPlane(window.forward, Vector3.up).normalized;
                 if (outward.sqrMagnitude < 0.01f)
@@ -1556,7 +1554,7 @@ public class DeliveryScoreManager : MonoBehaviour
             }
             else
             {
-                // Fallback keeps LV3 playable if the selected building has no
+                // Fallback keeps LV4 playable if the selected building has no
                 // generated window modules in its hierarchy.
                 outward = sideDirections[i];
                 windowCenter = building.bounds.center + outward * (
@@ -1570,14 +1568,14 @@ public class DeliveryScoreManager : MonoBehaviour
                 360f + 45f) % 360f / 90f);
             int windowBand = Mathf.Clamp(Mathf.FloorToInt(
                 (windowCenter.y - building.bounds.min.y) /
-                Mathf.Max(3f, building.bounds.size.y) * LV3StructureHeightBandCount),
-                0, LV3StructureHeightBandCount - 1);
-            int windowScanCell = windowSide * LV3StructureHeightBandCount + windowBand;
+                Mathf.Max(3f, building.bounds.size.y) * LV4StructureHeightBandCount),
+                0, LV4StructureHeightBandCount - 1);
+            int windowScanCell = windowSide * LV4StructureHeightBandCount + windowBand;
 
-            GameObject markerObject = new GameObject($"LV3RoomMarker_{i + 1}");
+            GameObject markerObject = new GameObject($"LV4RoomMarker_{i + 1}");
             markerObject.transform.SetParent(building.root, true);
             markerObject.transform.position = roomPoint;
-            CreateLV3WindowHighlight(
+            CreateLV4WindowHighlight(
                 building.root, windowCenter, outward, window, i + 1, out Renderer highlightRenderer,
                 out Image presentIcon, out GameObject iconRoot);
 
@@ -1602,7 +1600,7 @@ public class DeliveryScoreManager : MonoBehaviour
         }
     }
 
-    private static Transform FindLV3RoomWindow(
+    private static Transform FindLV4RoomWindow(
         List<Transform> windows, HashSet<Transform> used, Bounds buildingBounds,
         Vector3 preferredSide, float floorFraction)
     {
@@ -1616,7 +1614,7 @@ public class DeliveryScoreManager : MonoBehaviour
             if (candidate == null || used.Contains(candidate)) continue;
             Vector3 outward = Vector3.ProjectOnPlane(candidate.forward, Vector3.up).normalized;
             if (outward.sqrMagnitude < 0.01f) continue;
-            GetLV3WindowBounds(candidate, out Bounds bounds);
+            GetLV4WindowBounds(candidate, out Bounds bounds);
             float sidePenalty = (1f - Mathf.Clamp01(Vector3.Dot(outward, preferred))) * buildingBounds.size.y;
             float score = Mathf.Abs(bounds.center.y - targetY) + sidePenalty;
             if (score < bestScore)
@@ -1628,7 +1626,7 @@ public class DeliveryScoreManager : MonoBehaviour
         return best;
     }
 
-    private static void GetLV3WindowBounds(Transform window, out Bounds bounds)
+    private static void GetLV4WindowBounds(Transform window, out Bounds bounds)
     {
         Renderer[] renderers = window != null
             ? window.GetComponentsInChildren<Renderer>(true)
@@ -1651,18 +1649,18 @@ public class DeliveryScoreManager : MonoBehaviour
         }
     }
 
-    private static GameObject CreateLV3WindowHighlight(
+    private static GameObject CreateLV4WindowHighlight(
         Transform buildingRoot, Vector3 windowCenter, Vector3 outward, Transform window, int roomNumber,
         out Renderer highlightRenderer, out Image presentIcon, out GameObject iconRoot)
     {
-        GetLV3WindowBounds(window, out Bounds windowBounds);
+        GetLV4WindowBounds(window, out Bounds windowBounds);
         float horizontalSize = Mathf.Abs(outward.x) > 0.5f
             ? windowBounds.size.z
             : windowBounds.size.x;
         float width = Mathf.Clamp(horizontalSize, 0.7f, 2.2f);
         float height = Mathf.Clamp(windowBounds.size.y, 0.8f, 2.0f);
         GameObject highlight = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        highlight.name = $"LV3RoomWindowHighlight_{roomNumber}";
+        highlight.name = $"LV4RoomWindowHighlight_{roomNumber}";
         highlight.transform.SetParent(buildingRoot, true);
         highlight.transform.position = windowCenter + outward * 0.10f;
         highlight.transform.rotation = Quaternion.LookRotation(outward, Vector3.up);
@@ -1677,7 +1675,7 @@ public class DeliveryScoreManager : MonoBehaviour
         highlightRenderer.sharedMaterial = material;
         highlight.SetActive(false);
 
-        GameObject canvasObject = new GameObject($"LV3RoomPresentIcon_{roomNumber}", typeof(RectTransform), typeof(Canvas));
+        GameObject canvasObject = new GameObject($"LV4RoomPresentIcon_{roomNumber}", typeof(RectTransform), typeof(Canvas));
         canvasObject.transform.SetParent(buildingRoot, true);
         canvasObject.transform.position = windowCenter + outward * 0.20f + Vector3.up * (height * 0.68f);
         canvasObject.transform.rotation = Quaternion.LookRotation(outward, Vector3.up);
