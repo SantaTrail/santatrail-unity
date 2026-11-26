@@ -12,6 +12,13 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
 {
     private const string MainPage = "MainPageScene";
     private const string DefaultName = "Trainee";
+    [SerializeField] private GameObject santaPrefab;
+    [SerializeField] private RuntimeAnimatorController santaController;
+    [Header("Santa presentation")]
+    [SerializeField] private Vector3 santaPosition = new Vector3(0f, 0f, 4f);
+    [SerializeField] private Vector3 santaRotation = new Vector3(0f, 180f, 0f);
+    [SerializeField] private float santaScale = 3f;
+    [SerializeField] private bool lockSantaTransform = false;
     public static bool IsShowing { get; private set; }
     private static string playerName = DefaultName;
 
@@ -39,6 +46,7 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
     private Button[] choices;
     private TextMeshProUGUI[] choiceLabels;
     private AudioSource lineAudio;
+    private Transform runtimeSanta;
     private Coroutine typer;
     private bool finished, choiceOpen, lineComplete, choiceUsed;
 
@@ -58,6 +66,7 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
         IsShowing = true;
         definition = Fallback(sceneNumber);
         CreateUi();
+        EnsureSantaAnimation();
         if (sceneNumber == 1) ShowNameCard(); else StartStory();
     }
 
@@ -65,6 +74,16 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
     {
         if (finished || choiceOpen || UnityEngine.InputSystem.Keyboard.current == null) return;
         if (UnityEngine.InputSystem.Keyboard.current.spaceKey.wasPressedThisFrame || UnityEngine.InputSystem.Keyboard.current.enterKey.wasPressedThisFrame) Advance();
+    }
+
+    // Some clips in the free Christmas pack contain root-position keys. Keep the
+    // character in the camera frame so those keys cannot move Santa off-screen.
+    private void LateUpdate()
+    {
+        if (!lockSantaTransform || runtimeSanta == null || !runtimeSanta.gameObject.activeInHierarchy) return;
+        runtimeSanta.position = santaPosition;
+        runtimeSanta.rotation = Quaternion.Euler(santaRotation);
+        runtimeSanta.localScale = Vector3.one * santaScale;
     }
 
     private Definition Fallback(int number)
@@ -131,7 +150,7 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
         if (FindFirstObjectByType<EventSystem>() == null) DontDestroyOnLoad(new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule)));
         canvas = new GameObject("Visual Novel Canvas").AddComponent<Canvas>(); canvas.transform.SetParent(transform, false); canvas.renderMode = RenderMode.ScreenSpaceOverlay; canvas.sortingOrder = 2000;
         CanvasScaler scale = canvas.gameObject.AddComponent<CanvasScaler>(); scale.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize; scale.referenceResolution = new Vector2(1920,1080); canvas.gameObject.AddComponent<GraphicRaycaster>();
-        Image black = Image("Background (black by default)", canvas.transform, Color.black); Stretch(black.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        Image black = Image("Background (black by default)", canvas.transform, new Color(0f, 0f, 0f, 0f)); Stretch(black.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         portrait = Image("Current Speaker Portrait", canvas.transform, Color.white); Rect(portrait.rectTransform, new Vector2(0,0),new Vector2(0,0),new Vector2(390,330),new Vector2(430,620)); portrait.preserveAspect=true; portrait.gameObject.SetActive(false);
         chapter=Text("Chapter",canvas.transform,34,TextAlignmentOptions.Center,new Color(1,.88f,.36f)); Rect(chapter.rectTransform,new Vector2(.5f,1),new Vector2(.5f,1),new Vector2(0,-72),new Vector2(1100,60));
         GameObject bubble=Panel("Comic Dialogue Bubble",canvas.transform,new Color(1,.98f,.89f)); Rect(bubble.GetComponent<RectTransform>(),new Vector2(.5f,0),new Vector2(.5f,0),new Vector2(0,215),new Vector2(1500,390)); Outline(bubble,new Color(.1f,.24f,.22f),9);
@@ -148,6 +167,8 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
         Transform root = transform.Find("Visual Novel Canvas");
         if (root == null) return false;
         canvas = root.GetComponent<Canvas>();
+        Transform savedBackground = root.Find("Background (black by default)");
+        if (savedBackground != null) savedBackground.gameObject.SetActive(false);
         Transform bubble = root.Find("Comic Dialogue Bubble");
         portrait = root.Find("Current Speaker Portrait")?.GetComponent<Image>();
         chapter = root.Find("Chapter")?.GetComponent<TextMeshProUGUI>();
@@ -159,6 +180,87 @@ public sealed class SantaTrailOpeningStory : MonoBehaviour
         choices = new[] { root.Find("Choice 1")?.GetComponent<Button>(), root.Find("Choice 2")?.GetComponent<Button>() };
         choiceLabels = new[] { root.Find("Choice 1/Label")?.GetComponent<TextMeshProUGUI>(), root.Find("Choice 2/Label")?.GetComponent<TextMeshProUGUI>() };
         return canvas != null && portrait != null && chapter != null && speaker != null && body != null && hint != null && advance != null && skip != null && choices[0] != null && choices[1] != null;
+    }
+
+    private void EnsureSantaAnimation()
+    {
+        GameObject santa = GameObject.Find("Santa");
+        if (santa == null && santaPrefab != null)
+        {
+            santa = Instantiate(santaPrefab);
+            santa.name = "Santa";
+        }
+        if (santa == null) return;
+        Animator animator = santa.GetComponentInChildren<Animator>(true);
+        if (animator == null) animator = santa.AddComponent<Animator>();
+        animator.applyRootMotion = false;
+        animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+        if (santaController == null)
+        {
+            santaController = Resources.Load<RuntimeAnimatorController>("SantaTrail/Santa");
+        }
+        if (animator.runtimeAnimatorController == null && santaController != null)
+        {
+            animator.runtimeAnimatorController = santaController;
+        }
+        if (animator.runtimeAnimatorController != null && !animator.enabled)
+        {
+            animator.enabled = true;
+        }
+        runtimeSanta = santa.transform;
+        // Repair an accidental rotation value typed into Scale Z (for example
+        // -180). This model's intended imported scale is around 200.
+        Vector3 savedScale = santa.transform.localScale;
+        if (!lockSantaTransform && savedScale.z < 0f)
+        {
+            float intended = Mathf.Max(Mathf.Abs(savedScale.x), Mathf.Abs(savedScale.y));
+            santa.transform.localScale = Vector3.one * (intended > 0f ? intended : 200f);
+        }
+        if (lockSantaTransform)
+        {
+            santa.transform.position = santaPosition;
+            santa.transform.rotation = Quaternion.Euler(santaRotation);
+            santa.transform.localScale = Vector3.one * santaScale;
+        }
+        santa.SetActive(true);
+        foreach (Renderer renderer in santa.GetComponentsInChildren<Renderer>(true))
+        {
+            renderer.enabled = true;
+            renderer.forceRenderingOff = false;
+        }
+        EnsureSantaLighting();
+        // Prefer the camera on this scene's root. A persistent menu camera may
+        // exist in DontDestroyOnLoad and would otherwise render the UI only.
+        Camera sceneCamera = GetComponent<Camera>();
+        if (sceneCamera == null) sceneCamera = Camera.main != null ? Camera.main : FindFirstObjectByType<Camera>();
+        if (sceneCamera != null)
+        {
+            sceneCamera.transform.position = new Vector3(0f, 1f, -10f);
+            sceneCamera.transform.LookAt(new Vector3(0f, 1.5f, 4f));
+            sceneCamera.clearFlags = CameraClearFlags.SolidColor;
+            sceneCamera.cullingMask = ~0;
+            sceneCamera.orthographic = true;
+            sceneCamera.orthographicSize = 5f;
+            sceneCamera.tag = "MainCamera";
+            sceneCamera.enabled = true;
+        }
+        Debug.Log("SantaTrail visual novel: Santa model and animation enabled in " + gameObject.scene.name);
+    }
+
+    private void EnsureSantaLighting()
+    {
+        Light light = FindFirstObjectByType<Light>();
+        if (light == null)
+        {
+            GameObject lightObject = new GameObject("SantaTrail Key Light");
+            SceneManager.MoveGameObjectToScene(lightObject, gameObject.scene);
+            light = lightObject.AddComponent<Light>();
+            light.type = LightType.Directional;
+        }
+        light.enabled = true;
+        light.color = Color.white;
+        light.intensity = 1.2f;
+        light.transform.rotation = Quaternion.Euler(35f, -35f, 0f);
     }
 
     private void ShowNameCard()
