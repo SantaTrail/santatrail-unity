@@ -9,6 +9,7 @@ using Esri.ArcGISMapsSDK.Components;
 using Esri.ArcGISMapsSDK.Utils;
 using Esri.ArcGISMapsSDK.Utils.GeoCoord;
 using Esri.GameEngine.Geometry;
+using Esri.GameEngine.Elevation;
 using Esri.GameEngine.Map;
 using Unity.Mathematics;
 
@@ -40,12 +41,15 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Tooltip("Restrict ArcGIS streaming and generated houses to a circular playable area around the map origin.")]
     [SerializeField] bool limitMapExtent = true;
     [Min(50f)]
-    [InspectorName("Map And Boundary Radius (Meters)")]
-    [Tooltip(
-        "Custom radius in metres for both the visible ArcGIS map and the " +
-        "drone flight boundary when Fit Drone Boundary To Generated Village is off."
-    )]
+    [InspectorName("Map Radius (Meters)")]
+    [Tooltip("Radius in metres for the visible ArcGIS map around the level origin.")]
     [SerializeField] double mapExtentSizeMeters = 350f;
+    [Min(0f)]
+    [Tooltip(
+        "Optional flight boundary radius in metres. Set to 0 to match the map " +
+        "radius; values larger than the map radius are clamped to the map edge."
+    )]
+    [SerializeField] float droneFlightBoundaryRadiusMeters = 0f;
     [Header("ArcGIS")]
     [SerializeField] ArcGISConverter arcGISConverter;
 
@@ -81,8 +85,33 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [Header("Generation Mode")]
     [SerializeField] bool useArcGISTerrainOnly = true;
     [Header("Building Spawn")]
-    [Tooltip("Enable this to generate building prefabs from OSM footprints. Disable it in levels that use manually placed building assets.")]
+    [InspectorName("Generate Houses From Footprints")]
+    [Tooltip("Generate building prefabs from queried footprints, including Overpass and the optional ArcGIS Europe OSM FeatureServer fallback.")]
     [SerializeField] bool spawnOsmBuildings = true;
+    [Header("Local Footprint Overrides")]
+    [Tooltip(
+        "Also generate houses from footprints entered below. Use this for grey map " +
+        "footprints that are visible on the basemap but missing from the OSM query. " +
+        "Enter each corner as latitude/longitude in map order."
+    )]
+    [SerializeField] bool generateManualFootprintOverrides = true;
+
+    [System.Serializable]
+    public class ManualFootprintOverride
+    {
+        [Tooltip("Editor-only label used in generation logs.")]
+        public string label = "Manual footprint";
+
+        [Tooltip(
+            "Three or more footprint corners in latitude/longitude order. " +
+            "Do not repeat the first corner at the end."
+        )]
+        public GPSPoint[] corners = new GPSPoint[4];
+    }
+
+    [SerializeField] List<ManualFootprintOverride> manualFootprintOverrides =
+        new List<ManualFootprintOverride>();
+
     [SerializeField] float buildingSpawnRadius = 350f;
     [Tooltip(
         "Off uses Map Extent Size Meters as the exact map and flight-boundary " +
@@ -98,6 +127,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     [SerializeField] bool filterBuildingsByDroneDistance = false;
     [SerializeField] bool showSpawnRadius = true;
     [SerializeField] bool hideOsmBuildingLayer = true;
+    [Tooltip(
+        "When Overpass returns no usable footprints, query the ArcGIS Europe " +
+        "OpenStreetMap building-footprint FeatureServer and generate houses."
+    )]
+    [SerializeField] bool useArcGISSceneFootprintsAsOsmFallback = false;
     [SerializeField] bool logLayerVisibilityChanges = true;
     [SerializeField] float buildingYawCorrectionDegrees = 0f;
     [Header("Placement Safety")]
@@ -389,10 +423,18 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     static SceneLoaderArcgis configuredMapExtentSource;
     static bool hasConfiguredMapExtent;
     static double configuredMapExtentRadiusMeters;
+    static double configuredDroneFlightBoundaryRadiusMeters;
 
     public static bool TryGetConfiguredMapExtentRadius(out double radiusMeters)
     {
         radiusMeters = configuredMapExtentRadiusMeters;
+        return hasConfiguredMapExtent && radiusMeters > 0.0;
+    }
+
+    public static bool TryGetConfiguredDroneFlightBoundaryRadius(
+        out double radiusMeters)
+    {
+        radiusMeters = configuredDroneFlightBoundaryRadiusMeters;
         return hasConfiguredMapExtent && radiusMeters > 0.0;
     }
 
@@ -481,6 +523,13 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         configuredMapExtentRadiusMeters = limitMapExtent
             ? System.Math.Min(mapRadiusMeters, requestedRadiusMeters)
             : requestedRadiusMeters;
+        configuredDroneFlightBoundaryRadiusMeters =
+            droneFlightBoundaryRadiusMeters > 0f
+                ? System.Math.Min(
+                    configuredMapExtentRadiusMeters,
+                    droneFlightBoundaryRadiusMeters
+                )
+                : configuredMapExtentRadiusMeters;
         hasConfiguredMapExtent = true;
 
         ApplyGeneratedBoundaryToArcGISMap(
@@ -490,7 +539,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         Debug.Log(
             $"🛑 Drone boundary matched to generated houses: " +
             $"last house edge={farthestGeneratedHouseEdgeMeters:F1}m, " +
-            $"boundary radius={configuredMapExtentRadiusMeters:F1}m."
+            $"map radius={configuredMapExtentRadiusMeters:F1}m, " +
+            $"flight boundary radius={configuredDroneFlightBoundaryRadiusMeters:F1}m."
         );
     }
 
@@ -658,7 +708,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     GameManager.homeLon,
                     GameManager.homeLat,
                     GameManager.homeAlt,
-                    ArcGISSpatialReference.WGS84()
+                    ArcGISAltitudeReference.ForActiveLevel()
                 );
 
                 ApplyConfiguredMapExtent(
@@ -698,7 +748,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             mapOriginLongitude,
             mapOriginLatitude,
             mapOriginAltitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
@@ -883,6 +933,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         {
             if (File.Exists(Path.Combine(candidate, "main.py")))
             {
+                Debug.Log("🐍 Using terrain/OSM backend: " + candidate);
                 return candidate;
             }
         }
@@ -1299,7 +1350,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             originWaypoint.lon,
             originWaypoint.lat,
             originWaypoint.alt,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
@@ -1453,10 +1504,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
     void GenerateScene(Result result)
     {
         ClearGeneratedContent();
+        SpawnCustomMapGround(result);
 
         // Roadside props use the same OSM road data in both terrain modes.
         // Keep this separate from terrain generation so the setting is reliable
         // when a level switches between ArcGIS and Unity terrain.
+        SpawnOsmRoadSurfaces(result);
         SpawnStreetLightsAlongRoads(result);
 
         if (useArcGISTerrainOnly && !localTerrainFallbackActive)
@@ -2235,6 +2288,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 $"🏮 Roadside street lights skipped: {result.roads.Length} OSM roads " +
                 "were returned, but none produced valid placements inside the map extent."
             );
+            SpawnFallbackStreetLights(result);
             return;
         }
 
@@ -2259,6 +2313,26 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         );
     }
 
+    void SpawnFallbackStreetLights(Result result)
+    {
+        if (result == null || result.waypoints == null || result.waypoints.Length == 0)
+        {
+            return;
+        }
+
+        // Keep a clearly visible pair of lamps near the level origin as a
+        // fallback when road coordinates cannot be projected by ArcGIS.
+        GPSWaypoint origin = result.waypoints[0];
+        double latitudeOffset = 13.0 / 111320.0;
+        double longitudeScale = 111320.0 * System.Math.Cos(origin.lat * System.Math.PI / 180.0);
+        double longitudeOffset = 13.0 / System.Math.Max(1.0, longitudeScale);
+        SpawnArcGISStreetLight(origin.lat - latitudeOffset, origin.lon - longitudeOffset,
+            0f, 93001, result.scene, GetGeneratedEnvironmentRoot());
+        SpawnArcGISStreetLight(origin.lat + latitudeOffset, origin.lon + longitudeOffset,
+            180f, 93002, result.scene, GetGeneratedEnvironmentRoot());
+        Debug.Log("🏮 Spawned fallback street lamps near the level origin.");
+    }
+
     bool IsSupportedStreetLightRoad(string highway)
     {
         switch ((highway ?? "").Trim().ToLowerInvariant())
@@ -2269,6 +2343,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             case "secondary":
             case "tertiary":
             case "residential":
+            case "service":
             case "unclassified":
             case "living_street":
                 return true;
@@ -2307,7 +2382,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             longitude,
             latitude,
             altitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
         ArcGISLocationComponent location =
             target.AddComponent<ArcGISLocationComponent>();
@@ -2362,10 +2437,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             uprightObject.AddComponent<ArcGISUprightVisualRoot>();
         uprightController.Configure(heading);
 
-        BuildStreetLightVisual(uprightObject, sceneName);
+        BuildStreetLightVisual(uprightObject, sceneName, seed);
     }
 
-    void BuildStreetLightVisual(GameObject lightRoot, string sceneName)
+    void BuildStreetLightVisual(GameObject lightRoot, string sceneName, int seed)
     {
         float poleHeight = sceneName == "forest" ? 5.5f : 7.5f;
         float poleWidth = 0.30f;
@@ -2414,8 +2489,34 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 material.color = child.name == "LampHead"
                     ? new Color(1f, 0.92f, 0.28f, 1f)
                     : new Color(0.10f, 0.10f, 0.12f, 1f);
+                if (child.name == "LampHead")
+                {
+                    material.EnableKeyword("_EMISSION");
+                    material.SetColor(
+                        "_EmissionColor",
+                        new Color(1f, 0.58f, 0.16f, 1f) * 2.2f
+                    );
+                }
                 renderer.sharedMaterial = material;
             }
+        }
+
+        // A handful of real lights add warm pools along the road without
+        // placing dozens of expensive point lights into the level.
+        if (Mathf.Abs(seed % 3) == 0)
+        {
+            Light pool = lightRoot.gameObject.AddComponent<Light>();
+            pool.transform.localPosition = new Vector3(
+                0f,
+                poleHeight - 0.3f,
+                1.2f
+            );
+            pool.type = LightType.Point;
+            pool.color = new Color(1f, 0.66f, 0.34f, 1f);
+            pool.intensity = 2.8f;
+            pool.range = 16f;
+            pool.shadows = LightShadows.None;
+            pool.renderMode = LightRenderMode.Auto;
         }
     }
 
@@ -2455,9 +2556,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         if (result.buildings == null)
         {
-            Debug.LogError("result.buildings is NULL");
-            return;
+            result.buildings = new Building[0];
         }
+
+        AppendManualFootprintOverrides(result);
 
         Debug.Log($"Building count = {result.buildings.Length}");
 
@@ -2493,10 +2595,18 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             return;
         }
 
-        Debug.Log($"🏙 Spawning village buildings from {result.buildings.Length} OSM footprints");
+        Debug.Log($"🏙 Spawning village buildings from {result.buildings.Length} footprints");
         int spawned = 0;
         ResolveOsmPlacementValidator();
         placementValidator.ResetPlacements();
+        int lv4HighRiseBuildingIndex =
+            string.Equals(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
+                "LV4", System.StringComparison.OrdinalIgnoreCase)
+                ? FindClosestFootprintIndex(
+                    result.buildings,
+                    48.180143,
+                    16.383487)
+                : -1;
 
         for (int i = 0; i < result.buildings.Length; i++)
         {
@@ -2849,6 +2959,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     uprightObject.transform,
                     localFootprint,
                     i,
+                    i == lv4HighRiseBuildingIndex ? 28 : 0,
                     out Transform deliveryTarget
                 );
 
@@ -2988,7 +3099,6 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 prefabToUse,
                 buildingRoot.name
             );
-
             bool shouldFitThisPrefab =
                 fitBuildingModelToFootprint &&
                 (orientationRule == null ||
@@ -3006,6 +3116,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     orientationRule
                 );
             }
+
+            // FitBuildingModelToFootprint changes the prefab bounds/scale, so
+            // build the facade glow mesh only after the final model placement.
+            AddNightWindowGlows(buildingRoot.transform, buildingModel, i);
 
             House completeHouse = buildingRoot.GetComponent<House>();
             if (completeHouse == null)
@@ -3078,6 +3192,215 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         PublishGeneratedVillageBoundary();
         Debug.Log("🏙 Village buildings spawned: " + spawned);
+    }
+
+    static int FindClosestFootprintIndex(
+        Building[] buildings,
+        double targetLatitude,
+        double targetLongitude)
+    {
+        if (buildings == null)
+        {
+            return -1;
+        }
+
+        int closestIndex = -1;
+        double closestDistanceSquared = double.MaxValue;
+        for (int i = 0; i < buildings.Length; i++)
+        {
+            GPSPoint[] points = buildings[i] != null ? buildings[i].points : null;
+            if (points == null || points.Length < 3)
+            {
+                continue;
+            }
+
+            double centerLatitude = 0d;
+            double centerLongitude = 0d;
+            int validPoints = 0;
+            for (int p = 0; p < points.Length; p++)
+            {
+                GPSPoint point = points[p];
+                if (point == null)
+                {
+                    continue;
+                }
+                centerLatitude += point.lat;
+                centerLongitude += point.lon;
+                validPoints++;
+            }
+
+            if (validPoints < 3)
+            {
+                continue;
+            }
+
+            centerLatitude /= validPoints;
+            centerLongitude /= validPoints;
+            double northMeters = (centerLatitude - targetLatitude) * 111320d;
+            double eastMeters = (centerLongitude - targetLongitude) * 111320d *
+                System.Math.Cos(targetLatitude * System.Math.PI / 180d);
+            double distanceSquared = northMeters * northMeters + eastMeters * eastMeters;
+            if (distanceSquared < closestDistanceSquared)
+            {
+                closestDistanceSquared = distanceSquared;
+                closestIndex = i;
+            }
+        }
+
+        return closestIndex;
+    }
+
+    void AppendManualFootprintOverrides(Result result)
+    {
+        if (!generateManualFootprintOverrides ||
+            result == null ||
+            manualFootprintOverrides == null ||
+            manualFootprintOverrides.Count == 0)
+        {
+            return;
+        }
+
+        List<Building> buildings = result.buildings != null
+            ? new List<Building>(result.buildings)
+            : new List<Building>();
+        int appended = 0;
+
+        for (int i = 0; i < manualFootprintOverrides.Count; i++)
+        {
+            ManualFootprintOverride entry = manualFootprintOverrides[i];
+            if (entry == null || entry.corners == null || entry.corners.Length < 3)
+            {
+                Debug.LogWarning($"⚠️ Manual footprint {i} has fewer than three corners; skipping it.");
+                continue;
+            }
+
+            List<GPSPoint> validCorners = new List<GPSPoint>(entry.corners.Length);
+            double latitudeSum = 0.0;
+            double longitudeSum = 0.0;
+            for (int cornerIndex = 0; cornerIndex < entry.corners.Length; cornerIndex++)
+            {
+                GPSPoint corner = entry.corners[cornerIndex];
+                if (corner == null ||
+                    float.IsNaN(corner.lat) || float.IsInfinity(corner.lat) ||
+                    float.IsNaN(corner.lon) || float.IsInfinity(corner.lon) ||
+                    corner.lat < -90f || corner.lat > 90f ||
+                    corner.lon < -180f || corner.lon > 180f)
+                {
+                    Debug.LogWarning(
+                        $"⚠️ Manual footprint '{entry.label}' has an invalid corner at index {cornerIndex}; skipping it."
+                    );
+                    validCorners.Clear();
+                    break;
+                }
+
+                // Ignore a repeated closing coordinate if one was entered.
+                if (validCorners.Count > 0 &&
+                    GetGpsDistanceMeters(
+                        validCorners[validCorners.Count - 1].lat,
+                        validCorners[validCorners.Count - 1].lon,
+                        corner.lat,
+                        corner.lon) < 0.05)
+                {
+                    continue;
+                }
+
+                validCorners.Add(new GPSPoint { lat = corner.lat, lon = corner.lon });
+                latitudeSum += corner.lat;
+                longitudeSum += corner.lon;
+            }
+
+            if (validCorners.Count > 2 &&
+                GetGpsDistanceMeters(
+                    validCorners[0].lat,
+                    validCorners[0].lon,
+                    validCorners[validCorners.Count - 1].lat,
+                    validCorners[validCorners.Count - 1].lon) < 0.05)
+            {
+                GPSPoint closingCorner = validCorners[validCorners.Count - 1];
+                latitudeSum -= closingCorner.lat;
+                longitudeSum -= closingCorner.lon;
+                validCorners.RemoveAt(validCorners.Count - 1);
+            }
+
+            if (validCorners.Count < 3)
+            {
+                Debug.LogWarning($"⚠️ Manual footprint '{entry.label}' has invalid or duplicate corners; skipping it.");
+                continue;
+            }
+
+            double centerLatitude = latitudeSum / validCorners.Count;
+            double centerLongitude = longitudeSum / validCorners.Count;
+            bool duplicatesExistingFootprint = false;
+            for (int buildingIndex = 0; buildingIndex < buildings.Count; buildingIndex++)
+            {
+                Building existing = buildings[buildingIndex];
+                if (existing == null || existing.points == null || existing.points.Length < 3)
+                {
+                    continue;
+                }
+
+                double existingLatitude = 0.0;
+                double existingLongitude = 0.0;
+                int existingPointCount = 0;
+                for (int pointIndex = 0; pointIndex < existing.points.Length; pointIndex++)
+                {
+                    GPSPoint point = existing.points[pointIndex];
+                    if (point == null)
+                    {
+                        continue;
+                    }
+
+                    existingLatitude += point.lat;
+                    existingLongitude += point.lon;
+                    existingPointCount++;
+                }
+
+                if (existingPointCount > 0 &&
+                    GetGpsDistanceMeters(
+                        centerLatitude,
+                        centerLongitude,
+                        existingLatitude / existingPointCount,
+                        existingLongitude / existingPointCount) < 3.0)
+                {
+                    duplicatesExistingFootprint = true;
+                    break;
+                }
+            }
+
+            if (duplicatesExistingFootprint)
+            {
+                Debug.Log($"ℹ️ Manual footprint '{entry.label}' matches a queried footprint; avoiding a duplicate house.");
+                continue;
+            }
+
+            buildings.Add(new Building { points = validCorners.ToArray() });
+            appended++;
+            Debug.Log(
+                $"🏠 Added manual footprint '{entry.label}' at " +
+                $"({centerLatitude:F7}, {centerLongitude:F7}) with {validCorners.Count} corners."
+            );
+        }
+
+        result.buildings = buildings.ToArray();
+        if (appended > 0)
+        {
+            Debug.Log($"🏠 Added {appended} local footprint override(s) to the building generation input.");
+        }
+    }
+
+    static double GetGpsDistanceMeters(
+        double latitudeA,
+        double longitudeA,
+        double latitudeB,
+        double longitudeB)
+    {
+        const double earthRadiusMeters = 6371000.0;
+        double latitudeRadians = (latitudeB - latitudeA) * Mathf.Deg2Rad;
+        double longitudeRadians = (longitudeB - longitudeA) * Mathf.Deg2Rad;
+        double meanLatitudeRadians = (latitudeA + latitudeB) * 0.5 * Mathf.Deg2Rad;
+        double east = longitudeRadians * System.Math.Cos(meanLatitudeRadians);
+        return earthRadiusMeters * System.Math.Sqrt(
+            latitudeRadians * latitudeRadians + east * east);
     }
 
     void SpawnFallbackVillageIfEnabled(Result result, string reason)
@@ -3490,9 +3813,8 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
 
         Vector3 center;
-        Vector3 forward;
 
-        if (!TryGetVisibleVillageAnchor(result, out center, out forward))
+        if (!TryGetVisibleVillageAnchor(result, out center, out _))
         {
             Transform anchorTransform = droneTransform != null
                 ? droneTransform
@@ -3503,23 +3825,22 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             center = anchorTransform != null
                 ? anchorTransform.position
                 : Vector3.zero;
-
-            forward = anchorTransform != null
-                ? anchorTransform.forward
-                : Vector3.forward;
         }
-
-        forward.y = 0f;
-        if (forward.sqrMagnitude < 0.0001f)
+        // Keep fallback placement repeatable and independent of drone yaw.
+        // Offsets use east (x) and north (z) metres from the level home point,
+        // staying close to the visible village while keeping clear of launch.
+        Vector2[] fallbackOffsetsMeters =
         {
-            forward = Vector3.forward;
-        }
-        forward.Normalize();
-
-        Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
-        int count = 8;
-        float radius = Mathf.Clamp(scale * 0.015f, 5f, 14f);
-        float angleStep = 360f / Mathf.Max(1, count);
+            new Vector2(-25f, 18f),
+            new Vector2(26f, 18f),
+            new Vector2(-25f, -20f),
+            new Vector2(26f, -20f)
+        };
+        bool isLV4RoomDeliveryLevel = string.Equals(
+            UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
+            "LV4",
+            System.StringComparison.OrdinalIgnoreCase);
+        int count = isLV4RoomDeliveryLevel ? 0 : fallbackOffsetsMeters.Length;
 
         Transform clusterParent = GetGeneratedBuildingsRoot();
         GameObject clusterRoot = new GameObject("VisibleVillageCluster");
@@ -3528,25 +3849,19 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             clusterRoot.transform.SetParent(clusterParent, false);
         }
 
-        if (arcGISConverter != null &&
+        double anchorLatitude = 0;
+        double anchorLongitude = 0;
+        bool hasGeoAnchor =
+            arcGISConverter != null &&
             arcGISConverter.CanProjectCoordinates() &&
-            TryGetVisibleVillageGeoAnchor(result, out double anchorLatitude, out double anchorLongitude))
-        {
-            AddConfiguredArcGISLocation(
-                clusterRoot,
-                anchorLongitude,
-                anchorLatitude,
-                0,
-                ArcGISSurfacePlacementMode.OnTheGround,
-                0,
-                new ArcGISRotation(0, 0, 0)
+            TryGetVisibleVillageGeoAnchor(
+                result,
+                out anchorLatitude,
+                out anchorLongitude
             );
-        }
-        else
-        {
-            clusterRoot.transform.position = center;
-            clusterRoot.transform.rotation = Quaternion.identity;
-        }
+
+        clusterRoot.transform.position = hasGeoAnchor ? Vector3.zero : center;
+        clusterRoot.transform.rotation = Quaternion.identity;
 
         ResolveModularHouseGenerator();
         bool canBuildModularFallback =
@@ -3561,29 +3876,52 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             );
         }
 
-        float heroWidth = radius * 1.05f;
-        float heroDepth = radius * 0.85f;
-        float heroScale = 1.5f;
+        // LV4 uses one clear procedural target only when mapped footprints
+        // are unavailable; other levels keep the surrounding fallback village.
+        float heroWidth = 12f;
+        float heroDepth = 10f;
+        float heroScale = 1f;
         float heroFootprintRadius = CalculateFootprintRadius(
             heroWidth,
             heroDepth,
             heroScale
         );
-        Vector3 heroLocalPosition =
-            forward * GetMinimumBuildingCenterDistance(heroFootprintRadius) +
-            Vector3.down * 0.5f;
+        Vector3 heroLocalPosition;
+        if (isLV4RoomDeliveryLevel && hasGeoAnchor)
+        {
+            double metersPerDegreeLongitude = 111320.0 *
+                System.Math.Cos(anchorLatitude * System.Math.PI / 180.0);
+            heroLocalPosition = new Vector3(
+                (float)((16.383487 - anchorLongitude) * metersPerDegreeLongitude),
+                0f,
+                (float)((48.180143 - anchorLatitude) * 111320.0)
+            );
+        }
+        else
+        {
+            heroLocalPosition = new Vector3(
+                0f,
+                0f,
+                Mathf.Max(32f, GetMinimumBuildingCenterDistance(heroFootprintRadius))
+            );
+        }
         float clusterOuterRadiusMeters =
             new Vector2(heroLocalPosition.x, heroLocalPosition.z).magnitude +
             heroFootprintRadius;
         SpawnVisibleFallbackBuilding(
             clusterRoot.transform,
             heroLocalPosition,
-            forward,
+            Vector3.forward,
             heroWidth,
             heroDepth,
             heroScale,
             count * 1000 + 1,
-            "Hero"
+            "Hero",
+            hasGeoAnchor,
+            anchorLatitude,
+            anchorLongitude,
+            string.Equals(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name,
+                "LV4", System.StringComparison.OrdinalIgnoreCase) ? 28 : 0
         );
         Debug.Log(
             $"🏠 Hero fallback delivery building spawned at " +
@@ -3592,35 +3930,20 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         for (int i = 0; i < count; i++)
         {
-            float angle =
-                i * angleStep +
-                UnityEngine.Random.Range(-10f, 10f);
-
-            float distance =
-                UnityEngine.Random.Range(
-                    radius * 0.4f,
-                    radius
-                );
-
-            Vector3 offset =
-                (right * Mathf.Cos(angle * Mathf.Deg2Rad) +
-                 forward * Mathf.Sin(angle * Mathf.Deg2Rad)) *
-                distance;
-
-            float footprintWidth = UnityEngine.Random.Range(4.5f, 9.5f);
-            float footprintDepth = UnityEngine.Random.Range(3.5f, 7.5f);
-            float scaleMultiplier = UnityEngine.Random.Range(0.95f, 1.25f);
+            Vector2 offset = fallbackOffsetsMeters[i];
+            float footprintWidth = 9f;
+            float footprintDepth = 7f;
+            float scaleMultiplier = 1.05f;
             float footprintRadius = CalculateFootprintRadius(
                 footprintWidth,
                 footprintDepth,
                 scaleMultiplier
             );
 
-            Vector3 horizontalOffset = forward * 4f + offset;
-            horizontalOffset.y = 0f;
+            Vector3 horizontalOffset = new Vector3(offset.x, 0f, offset.y);
             if (horizontalOffset.sqrMagnitude < 0.0001f)
             {
-                horizontalOffset = forward;
+                horizontalOffset = Vector3.forward;
             }
 
             float minimumCenterDistance =
@@ -3631,15 +3954,14 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     horizontalOffset.normalized * minimumCenterDistance;
             }
 
-            Vector3 spawnLocalPosition =
-                horizontalOffset + Vector3.down * 0.5f;
+            Vector3 spawnLocalPosition = horizontalOffset;
 
             clusterOuterRadiusMeters = Mathf.Max(
                 clusterOuterRadiusMeters,
                 horizontalOffset.magnitude + footprintRadius
             );
 
-            float yaw = UnityEngine.Random.Range(0f, 360f);
+            float yaw = i * 90f;
             Vector3 buildingForward =
                 Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
 
@@ -3651,7 +3973,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 footprintDepth,
                 scaleMultiplier,
                 count * 1000 + i + 2,
-                $"Fallback_{i}"
+                $"Fallback_{i}",
+                hasGeoAnchor,
+                anchorLatitude,
+                anchorLongitude
             );
 
             Debug.Log(
@@ -3661,8 +3986,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         }
 
         Debug.Log(
-            "🏙 Visible fallback village cluster spawned as fixed " +
-            "delivery buildings."
+            isLV4RoomDeliveryLevel
+                ? "🏙 LV4 spawned one tall fallback delivery target instead of a synthetic village."
+                : "🏙 Visible fallback village cluster spawned as fixed delivery buildings."
         );
 
         if (TryGetVisibleVillageGeoAnchor(
@@ -3689,7 +4015,11 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         float footprintDepth,
         float scaleMultiplier,
         int seed,
-        string label)
+        string label,
+        bool geolocateOnTerrain,
+        double anchorLatitude,
+        double anchorLongitude,
+        int forcedFloorCount = 0)
     {
         if (parent == null)
         {
@@ -3700,7 +4030,6 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             $"VisibleBuilding_{label}_ArcGISBuilding_{seed}"
         );
         buildingRoot.transform.SetParent(parent, false);
-        buildingRoot.transform.localPosition = localPosition;
 
         Vector3 flatForward = forward;
         flatForward.y = 0f;
@@ -3715,6 +4044,40 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             Vector3.up
         );
         buildingRoot.transform.localScale = Vector3.one * Mathf.Max(0.1f, scaleMultiplier);
+
+        if (geolocateOnTerrain)
+        {
+            // localPosition.x is east and localPosition.z is north in the
+            // ArcGIS map frame. Anchor each house separately so ArcGIS can
+            // drape it onto the terrain height at that exact location.
+            double latitude = anchorLatitude + localPosition.z / 111320.0;
+            double longitudeMetersPerDegree =
+                111320.0 * System.Math.Cos(anchorLatitude * System.Math.PI / 180.0);
+            double longitude = anchorLongitude +
+                localPosition.x / longitudeMetersPerDegree;
+            float headingDegrees =
+                Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg;
+
+            buildingRoot.transform.localPosition = Vector3.zero;
+            AddConfiguredArcGISLocation(
+                buildingRoot,
+                longitude,
+                latitude,
+                0,
+                ArcGISSurfacePlacementMode.OnTheGround,
+                0.15,
+                new ArcGISRotation(headingDegrees, 0, 0)
+            );
+            Debug.Log(
+                $"🏠 Fallback house {label} anchored at GPS " +
+                $"({latitude:F7}, {longitude:F7}) from east/north offset " +
+                $"({localPosition.x:F1}m, {localPosition.z:F1}m)."
+            );
+        }
+        else
+        {
+            buildingRoot.transform.localPosition = localPosition;
+        }
 
         if (modularHouseGenerator != null &&
             buildingGenerationMode != BuildingGenerationMode.CompletePrefab)
@@ -3731,6 +4094,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                     buildingRoot.transform,
                     localFootprint,
                     seed,
+                    forcedFloorCount,
                     out Transform deliveryTarget))
             {
                 Debug.LogWarning(
@@ -4007,6 +4371,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 prefab,
                 root.name
             );
+            AddNightWindowGlows(root.transform, visibleModel, root.GetInstanceID());
         }
         else
         {
@@ -5186,6 +5551,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
             "main.py",
             "parser.py",
             "osm.py",
+            "arcgis_buildings.py",
             "elevation.py",
             "features.py",
             "classifier.py"
@@ -5246,6 +5612,10 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         arguments += $" --radius-meters {radiusArgument}";
         arguments += $" --output-path \"{outputPath}\"";
+        if (useArcGISSceneFootprintsAsOsmFallback)
+        {
+            arguments += " --arcgis-osm-fallback";
+        }
 
         ProcessStartInfo psi = new ProcessStartInfo
         {
@@ -5397,9 +5767,12 @@ public partial class SceneLoaderArcgis : MonoBehaviour
                 "bin",
                 "python3"
             ));
-            candidates.Add("/usr/bin/python3");
+            // Prefer a modern user-installed Python before macOS's legacy
+            // system interpreter. The system Python can use an older LibreSSL
+            // build that fails TLS negotiation with Overpass endpoints.
             candidates.Add("/opt/homebrew/bin/python3");
             candidates.Add("/usr/local/bin/python3");
+            candidates.Add("/usr/bin/python3");
 #endif
         }
 
@@ -5485,11 +5858,19 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         if (droneLocation != null &&
             droneLocation.GetComponentInParent<ArcGISMapComponent>() != null)
         {
+            // Keep the drone terrain-relative while it is parked at spawn.
+            // The ArcGIS Location component tracks elevation as terrain LODs
+            // load, so the drone follows the same hillside as the rendered map.
+            droneLocation.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.RelativeToGround;
+            // Keep the aircraft visibly clear of the terrain while ArcGIS
+            // resolves the first terrain tile and ArduPilot starts telemetry.
+            droneLocation.SurfacePlacementOffset = 3.0;
             droneLocation.Position = new ArcGISPoint(
                 wp0.lon,
                 wp0.lat,
-                wp0.alt,
-                ArcGISSpatialReference.WGS84()
+                0,
+                ArcGISAltitudeReference.ForActiveLevel()
             );
         }
         else
@@ -5520,6 +5901,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
 
         Debug.Log("🚁 Drone placed over ArcGIS surface");
+
     }
 
     void SetupDroneReference()
@@ -5530,6 +5912,7 @@ public partial class SceneLoaderArcgis : MonoBehaviour
         {
             ArcGISLocationComponent locationComponent = droneObj.GetComponentInChildren<ArcGISLocationComponent>(true);
             droneTransform = locationComponent != null ? locationComponent.transform : droneObj.transform;
+            AddNightDroneVisibility(droneObj);
             Debug.Log("✅ Drone found");
         }
         else
@@ -5795,6 +6178,9 @@ public partial class SceneLoaderArcgis : MonoBehaviour
 
         droneSpawnBuildingClearanceMeters =
             Mathf.Max(1f, droneSpawnBuildingClearanceMeters);
+
+        droneFlightBoundaryRadiusMeters =
+            Mathf.Max(0f, droneFlightBoundaryRadiusMeters);
 
         droneBoundaryPastLastHouseMeters =
             Mathf.Max(0f, droneBoundaryPastLastHouseMeters);

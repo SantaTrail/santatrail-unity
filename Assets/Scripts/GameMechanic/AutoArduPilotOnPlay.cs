@@ -9,7 +9,6 @@ using UnityEngine.SceneManagement;
 
 public static class AutoArduPilotOnPlay
 {
-    private const string QgcMapTypeAtStartup = "Satellite";
     private const int QgcUdpListenPort = 14550;
     private static bool hasLaunchedThisSession;
     private static bool isLaunchInProgress;
@@ -165,7 +164,7 @@ public static class AutoArduPilotOnPlay
 #if UNITY_EDITOR || UNITY_STANDALONE_WIN
                 if (ResolveWindowsSitlExecutable() != null)
                 {
-                    ownedSitlProcess = StartWindowsSitl(homeLat, homeLon, homeAlt, homeYaw);
+                    ownedSitlProcess = StartWindowsSitl(homeLat, homeLon, homeAlt, homeYaw, sceneName);
                     UnityEngine.Debug.Log("AutoArduPilotOnPlay: launched native Windows ArduPilot SITL.");
                 }
                 else
@@ -201,7 +200,8 @@ public static class AutoArduPilotOnPlay
                     FileName = "/bin/bash",
                     Arguments =
                         $"{QuoteShellArgument(scriptPath)} " +
-                        $"{homeLat} {homeLon} {homeAlt} {homeYaw}",
+                        $"{homeLat} {homeLon} {homeAlt} {homeYaw} " +
+                        QuoteShellArgument(sceneName),
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
@@ -343,7 +343,8 @@ public static class AutoArduPilotOnPlay
         string homeLat,
         string homeLon,
         string homeAlt,
-        string homeYaw
+        string homeYaw,
+        string sceneName
     )
     {
         string sitlExecutable = ResolveWindowsSitlExecutable();
@@ -361,7 +362,10 @@ public static class AutoArduPilotOnPlay
         string defaultsFile = Path.Combine(
             Application.streamingAssetsPath,
             "SITL",
-            "sitl_unity_safe.parm"
+            (string.Equals(sceneName, "LV2", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(sceneName, "LV3", StringComparison.OrdinalIgnoreCase))
+                ? "sitl_unity_lv2.parm"
+                : "sitl_unity_safe.parm"
         );
         if (!File.Exists(defaultsFile))
         {
@@ -889,8 +893,6 @@ public static class AutoArduPilotOnPlay
                 ? new List<string>(File.ReadAllLines(settingsPath))
                 : new List<string>();
 
-            SetIniValue(lines, "FlightMap", "mapType", QgcMapTypeAtStartup);
-
             // QGC 5 stores these under AutoConnect. QGC 4.x used LinkManager,
             // and QGC 5 migrates that legacy group, so writing both keeps
             // existing installations and newly downloaded releases working.
@@ -902,14 +904,14 @@ public static class AutoArduPilotOnPlay
 
             File.WriteAllLines(settingsPath, lines);
             UnityEngine.Debug.Log(
-                $"AutoArduPilotOnPlay: QGroundControl map type set to " +
-                $"{QgcMapTypeAtStartup}; UDP auto-connect set to {QgcUdpListenPort}."
+                $"AutoArduPilotOnPlay: QGroundControl UDP auto-connect set to " +
+                $"{QgcUdpListenPort}; existing map preferences were preserved."
             );
         }
         catch (Exception exception)
         {
             UnityEngine.Debug.LogWarning(
-                "AutoArduPilotOnPlay: could not set the QGroundControl map type. " +
+                "AutoArduPilotOnPlay: could not set QGroundControl UDP auto-connect settings. " +
                 exception.Message
             );
         }

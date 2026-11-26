@@ -2,7 +2,6 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using Esri.ArcGISMapsSDK.Components;
-using Esri.HPFramework;
 
 public class ArcGISCameraCoordinator : MonoBehaviour
 {
@@ -54,10 +53,6 @@ public class ArcGISCameraCoordinator : MonoBehaviour
     {
         Camera droneCamera = FindDroneCamera();
         Camera minimapCamera = FindMinimapCamera();
-        ArcGISMapComponent arcGisMap =
-            FindFirstObjectByType<ArcGISMapComponent>(
-                FindObjectsInactive.Include
-            );
 
         ArcGISCameraComponent droneArcGis =
             droneCamera != null
@@ -69,47 +64,21 @@ public class ArcGISCameraCoordinator : MonoBehaviour
                 ? minimapCamera.GetComponent<ArcGISCameraComponent>()
                 : null;
 
-        // Disable scene alternatives before creating/enabling a driver. The
-        // ArcGIS SDK warns and may select the wrong streaming view if two
-        // ArcGISCameraComponents are briefly enabled during a scene restart.
+        // Keep the ArcGIS camera attached to the camera that renders the Game
+        // view. A separate disabled Unity Camera can provide a streaming
+        // viewpoint, but it cannot render the map into the visible camera.
         SetArcGisCameraEnabled(minimapArcGis, false, "Minimap Camera");
-        SetArcGisCameraEnabled(
-            droneArcGis,
-            false,
-            "DroneCamera (streamed through controlled map driver)"
-        );
-
-        ArcGISCameraComponent streamingArcGisCamera;
-        string streamingCameraLabel;
-
-        // Always stream through the driver, even when the visible drone camera
-        // is already under ArcGISMap. This lets the driver ignore sub-metre
-        // telemetry jitter, request a lighter tile quality during play, and
-        // freeze the final loading viewpoint until DrawStatus is Completed.
-        ArcGISCameraComponent mapDriverArcGis =
-            EnsureMapDriver(arcGisMap, droneCamera);
-
-        if (mapDriverArcGis != null)
+        if (droneArcGis != null)
         {
-            SetArcGisCameraEnabled(
-                mapDriverArcGis,
-                true,
-                "ArcGIS Drone Map Driver"
-            );
-            streamingArcGisCamera = mapDriverArcGis;
-            streamingCameraLabel = "ArcGIS Drone Map Driver";
+            DisableAndRemoveMapDriver();
+            SetArcGisCameraEnabled(droneArcGis, true, "DroneCamera");
         }
         else
         {
-            // Preserve a usable map if the driver cannot be created because a
-            // required scene reference is missing.
-            SetArcGisCameraEnabled(
-                droneArcGis,
-                true,
-                "DroneCamera fallback"
+            Debug.LogWarning(
+                "DroneCamera has no ArcGISCameraComponent; map rendering " +
+                "cannot be attached to the visible Game camera."
             );
-            streamingArcGisCamera = droneArcGis;
-            streamingCameraLabel = "DroneCamera fallback";
         }
 
         if (minimapCamera != null)
@@ -158,51 +127,12 @@ public class ArcGISCameraCoordinator : MonoBehaviour
         Debug.Log(
             "🎥 ArcGIS camera priority set. " +
             $"DroneCamera={(droneCamera != null ? droneCamera.name : "missing")} " +
-            $"Streaming={streamingCameraLabel} " +
-            $"ArcGIS={(streamingArcGisCamera != null ? streamingArcGisCamera.enabled.ToString() : "missing")} | " +
+            $"Streaming=visible Game camera " +
+            $"ArcGIS={(droneArcGis != null ? droneArcGis.enabled.ToString() : "missing")} | " +
             $"MinimapCamera={(minimapCamera != null ? minimapCamera.name : "missing")} " +
             $"ArcGIS={(minimapArcGis != null ? minimapArcGis.enabled.ToString() : "missing")} " +
             $"Render={(minimapCamera != null && minimapCamera.enabled)}"
         );
-    }
-
-    private ArcGISCameraComponent EnsureMapDriver(
-        ArcGISMapComponent arcGisMap,
-        Camera droneCamera)
-    {
-        if (arcGisMap == null || droneCamera == null)
-        {
-            return null;
-        }
-
-        if (mapDriver == null ||
-            mapDriver.transform.parent != arcGisMap.transform)
-        {
-            mapDriver = arcGisMap.GetComponentInChildren<ArcGISDroneMapDriver>(
-                true
-            );
-        }
-
-        if (mapDriver == null ||
-            mapDriver.transform.parent != arcGisMap.transform)
-        {
-            GameObject driverObject = new GameObject("ArcGIS Drone Map Driver");
-            driverObject.transform.SetParent(arcGisMap.transform, false);
-
-            Camera driverCamera = driverObject.AddComponent<Camera>();
-            driverCamera.enabled = false;
-            driverObject.AddComponent<HPTransform>();
-            driverObject.AddComponent<ArcGISCameraComponent>();
-            mapDriver = driverObject.AddComponent<ArcGISDroneMapDriver>();
-
-            Debug.Log(
-                "Created ArcGIS Drone Map Driver under ArcGISMap to stream " +
-                "the terrain from DroneCamera."
-            );
-        }
-
-        mapDriver.Configure(droneCamera);
-        return mapDriver.ArcGisCamera;
     }
 
     private void DisableAndRemoveMapDriver()

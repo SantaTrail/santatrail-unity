@@ -15,6 +15,7 @@ WPNAV_RADIUS 200
 GUID_OPTIONS 0
 GUID_TIMEOUT 0
 FS_OPTIONS 0
+# Disable RC mode switching; let ArduCopter use its normal startup mode.
 FLTMODE_CH 0
 RC7_OPTION 0
 EK3_IMU_MASK 1

@@ -1,4 +1,5 @@
 using UnityEngine;
+using System;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -21,6 +22,7 @@ public class CameraStreamer : MonoBehaviour
     private bool running = false;
 
     int frameId = 0;
+    float nextCaptureTime;
 
     void Start()
     {
@@ -49,11 +51,12 @@ public class CameraStreamer : MonoBehaviour
             {
                 if (frameQueue.TryDequeue(out byte[] raw))
                 {
-                    int totalChunks = Mathf.CeilToInt((float)raw.Length / chunkSize);
+                    // Keep Unity API calls on the main thread.
+                    int totalChunks = (raw.Length + chunkSize - 1) / chunkSize;
 
                     for (int i = 0; i < totalChunks; i++)
                     {
-                        int size = Mathf.Min(chunkSize, raw.Length - i * chunkSize);
+                        int size = Math.Min(chunkSize, raw.Length - i * chunkSize);
 
                         byte[] packet = new byte[size + 8];
 
@@ -84,6 +87,8 @@ public class CameraStreamer : MonoBehaviour
     void Update()
     {
         if (!running) return;
+        if (Time.realtimeSinceStartup < nextCaptureTime) return;
+        nextCaptureTime = Time.realtimeSinceStartup + 1f / 20f;
 
         cam.targetTexture = rt;
         cam.Render();

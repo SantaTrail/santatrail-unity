@@ -12,6 +12,7 @@ public class HintPanel : MonoBehaviour
 
     public void ShowHint(string clue)
     {
+        BehavioralAnalyticsCollector.AddEvent("hint_shown", "{\"hint_type\":\"panel\"}");
         panel.SetActive(true);
 
         hintText.text =
@@ -22,6 +23,7 @@ public class HintPanel : MonoBehaviour
 
     public void Hide()
     {
+        BehavioralAnalyticsCollector.AddEvent("hint_dismissed", "{\"hint_type\":\"panel\"}");
         panel.SetActive(false);
     }
 }

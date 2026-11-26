@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using System.Collections;
 using System.Net;
 using System.Net.Sockets;
@@ -12,6 +13,7 @@ using Esri.ArcGISMapsSDK.Components;
 using Esri.ArcGISMapsSDK.Utils.GeoCoord;
 using Esri.GameEngine.Geometry;
 using Esri.GameEngine.Extent;
+using Esri.GameEngine.Elevation;
 
 [DefaultExecutionOrder(9000)]
 public class MAVLinkReceiver : MonoBehaviour
@@ -33,6 +35,10 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("Rate Unity requests for GLOBAL_POSITION_INT telemetry from ArduPilot.")]
     [SerializeField] float requestedPositionRateHz = 10f;
 
+    [Min(1f)]
+    [Tooltip("Rate Unity requests for ATTITUDE telemetry so the drone keeps its true yaw while stationary.")]
+    [SerializeField] float requestedAttitudeRateHz = 10f;
+
     private float nextSocketOpenAttemptTime;
 
     private MAVLink.MavlinkParse parser;
@@ -44,9 +50,22 @@ public class MAVLinkReceiver : MonoBehaviour
     public bool alignToMapOriginOnStart = true;
     private bool hasAlignedToMapOrigin;
     private bool hasConfirmedHomeSync;
+    private ArcGISElevationMonitor lv2HomeElevationMonitor;
+    private ArcGISMapComponent lv2ElevationMapComponent;
+    private bool lv2HomeAltitudeCalibrated;
+    private bool lv2HomeAltitudeHasTerrainSample;
+    private bool hasLoggedInvalidLv2TerrainSample;
+    private double lv2AltitudeCorrectionMeters;
+    // ArcGIS can report the initial 0m monitor placeholder while its terrain
+    // tiles are still loading. Keep holding MAVLink-driven world placement
+    // long enough for LV2's hillside elevation sample to arrive instead of
+    // releasing the drone at the uncorrected SITL datum.
+    private const float Lv2ElevationCalibrationTimeoutSeconds = 60f;
     private float lastHomeSyncRequestTime = -1000f;
     private float lastPositionStreamRequestTime = -1000f;
     private bool hasLoggedPositionStreamRequest;
+    private float lastAttitudeStreamRequestTime = -1000f;
+    private bool hasLoggedAttitudeStreamRequest;
 
     [Header("Debug Overlay")]
     public bool showDebugOverlay = true;
@@ -121,6 +140,13 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("How quickly the visible position eases toward incoming telemetry")]
     public float positionSmoothTime = 0.20f;
 
+    [Min(0.01f)]
+    [Tooltip("How quickly the LV2 terrain-relative height eases between altitude telemetry updates")]
+    public float relativeAltitudeSmoothTime = 0.30f;
+
+    private float smoothedRelativeAltitude;
+    private bool hasSmoothedRelativeAltitude;
+
     [Tooltip("Predicts motion between MAVLink packets")]
     public float extrapolationTime = 0.04f;
 
@@ -154,7 +180,7 @@ public class MAVLinkReceiver : MonoBehaviour
     [Tooltip("Request BRAKE from ArduPilot when the vehicle reaches the configured map boundary.")]
     [SerializeField] bool enforceMapGeofence = true;
 
-    [Tooltip("Use the active SceneLoaderArcgis map radius instead of duplicating the radius here.")]
+    [Tooltip("Use the active SceneLoaderArcgis flight boundary instead of duplicating the radius here.")]
     [SerializeField] bool useSceneMapExtentForGeofence = true;
 
     [Tooltip("Use the fallback radius only when no SceneLoaderArcgis map extent is available.")]
@@ -260,6 +286,10 @@ public class MAVLinkReceiver : MonoBehaviour
     private bool hbArmed;
     private bool hbGuided;
     private uint hbCustomMode;
+    private ushort missionCurrentSequence;
+    private ushort missionCurrentTotal;
+    private int missionCurrentUpdateCount;
+    private bool hasMissionCurrent;
     private byte hbSystemStatus;
     private MAVLink.MAV_LANDED_STATE landedState = MAVLink.MAV_LANDED_STATE.UNDEFINED;
     private string lastStatusText = "";
@@ -294,8 +324,13 @@ public class MAVLinkReceiver : MonoBehaviour
 
     public bool IsGuidedArmed => hbGuided && hbArmed;
     public bool IsGuidedMode => hbGuided;
+    public bool IsAutoMode => hbCustomMode == 3u;
     public bool IsArmed => hbArmed;
     public bool HasRecentTelemetry => lastAnyPacketTime > 0f && (Time.time - lastAnyPacketTime) <= 2f;
+    public bool HasMissionCurrent => hasMissionCurrent;
+    public ushort MissionCurrentSequence => missionCurrentSequence;
+    public ushort MissionCurrentTotal => missionCurrentTotal;
+    public int MissionCurrentUpdateCount => missionCurrentUpdateCount;
     public MAVLink.MAV_LANDED_STATE LandedState => landedState;
     public float RelativeAltitudeMeters => targetRelativeAlt;
     public double CurrentLatitude => smoothLat;
@@ -423,6 +458,178 @@ public class MAVLinkReceiver : MonoBehaviour
             StartCoroutine(AlignToMapOriginWhenReady());
         }
 
+        if (ArcGISAltitudeReference.UsesEgm96ForActiveLevel)
+        {
+            StartCoroutine(CalibrateLV2HomeAltitudeWhenReady());
+        }
+
+    }
+
+    IEnumerator CalibrateLV2HomeAltitudeWhenReady()
+    {
+        float startedAt = Time.realtimeSinceStartup;
+        while (enabled && !lv2HomeAltitudeHasTerrainSample)
+        {
+            if (lv2HomeElevationMonitor == null &&
+                locationComponent != null && GameManager.hasHomeLocation)
+            {
+                lv2ElevationMapComponent =
+                    locationComponent.GetComponentInParent<ArcGISMapComponent>();
+
+                if (lv2ElevationMapComponent != null &&
+                    lv2ElevationMapComponent.View != null &&
+                    lv2ElevationMapComponent.View.Map != null &&
+                    lv2ElevationMapComponent.View.ElevationProvider != null)
+                {
+                    ArcGISPoint homePoint = new ArcGISPoint(
+                        GameManager.homeLon,
+                        GameManager.homeLat,
+                        0,
+                        ArcGISAltitudeReference.ForActiveLevel()
+                    );
+
+                    lv2HomeElevationMonitor = new ArcGISElevationMonitor(
+                        homePoint,
+                        ArcGISElevationMode.RelativeToGround,
+                        0
+                    );
+                    lv2HomeElevationMonitor.PositionChanged += OnLV2HomeElevationChanged;
+                    lv2ElevationMapComponent.View.ElevationProvider.RegisterMonitor(
+                        lv2HomeElevationMonitor
+                    );
+                }
+            }
+
+            if (!lv2HomeAltitudeCalibrated &&
+                Time.realtimeSinceStartup - startedAt >= Lv2ElevationCalibrationTimeoutSeconds)
+            {
+                Debug.LogWarning(
+                    "LV2 terrain elevation was not available in time; " +
+                    "the drone will remain terrain-relative while ArcGIS keeps retrying. " +
+                    "MAVLink position updates can continue without the absolute elevation sample."
+                );
+                lv2HomeAltitudeCalibrated = true;
+            }
+
+            yield return null;
+        }
+    }
+
+    void OnLV2HomeElevationChanged(ArcGISPoint terrainPosition)
+    {
+        if (lv2HomeAltitudeHasTerrainSample || terrainPosition == null ||
+            !IsFinite(terrainPosition.Z) || !GameManager.hasHomeLocation)
+        {
+            return;
+        }
+
+        // ArcGIS can first report the monitor's uninitialized Z (0) before
+        // the elevation tile for the home coordinate has arrived. LV2 is an
+        // alpine village, so wait for a plausible terrain sample instead of
+        // treating that placeholder as real and shifting the drone by 1 km.
+        if (terrainPosition.Z < 250.0 || terrainPosition.Z > 3500.0)
+        {
+            if (!hasLoggedInvalidLv2TerrainSample)
+            {
+                Debug.LogWarning(
+                    $"Ignoring uninitialized LV2 terrain sample " +
+                    $"({terrainPosition.Z:F1}m); waiting for ArcGIS elevation data."
+                );
+                hasLoggedInvalidLv2TerrainSample = true;
+            }
+
+            return;
+        }
+
+        // ArduPilot reports global MSL altitude relative to its configured
+        // home. Align that datum to the terrain service's actual elevation at
+        // the same launch coordinate, then apply the same shift to all GPS
+        // heights rendered in ArcGIS. Relative altitude and QGC telemetry
+        // remain untouched.
+        lv2AltitudeCorrectionMeters = terrainPosition.Z - GameManager.homeAlt;
+        lv2HomeAltitudeHasTerrainSample = true;
+        lv2HomeAltitudeCalibrated = true;
+
+        // Keep the rendered aircraft terrain-relative even after datum
+        // calibration. This prevents the visual drone from going underground
+        // if the terrain service and SITL report different absolute datums.
+        if (hasTargetPosition && locationComponent != null)
+        {
+            if (!hasSmoothedRelativeAltitude)
+            {
+                smoothedRelativeAltitude = targetRelativeAlt;
+                hasSmoothedRelativeAltitude = true;
+            }
+
+            double correctedAltitude = GetArcGISAltitude(targetAlt);
+            if (hasSmoothedPosition)
+            {
+                smoothLat = targetLat;
+                smoothLon = targetLon;
+                smoothAlt = correctedAltitude;
+            }
+
+            if (hasLastSafePosition)
+            {
+                lastSafeLat = targetLat;
+                lastSafeLon = targetLon;
+                lastSafeAlt = correctedAltitude;
+            }
+
+            locationComponent.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.RelativeToGround;
+            locationComponent.SurfacePlacementOffset = System.Math.Max(
+                3.0,
+                smoothedRelativeAltitude
+            );
+            locationComponent.Position = new ArcGISPoint(
+                targetLon,
+                targetLat,
+                0,
+                ArcGISAltitudeReference.ForActiveLevel()
+            );
+            hasAppliedLocation = true;
+        }
+        else if (locationComponent != null)
+        {
+            // No vehicle GPS yet: keep the aircraft parked above terrain.
+            locationComponent.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.RelativeToGround;
+            locationComponent.SurfacePlacementOffset = 3.0;
+            locationComponent.Position = new ArcGISPoint(
+                GameManager.homeLon,
+                GameManager.homeLat,
+                0,
+                ArcGISAltitudeReference.ForActiveLevel()
+            );
+        }
+
+        Debug.Log(
+            $"LV2 terrain altitude aligned at home: terrain={terrainPosition.Z:F1}m, " +
+            $"SITL home={GameManager.homeAlt:F1}m, " +
+            $"ArcGIS correction={lv2AltitudeCorrectionMeters:+0.0;-0.0;0.0}m."
+        );
+    }
+
+    void ReleaseLV2HomeElevationMonitor()
+    {
+        if (lv2HomeElevationMonitor == null)
+        {
+            return;
+        }
+
+        lv2HomeElevationMonitor.PositionChanged = null;
+        if (lv2ElevationMapComponent != null &&
+            lv2ElevationMapComponent.View != null &&
+            lv2ElevationMapComponent.View.ElevationProvider != null)
+        {
+            lv2ElevationMapComponent.View.ElevationProvider.UnregisterMonitor(
+                lv2HomeElevationMonitor
+            );
+        }
+
+        lv2HomeElevationMonitor = null;
+        lv2ElevationMapComponent = null;
     }
 
     IEnumerator AlignToMapOriginWhenReady()
@@ -453,7 +660,28 @@ public class MAVLinkReceiver : MonoBehaviour
             return false;
         }
 
-        locationComponent.Position = mapComponent.OriginPosition;
+        if (ArcGISAltitudeReference.UsesEgm96ForActiveLevel)
+        {
+            // LV2 always renders relative to the terrain surface. A calibrated
+            // absolute Z is still useful for telemetry/collision calculations,
+            // but it must never drive the visual transform on this hillside.
+            locationComponent.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.RelativeToGround;
+            locationComponent.SurfacePlacementOffset = Mathf.Max(
+                3f,
+                targetRelativeAlt
+            );
+            locationComponent.Position = new ArcGISPoint(
+                mapComponent.OriginPosition.X,
+                mapComponent.OriginPosition.Y,
+                0,
+                ArcGISAltitudeReference.ForActiveLevel()
+            );
+        }
+        else
+        {
+            locationComponent.Position = mapComponent.OriginPosition;
+        }
         Debug.Log($"🧭 Drone aligned to ArcGIS map origin: {mapComponent.OriginPosition}");
         return true;
     }
@@ -528,6 +756,33 @@ public class MAVLinkReceiver : MonoBehaviour
         }
     }
 
+    void SwitchDroneToAbsoluteAltitude()
+    {
+        if (ArcGISAltitudeReference.UsesEgm96ForActiveLevel)
+        {
+            // LV2's rendered drone stays terrain-relative throughout flight.
+            // Use GLOBAL_POSITION_INT.relative_alt for its ground clearance.
+            return;
+        }
+
+        if (locationComponent == null ||
+            locationComponent.SurfacePlacementMode ==
+                ArcGISSurfacePlacementMode.AbsoluteHeight)
+        {
+            return;
+        }
+
+        // Switch coordinate modes together with a position in the new datum.
+        locationComponent.Position = new ArcGISPoint(
+            targetLon,
+            targetLat,
+            GetArcGISAltitude(targetAlt),
+            ArcGISAltitudeReference.ForActiveLevel()
+        );
+        locationComponent.SurfacePlacementMode =
+            ArcGISSurfacePlacementMode.AbsoluteHeight;
+    }
+
     void RequestPositionStream()
     {
         if (client == null || endPoint == null || txParser == null)
@@ -579,6 +834,58 @@ public class MAVLinkReceiver : MonoBehaviour
                 $"Requested GLOBAL_POSITION_INT at {requestedPositionRateHz:0.#} Hz from ArduPilot."
             );
             hasLoggedPositionStreamRequest = true;
+        }
+    }
+
+    void RequestAttitudeStream()
+    {
+        if (client == null || endPoint == null || txParser == null)
+        {
+            return;
+        }
+
+        bool hasFreshAttitude =
+            lastAttitudeTime > 0f &&
+            (Time.time - lastAttitudeTime) < 2f;
+
+        if (hasFreshAttitude ||
+            (Time.time - lastAttitudeStreamRequestTime) < 2f)
+        {
+            return;
+        }
+
+        lastAttitudeStreamRequestTime = Time.time;
+        float intervalMicroseconds =
+            1000000f / Mathf.Max(1f, requestedAttitudeRateHz);
+
+        var requestAttitude = new MAVLink.mavlink_command_long_t(
+            (float)MAVLink.MAVLINK_MSG_ID.ATTITUDE,
+            intervalMicroseconds,
+            0f,
+            0f,
+            0f,
+            0f,
+            0f,
+            (ushort)MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL,
+            vehicleSystemId,
+            vehicleComponentId,
+            0
+        );
+
+        byte[] requestPacket = txParser.GenerateMAVLinkPacket20(
+            MAVLink.MAVLINK_MSG_ID.COMMAND_LONG,
+            requestAttitude,
+            false,
+            255,
+            (byte)MAVLink.MAV_COMPONENT.MAV_COMP_ID_MISSIONPLANNER
+        );
+
+        if (SendToVehicle(requestPacket) && !hasLoggedAttitudeStreamRequest)
+        {
+            Debug.Log(
+                $"Requested ATTITUDE at {requestedAttitudeRateHz:0.#} Hz from ArduPilot."
+            );
+            hasLoggedAttitudeStreamRequest = true;
         }
     }
 
@@ -696,6 +1003,14 @@ public class MAVLinkReceiver : MonoBehaviour
 
     void CheckAltitudeLimit()
     {
+        // Temporary LV2-only gameplay override while terrain and mission
+        // altitude alignment are being tuned. Other levels keep the ceiling.
+        if (SceneManager.GetActiveScene().name == "LV3")
+        {
+            altitudeLimitTriggered = false;
+            return;
+        }
+
         if (!enforceMaximumAltitude ||
             !hasTargetPosition ||
             !hbArmed ||
@@ -754,7 +1069,9 @@ public class MAVLinkReceiver : MonoBehaviour
         radiusMeters = 0.0;
 
         if (useSceneMapExtentForGeofence &&
-            SceneLoaderArcgis.TryGetConfiguredMapExtentRadius(out radiusMeters))
+            SceneLoaderArcgis.TryGetConfiguredDroneFlightBoundaryRadius(
+                out radiusMeters
+            ))
         {
             return true;
         }
@@ -1143,7 +1460,7 @@ public class MAVLinkReceiver : MonoBehaviour
             holdLongitude,
             holdLatitude,
             holdAltitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         // BRAKE cancels stick/guided control and used to leave the old Guided
@@ -1586,11 +1903,25 @@ public class MAVLinkReceiver : MonoBehaviour
         float mavHeadingDegrees;
 
         // Use one stable source instead of switching between ATTITUDE and GPS
-        // every frame. GLOBAL_POSITION_INT.hdg is also the heading normally
-        // represented by the vehicle arrow in QGroundControl.
-        if (useGpsHeadingForRotation && headingFresh)
+        // every frame. When GPS heading is disabled, wait for attitude data
+        // rather than falling back to GPS heading while the vehicle is still.
+        if (useGpsHeadingForRotation)
         {
-            mavHeadingDegrees = headingDeg;
+            if (headingFresh)
+            {
+                mavHeadingDegrees = headingDeg;
+            }
+            else if (attitudeFresh)
+            {
+                mavHeadingDegrees = Mathf.Repeat(
+                    yaw * Mathf.Rad2Deg,
+                    360f
+                );
+            }
+            else
+            {
+                return;
+            }
         }
         else if (attitudeFresh)
         {
@@ -1598,10 +1929,6 @@ public class MAVLinkReceiver : MonoBehaviour
                 yaw * Mathf.Rad2Deg,
                 360f
             );
-        }
-        else if (headingFresh)
-        {
-            mavHeadingDegrees = headingDeg;
         }
         else
         {
@@ -1963,8 +2290,22 @@ public class MAVLinkReceiver : MonoBehaviour
             hbSystemStatus = hb.system_status;
             hbArmed = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.SAFETY_ARMED) != 0;
             hbGuided = (hb.base_mode & (byte)MAVLink.MAV_MODE_FLAG.GUIDED_ENABLED) != 0;
+            if (hbArmed)
+            {
+                SwitchDroneToAbsoluteAltitude();
+            }
             TrySyncHomeLocation();
             RequestPositionStream();
+            RequestAttitudeStream();
+        }
+
+        if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.MISSION_CURRENT)
+        {
+            var mission = (MAVLink.mavlink_mission_current_t)msg.data;
+            missionCurrentSequence = mission.seq;
+            missionCurrentTotal = mission.total;
+            missionCurrentUpdateCount++;
+            hasMissionCurrent = true;
         }
 
         if (msg.msgid == (uint)MAVLink.MAVLINK_MSG_ID.EXTENDED_SYS_STATE)
@@ -2008,19 +2349,57 @@ public class MAVLinkReceiver : MonoBehaviour
         if (!hasTargetPosition || locationComponent == null)
             return;
 
+        bool renderLV2RelativeToTerrain =
+            ArcGISAltitudeReference.UsesEgm96ForActiveLevel;
+
+        float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+        if (!hasSmoothedRelativeAltitude)
+        {
+            smoothedRelativeAltitude = targetRelativeAlt;
+            hasSmoothedRelativeAltitude = true;
+        }
+        else
+        {
+            float altitudeBlend = 1f - Mathf.Exp(
+                -dt / Mathf.Max(0.01f, relativeAltitudeSmoothTime)
+            );
+            smoothedRelativeAltitude = Mathf.Lerp(
+                smoothedRelativeAltitude,
+                targetRelativeAlt,
+                altitudeBlend
+            );
+        }
+
+        float terrainClearanceMeters = Mathf.Max(3f, smoothedRelativeAltitude);
+
+        if (renderLV2RelativeToTerrain &&
+            locationComponent.SurfacePlacementMode !=
+                ArcGISSurfacePlacementMode.RelativeToGround)
+        {
+            locationComponent.SurfacePlacementMode =
+                ArcGISSurfacePlacementMode.RelativeToGround;
+            locationComponent.SurfacePlacementOffset =
+                terrainClearanceMeters;
+        }
+
         if (!hasSmoothedPosition)
         {
             smoothLat = targetLat;
             smoothLon = targetLon;
-            smoothAlt = targetAlt;
+            smoothAlt = GetArcGISAltitude(targetAlt);
             hasSmoothedPosition = true;
         }
 
-        float dt = Mathf.Max(Time.deltaTime, 0.0001f);
         float smoothTime = Mathf.Max(0.01f, positionSmoothTime);
 
         float dataAge = Mathf.Max(0f, Time.time - lastGpsPacketTime);
-        float forwardTime = extrapolationTime + Mathf.Min(dataAge, Mathf.Max(0f, maxExtrapolationGap));
+        // LV2's drone marker is rendered relative to ArcGIS terrain. Long
+        // dead-reckoning windows make it visibly jump when delayed packets
+        // arrive, so keep this visual prediction close to the latest GPS fix.
+        float allowedExtrapolationGap = renderLV2RelativeToTerrain
+            ? Mathf.Min(Mathf.Max(0f, maxExtrapolationGap), 0.25f)
+            : Mathf.Max(0f, maxExtrapolationGap);
+        float forwardTime = extrapolationTime + Mathf.Min(dataAge, allowedExtrapolationGap);
 
         float useNorthMps = velNorthMps;
         float useEastMps = velEastMps;
@@ -2076,7 +2455,9 @@ public class MAVLinkReceiver : MonoBehaviour
 
         double predictedLat = targetLat + (useNorthMps * forwardTime) / metersPerDegLat;
         double predictedLon = targetLon + (useEastMps * forwardTime) / metersPerDegLon;
-        double predictedAlt = targetAlt - (useDownMps * forwardTime);
+        double predictedAlt = GetArcGISAltitude(
+            targetAlt - (useDownMps * forwardTime)
+        );
 
         if (usingGuidedAssist)
         {
@@ -2136,12 +2517,31 @@ public class MAVLinkReceiver : MonoBehaviour
         return;
     }
 
-    locationComponent.Position = new ArcGISPoint(
-        smoothLon,
-        smoothLat,
-        smoothAlt,
-        ArcGISSpatialReference.WGS84()
-    );
+    if (renderLV2RelativeToTerrain)
+    {
+        double clearanceMeters = terrainClearanceMeters;
+        if (System.Math.Abs(
+                locationComponent.SurfacePlacementOffset - clearanceMeters) >= 0.02)
+        {
+            locationComponent.SurfacePlacementOffset = clearanceMeters;
+        }
+
+        locationComponent.Position = new ArcGISPoint(
+            smoothLon,
+            smoothLat,
+            0,
+            ArcGISAltitudeReference.ForActiveLevel()
+        );
+    }
+    else
+    {
+        locationComponent.Position = new ArcGISPoint(
+            smoothLon,
+            smoothLat,
+            smoothAlt,
+            ArcGISAltitudeReference.ForActiveLevel()
+        );
+    }
     hasAppliedLocation = true;
     hasLastSafePosition = true;
     lastSafeLat = smoothLat;
@@ -2176,6 +2576,13 @@ public class MAVLinkReceiver : MonoBehaviour
         }
     }
 }
+
+    double GetArcGISAltitude(double mavlinkAltitude)
+    {
+        return ArcGISAltitudeReference.UsesEgm96ForActiveLevel
+            ? mavlinkAltitude + lv2AltitudeCorrectionMeters
+            : mavlinkAltitude;
+    }
 
     void SendGuidedRepositionNudge()
     {
@@ -2350,6 +2757,8 @@ public class MAVLinkReceiver : MonoBehaviour
     }
     void OnDisable()
     {
+        ReleaseLV2HomeElevationMonitor();
+
         if (client != null)
         {
             client.Close();

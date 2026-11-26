@@ -46,6 +46,7 @@ public sealed class FlightLogSyncService : MonoBehaviour
 
         if (loadedSettings == null || !loadedSettings.enabled ||
             !loadedSettings.telemetryOptIn ||
+            !BehavioralAnalyticsCollector.HasConsent ||
             string.IsNullOrWhiteSpace(loadedSettings.apiBaseUrl))
         {
             return;
@@ -75,7 +76,7 @@ public sealed class FlightLogSyncService : MonoBehaviour
 
     private void OnLevelProgressSaved(ProgressSaveSystem.LevelProgressRecord record)
     {
-        if (record == null || settings == null)
+        if (record == null || settings == null || !BehavioralAnalyticsCollector.HasConsent)
         {
             return;
         }

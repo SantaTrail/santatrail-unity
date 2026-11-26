@@ -13,14 +13,12 @@ public class SceneLoaderButton : MonoBehaviour
             return;
         }
 
-        // Prepare the letter while LoadingScene is visible so the player
-        // enters the letter scene with its child, text, and choices ready.
+        // The MainPage letter icon opens the level-mail inbox.
         if (SceneManager.GetActiveScene().name == "MainPageScene" &&
             sceneName == "letter")
         {
-            SantaTrailSceneLoadRequest.Request(sceneName, true);
-            Debug.Log("SceneLoaderButton: opening LoadingScene to prepare the letter.");
-            SceneManager.LoadSceneAsync("LoadingScene", LoadSceneMode.Single);
+            // Selecting a row in the inbox enters that level's gift-packing scene.
+            Level2LetterNotification.ShowForMainPage();
             return;
         }
 

@@ -1,12 +1,14 @@
 using System.Collections;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 public class LevelCompletionStatsUI : MonoBehaviour
 {
     [Header("References")]
     [SerializeField] private DeliveryScoreManager deliveryScoreManager;
-    [SerializeField] private Level1Manager level1Manager;
+    [FormerlySerializedAs("level1Manager")]
+    [SerializeField] private LevelManager levelManager;
     [SerializeField] private GameObject panel;
     [SerializeField] private TMP_Text titleText;
     [SerializeField] private TMP_Text totalScoreText;
@@ -51,9 +53,9 @@ public class LevelCompletionStatsUI : MonoBehaviour
             deliveryScoreManager = FindFirstObjectByType<DeliveryScoreManager>();
         }
 
-        if (level1Manager == null)
+        if (levelManager == null)
         {
-            level1Manager = FindFirstObjectByType<Level1Manager>();
+            levelManager = FindFirstObjectByType<LevelManager>();
         }
 
         if (panel == null)
@@ -85,9 +87,9 @@ public class LevelCompletionStatsUI : MonoBehaviour
 
         deliveryScoreManager.LevelCompleted += HandleLevelCompleted;
 
-        if (level1Manager != null)
+        if (levelManager != null)
         {
-            level1Manager.LevelStarted += HandleLevelStarted;
+            levelManager.LevelStarted += HandleLevelStarted;
         }
 
         if (IsAlreadyComplete())
@@ -103,9 +105,9 @@ public class LevelCompletionStatsUI : MonoBehaviour
             deliveryScoreManager.LevelCompleted -= HandleLevelCompleted;
         }
 
-        if (level1Manager != null)
+        if (levelManager != null)
         {
-            level1Manager.LevelStarted -= HandleLevelStarted;
+            levelManager.LevelStarted -= HandleLevelStarted;
         }
     }
 
@@ -313,20 +315,20 @@ public class LevelCompletionStatsUI : MonoBehaviour
 
     private bool HasLevelCompleted()
     {
-        return level1Manager != null
-            ? level1Manager.HasLevelCompleted
+        return levelManager != null
+            ? levelManager.HasLevelCompleted
             : IsAlreadyComplete();
     }
 
     private float GetLevelElapsedSeconds()
     {
-        if (level1Manager != null && level1Manager.HasLevelStarted)
+        if (levelManager != null && levelManager.HasLevelStarted)
         {
-            float endTime = level1Manager.HasLevelCompleted
-                ? level1Manager.LevelCompletedAt
+            float endTime = levelManager.HasLevelCompleted
+                ? levelManager.LevelCompletedAt
                 : Time.time;
 
-            return Mathf.Max(0f, endTime - level1Manager.LevelStartedAt);
+            return Mathf.Max(0f, endTime - levelManager.LevelStartedAt);
         }
 
         return Mathf.Max(0f, Time.time - levelStartTime);

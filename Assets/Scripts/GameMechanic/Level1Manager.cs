@@ -1,14 +1,16 @@
-using TMPro;
+using System;
+using System.IO;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using System;
 
-public class Level1Manager : MonoBehaviour
+/// <summary>LV1 guided-flight onboarding and delivery hints.</summary>
+public sealed class Level1Manager : LevelManager
 {
     private enum TutorialStep
     {
         WaitForConnection,
         ShowMapMode,
+        WaitForMapType,
         WaitForGuidedMode,
         WaitForTakeoff,
         WaitForControl,
@@ -16,80 +18,61 @@ public class Level1Manager : MonoBehaviour
         Finished
     }
 
-    [Header("Delivery System")]
-    public DeliveryScoreManager deliveryScoreManager;
-
-    [Header("UI")]
-    public TextMeshProUGUI objectiveText;
-    public TextMeshProUGUI levelStatusText;
-    public string objectivePrefix = "Present Delivered: ";
-    public string completedMessage = "Nice work! You finished the guided-flight tutorial.";
-    public DeliveryPresentProgressUI presentProgressUI;
-
-    [Header("Beginner Tutorial")]
+    [Header("LV1 Guided Flight Tutorial")]
     public bool showTutorial = true;
     [TextArea(2, 4)] public string welcomeMessage =
-        "Welcome! First, open QGroundControl and make sure the drone is connected.";
+        "Welcome! Connect to the drone in QGroundControl. I’ll guide you through the first flight.";
     [TextArea(2, 4)] public string mapModeMessage =
-        "QGroundControl opens in Satellite map mode automatically. Use the map to locate the drone and delivery area.";
+        "In QGroundControl, open Application Settings > Maps and set Type to Street Map. If it already shows Street Map, the tutorial will continue automatically.";
     [TextArea(2, 4)] public string findTargetMessage =
-        "Change the flight mode to Guided so the drone accepts the tutorial controls.";
+        "Open the flight-mode menu in QGC Fly View. If Guided isn’t listed, enable Edit Displayed Flight Modes and add it with Configure. Then select Guided.";
     [TextArea(2, 4)] public string approachMessage =
-        "Use Guided takeoff and climb to a safe height.";
+        "Choose Guided mode and Takeoff in QGroundControl and enter 12 m as the target altitude.";
     [TextArea(2, 4)] public string holdPositionMessage =
-        "Now try to gently control the drone and move it a little.";
+        "Move the drone a short distance, then release the controls and let it hover.";
     [TextArea(2, 4)] public string transitionMessage =
-        "Good. The delivery targets are now unlocked. You still need to deliver 5 presents.";
+        "Tutorial complete! Delivery targets are unlocked. Follow the highlighted house to make your first delivery.";
+    [TextArea(2, 4)] public string struggleHintMessage =
+        "Need a hand? Stay around 12 m while traveling. Above the highlighted house, descend to no more than 3 m above the roof and hover to deliver.";
     [Min(0.1f)] public float connectionHoldSeconds = 8f;
     [Min(0.1f)] public float mapModeDisplaySeconds = 4f;
     [Min(0.1f)] public float takeoffAltitudeMeters = 1.5f;
     [Min(0.1f)] public float controlMovementMeters = 2f;
+    [Tooltip("Show delivery help after this many seconds with no completed delivery.")]
+    [Min(1f)] public float struggleHintDelaySeconds = 30f;
 
-    [Header("Scene Flow")]
-    public bool autoLoadNextScene = false;
-    public string nextSceneName = "";
-    [Min(0f)] public float nextSceneDelaySeconds = 2f;
-
-    public event Action LevelStarted;
-
-    private bool completed;
     private bool tutorialFinished;
     private TutorialStep tutorialStep = TutorialStep.WaitForConnection;
-    private MAVLinkReceiver mavlinkReceiver;
     private Vector3 controlStartPosition;
     private bool hasControlReference;
     private float connectionDetectedTime = -1f;
     private float mapModeInstructionStartedAt = -1f;
+    private float nextMapTypeCheckAt = -1f;
+    private bool qgcMapSettingsWarningLogged;
+    private float deliveryUnlockedTime = -1f;
+    private bool struggleHintShown;
 
-    public float LevelStartedAt { get; private set; } = -1f;
-    public float LevelCompletedAt { get; private set; } = -1f;
-    public bool HasLevelStarted => LevelStartedAt >= 0f;
-    public bool HasLevelCompleted => LevelCompletedAt >= 0f;
+    protected override bool LocksDeliveryUntilTutorialCompletes => showTutorial && !tutorialFinished;
+    protected override bool StartsTimerWhenTargetsLoad => !showTutorial || tutorialFinished;
 
-    void Start()
+    protected override void ApplyActiveLevelOverrides()
     {
-        ApplyActiveLevelOverrides();
-
-        if (deliveryScoreManager == null)
+        base.ApplyActiveLevelOverrides();
+        if (GameManager.hasActiveLevelSettings)
         {
-            deliveryScoreManager = FindFirstObjectByType<DeliveryScoreManager>();
+            showTutorial = GameManager.activeShowTutorial;
         }
-
-        ResolveMavlinkReceiver();
-        ResolvePresentProgressUI();
-
-        if (deliveryScoreManager == null)
+        if (GameManager.hasActiveDeliveryCount)
         {
-            SetObjectiveText($"{GetObjectiveLabel()}: 0/0");
-            SetStatusText("Waiting for delivery system...");
-            Debug.LogWarning("Level1Manager: DeliveryScoreManager was not found.");
-            return;
+            string presentWord = GameManager.activeDeliveryCount == 1 ? "present" : "presents";
+            transitionMessage =
+                $"Good. The delivery targets are now unlocked. You still need to deliver " +
+                $"{GameManager.activeDeliveryCount} {presentWord}.";
         }
+    }
 
-        deliveryScoreManager.TargetsRemainingChanged += UpdateObjective;
-        deliveryScoreManager.LevelCompleted += CompleteLevel;
-        deliveryScoreManager.SetTutorialLockout(showTutorial);
-
+    protected override void OnLevelInitialized()
+    {
         if (showTutorial)
         {
             tutorialFinished = false;
@@ -97,97 +80,35 @@ public class Level1Manager : MonoBehaviour
             hasControlReference = false;
             connectionDetectedTime = -1f;
             mapModeInstructionStartedAt = -1f;
-            LevelStartedAt = -1f;
-            LevelCompletedAt = -1f;
-            RefreshDeliveryObjective();
+            nextMapTypeCheckAt = -1f;
+            qgcMapSettingsWarningLogged = false;
+            deliveryUnlockedTime = -1f;
+            struggleHintShown = false;
             SetStatusText(welcomeMessage);
         }
         else
         {
             tutorialFinished = true;
-            UpdateObjective(deliveryScoreManager.TotalTargets > 0
-                ? deliveryScoreManager.RemainingTargets
-                : deliveryScoreManager.targetBuildingCount);
             SetStatusText("");
         }
+        RefreshDeliveryObjective();
     }
 
-    void ApplyActiveLevelOverrides()
+    protected override void OnLevelUpdate()
     {
-        if (!GameManager.hasActiveLevelSettings)
+        if (!showTutorial || tutorialFinished)
         {
-            return;
-        }
-
-        showTutorial = GameManager.activeShowTutorial;
-        autoLoadNextScene = GameManager.activeAutoLoadNextScene;
-
-        if (!string.IsNullOrWhiteSpace(GameManager.activeNextSceneName))
-        {
-            nextSceneName = GameManager.activeNextSceneName;
-        }
-
-        if (GameManager.activeNextSceneDelaySeconds >= 0f)
-        {
-            nextSceneDelaySeconds = GameManager.activeNextSceneDelaySeconds;
-        }
-
-        if (GameManager.hasActiveDeliveryCount)
-        {
-            string presentWord = GameManager.activeDeliveryCount == 1 ? "present" : "presents";
-            transitionMessage =
-                $"Good. The delivery targets are now unlocked. " +
-                $"You still need to deliver {GameManager.activeDeliveryCount} {presentWord}.";
-        }
-    }
-
-    void Update()
-    {
-        if (PauseMenuController.IsPaused) return;
-        if (completed || deliveryScoreManager == null)
-        {
-            return;
-        }
-
-        ResolveMavlinkReceiver();
-        TryAutoStartLevelTimer();
-
-        if (!showTutorial)
-        {
+            ShowStruggleHintIfNeeded();
             return;
         }
 
         AdvanceTutorialIfReady();
+        ShowStruggleHintIfNeeded();
     }
 
-    void OnDestroy()
+    private void AdvanceTutorialIfReady()
     {
-        if (deliveryScoreManager != null)
-        {
-            deliveryScoreManager.TargetsRemainingChanged -= UpdateObjective;
-            deliveryScoreManager.LevelCompleted -= CompleteLevel;
-            deliveryScoreManager.SetTutorialLockout(false);
-        }
-
-        CancelInvoke();
-    }
-
-    void ResolveMavlinkReceiver()
-    {
-        if (mavlinkReceiver == null)
-        {
-            mavlinkReceiver = MAVLinkReceiver.Active;
-        }
-
-        if (mavlinkReceiver == null)
-        {
-            mavlinkReceiver = FindFirstObjectByType<MAVLinkReceiver>();
-        }
-    }
-
-    void AdvanceTutorialIfReady()
-    {
-        if (mavlinkReceiver == null)
+        if (MavlinkReceiver == null)
         {
             return;
         }
@@ -195,38 +116,42 @@ public class Level1Manager : MonoBehaviour
         switch (tutorialStep)
         {
             case TutorialStep.WaitForConnection:
-                if (mavlinkReceiver.HasRecentTelemetry)
+                if (MavlinkReceiver.HasRecentTelemetry)
                 {
                     if (connectionDetectedTime < 0f)
                     {
                         connectionDetectedTime = Time.time;
                     }
-
-                    if ((Time.time - connectionDetectedTime) >= connectionHoldSeconds)
+                    if (Time.time - connectionDetectedTime >= connectionHoldSeconds)
                     {
                         SetTutorialStep(TutorialStep.ShowMapMode);
                     }
                 }
                 break;
-
             case TutorialStep.ShowMapMode:
                 if (mapModeInstructionStartedAt < 0f)
                 {
                     mapModeInstructionStartedAt = Time.time;
                 }
-                else if ((Time.time - mapModeInstructionStartedAt) >= mapModeDisplaySeconds)
+                else if (Time.time - mapModeInstructionStartedAt >= mapModeDisplaySeconds)
+                {
+                    SetTutorialStep(IsQgcStreetMapSelected()
+                        ? TutorialStep.WaitForGuidedMode
+                        : TutorialStep.WaitForMapType);
+                }
+                break;
+            case TutorialStep.WaitForMapType:
+                if (IsQgcStreetMapSelected())
                 {
                     SetTutorialStep(TutorialStep.WaitForGuidedMode);
                 }
                 break;
-
             case TutorialStep.WaitForGuidedMode:
-                if (mavlinkReceiver.IsGuidedMode)
+                if (MavlinkReceiver.IsGuidedMode)
                 {
                     SetTutorialStep(TutorialStep.WaitForTakeoff);
                 }
                 break;
-
             case TutorialStep.WaitForTakeoff:
                 if (HasTakenOff())
                 {
@@ -234,242 +159,141 @@ public class Level1Manager : MonoBehaviour
                     SetTutorialStep(TutorialStep.WaitForControl);
                 }
                 break;
-
             case TutorialStep.WaitForControl:
                 if (HasMovedEnough())
                 {
                     tutorialFinished = true;
-                    deliveryScoreManager.SetTutorialLockout(false);
+                    if (deliveryScoreManager != null)
+                    {
+                        deliveryScoreManager.SetTutorialLockout(false);
+                    }
                     SetTutorialStep(TutorialStep.DeliveryUnlocked);
                 }
                 break;
         }
     }
 
-    bool HasTakenOff()
+    private bool IsQgcStreetMapSelected()
     {
-        if (mavlinkReceiver == null)
+        if (Time.time < nextMapTypeCheckAt)
         {
             return false;
         }
-
-        if (mavlinkReceiver.LandedState == MAVLink.MAV_LANDED_STATE.IN_AIR)
+        nextMapTypeCheckAt = Time.time + 0.5f;
+        if (!TryReadQgcMapType(out string mapType))
         {
-            return true;
+            if (!qgcMapSettingsWarningLogged)
+            {
+                qgcMapSettingsWarningLogged = true;
+                Debug.LogWarning("Level1Manager: could not read QGroundControl's FlightMap/mapType setting.");
+            }
+            return false;
         }
-
-        return mavlinkReceiver.RelativeAltitudeMeters >= takeoffAltitudeMeters;
+        qgcMapSettingsWarningLogged = false;
+        return string.Equals(mapType, "Street Map", StringComparison.OrdinalIgnoreCase);
     }
 
-    bool HasMovedEnough()
+    private static bool TryReadQgcMapType(out string mapType)
     {
-        Vector3 currentPosition = GetDroneWorldPosition();
+        mapType = null;
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string roamingAppData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string[] candidates =
+        {
+            Path.Combine(userProfile, ".config", "qgroundcontrol.com", "QGroundControl.ini"),
+            Path.Combine(userProfile, ".config", "org.qgroundcontrol", "QGroundControl.ini"),
+            Path.Combine(userProfile, ".config", "QGroundControl.org", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl.org", "QGroundControl.ini"),
+            Path.Combine(roamingAppData, "QGroundControl.ini")
+        };
 
+        foreach (string candidate in candidates)
+        {
+            if (!File.Exists(candidate)) continue;
+            try
+            {
+                bool inFlightMapSection = false;
+                foreach (string rawLine in File.ReadAllLines(candidate))
+                {
+                    string line = rawLine.Trim();
+                    if (line.StartsWith("[", StringComparison.Ordinal) && line.EndsWith("]", StringComparison.Ordinal))
+                    {
+                        inFlightMapSection = string.Equals(line.Substring(1, line.Length - 2), "FlightMap", StringComparison.OrdinalIgnoreCase);
+                        continue;
+                    }
+                    if (!inFlightMapSection || line.Length == 0 || line.StartsWith(";")) continue;
+                    int separatorIndex = line.IndexOf('=');
+                    if (separatorIndex <= 0) continue;
+                    if (string.Equals(line.Substring(0, separatorIndex).Trim(), "mapType", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mapType = line.Substring(separatorIndex + 1).Trim();
+                        return true;
+                    }
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return false;
+    }
+
+    private bool HasTakenOff()
+    {
+        return MavlinkReceiver != null &&
+            (MavlinkReceiver.LandedState == MAVLink.MAV_LANDED_STATE.IN_AIR ||
+             MavlinkReceiver.RelativeAltitudeMeters >= takeoffAltitudeMeters);
+    }
+
+    private bool HasMovedEnough()
+    {
+        Vector3 currentPosition = MavlinkReceiver != null
+            ? MavlinkReceiver.transform.position
+            : (deliveryScoreManager != null && deliveryScoreManager.drone != null
+                ? deliveryScoreManager.drone.position
+                : Vector3.zero);
         if (!hasControlReference)
         {
             controlStartPosition = currentPosition;
             hasControlReference = true;
             return false;
         }
-
         Vector3 delta = currentPosition - controlStartPosition;
         delta.y = 0f;
         return delta.magnitude >= controlMovementMeters;
     }
 
-    Vector3 GetDroneWorldPosition()
+    private void ShowStruggleHintIfNeeded()
     {
-        if (mavlinkReceiver != null)
-        {
-            return mavlinkReceiver.transform.position;
-        }
-
-        if (deliveryScoreManager != null && deliveryScoreManager.drone != null)
-        {
-            return deliveryScoreManager.drone.position;
-        }
-
-        return Vector3.zero;
-    }
-
-    void UpdateObjective(int remaining)
-    {
-        if (completed)
+        if (struggleHintShown || !tutorialFinished ||
+            tutorialStep != TutorialStep.DeliveryUnlocked || deliveryScoreManager == null ||
+            deliveryScoreManager.CompletedTargets > 0 || deliveryUnlockedTime < 0f ||
+            Time.time - deliveryUnlockedTime < struggleHintDelaySeconds)
         {
             return;
         }
-
-        RefreshDeliveryObjective();
-
-        if (tutorialFinished &&
-            deliveryScoreManager != null &&
-            deliveryScoreManager.CompletedTargets > 0)
-        {
-            SetStatusText("");
-        }
+        struggleHintShown = true;
+        SetStatusText(struggleHintMessage);
     }
 
-    void SetObjectiveText(string text)
+    private void SetTutorialStep(TutorialStep step)
     {
-        if (objectiveText != null)
+        tutorialStep = step;
+        switch (step)
         {
-            objectiveText.text = text;
-        }
-    }
-
-    void SetStatusText(string message)
-    {
-        if (levelStatusText != null)
-        {
-            levelStatusText.text = message;
-        }
-    }
-
-    void SetTutorialStep(TutorialStep newStep)
-    {
-        tutorialStep = newStep;
-
-        switch (tutorialStep)
-        {
-            case TutorialStep.WaitForConnection:
-                SetStatusText(welcomeMessage);
-                break;
+            case TutorialStep.WaitForConnection: SetStatusText(welcomeMessage); break;
             case TutorialStep.ShowMapMode:
-                SetStatusText(mapModeMessage);
-                break;
-            case TutorialStep.WaitForGuidedMode:
-                SetStatusText(findTargetMessage);
-                break;
-            case TutorialStep.WaitForTakeoff:
-                SetStatusText(approachMessage);
-                break;
-            case TutorialStep.WaitForControl:
-                SetStatusText(holdPositionMessage);
-                break;
+            case TutorialStep.WaitForMapType: SetStatusText(mapModeMessage); break;
+            case TutorialStep.WaitForGuidedMode: SetStatusText(findTargetMessage); break;
+            case TutorialStep.WaitForTakeoff: SetStatusText(approachMessage); break;
+            case TutorialStep.WaitForControl: SetStatusText(holdPositionMessage); break;
             case TutorialStep.DeliveryUnlocked:
+                deliveryUnlockedTime = Time.time;
+                struggleHintShown = false;
                 SetStatusText(transitionMessage);
                 BeginLevelTimer();
                 RefreshDeliveryObjective();
                 break;
-            case TutorialStep.Finished:
-                break;
         }
-    }
-
-    void CompleteLevel()
-    {
-        if (completed)
-        {
-            return;
-        }
-
-        completed = true;
-        tutorialStep = TutorialStep.Finished;
-        LevelCompletedAt = Time.time;
-        RefreshDeliveryObjective();
-        SetStatusText("");
-        Debug.Log("Level1Manager: Level 1 complete.");
-
-        if (!autoLoadNextScene)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(nextSceneName))
-        {
-            Debug.LogWarning("Level1Manager: Next Scene Name is empty.");
-            return;
-        }
-
-        Invoke(nameof(LoadNextScene), Mathf.Max(0f, nextSceneDelaySeconds));
-    }
-
-    void LoadNextScene()
-    {
-        SceneManager.LoadScene(nextSceneName);
-    }
-
-    void BeginLevelTimer()
-    {
-        if (LevelStartedAt >= 0f)
-        {
-            return;
-        }
-
-        LevelStartedAt = Time.time;
-        LevelStarted?.Invoke();
-    }
-
-    void TryAutoStartLevelTimer()
-    {
-        if (HasLevelStarted || deliveryScoreManager == null)
-        {
-            return;
-        }
-
-        if (!showTutorial || tutorialFinished)
-        {
-            if (deliveryScoreManager.TotalTargets > 0)
-            {
-                BeginLevelTimer();
-            }
-        }
-    }
-
-    void RefreshDeliveryObjective()
-    {
-        if (objectiveText == null || deliveryScoreManager == null)
-        {
-            return;
-        }
-
-        int completedTargets = deliveryScoreManager.CompletedTargets;
-        int totalTargets = deliveryScoreManager.TotalTargets > 0
-            ? deliveryScoreManager.TotalTargets
-            : deliveryScoreManager.targetBuildingCount;
-
-        objectiveText.text =
-            $"{GetObjectiveLabel()}: {completedTargets}/{Mathf.Max(1, totalTargets)}";
-
-        ResolvePresentProgressUI();
-        if (presentProgressUI != null)
-        {
-            presentProgressUI.SetProgress(completedTargets, Mathf.Max(1, totalTargets));
-        }
-    }
-
-    private void ResolvePresentProgressUI()
-    {
-        if (presentProgressUI != null)
-        {
-            return;
-        }
-
-        presentProgressUI = FindFirstObjectByType<DeliveryPresentProgressUI>(
-            FindObjectsInactive.Include);
-        if (presentProgressUI != null || objectiveText == null)
-        {
-            return;
-        }
-
-        GameObject progressObject = new GameObject(
-            "DeliveryPresentProgress",
-            typeof(RectTransform),
-            typeof(DeliveryPresentProgressUI));
-        RectTransform progressRect = progressObject.GetComponent<RectTransform>();
-        progressRect.SetParent(objectiveText.rectTransform.parent, false);
-        progressRect.anchorMin = new Vector2(1f, 1f);
-        progressRect.anchorMax = new Vector2(1f, 1f);
-        progressRect.pivot = new Vector2(0.5f, 0.5f);
-        progressRect.anchoredPosition = new Vector2(-174f, -170f);
-        progressRect.sizeDelta = new Vector2(224f, 40f);
-        presentProgressUI = progressObject.GetComponent<DeliveryPresentProgressUI>();
-    }
-
-    private string GetObjectiveLabel()
-    {
-        return string.IsNullOrWhiteSpace(objectivePrefix)
-            ? "Deliver presents"
-            : objectivePrefix.Trim();
     }
 }

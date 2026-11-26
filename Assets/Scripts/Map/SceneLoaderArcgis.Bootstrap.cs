@@ -36,6 +36,13 @@ public partial class SceneLoaderArcgis
             limitMapExtent && !fitDroneBoundaryToGeneratedVillage;
         configuredMapExtentRadiusMeters =
             System.Math.Max(1.0, mapExtentSizeMeters);
+        configuredDroneFlightBoundaryRadiusMeters =
+            droneFlightBoundaryRadiusMeters > 0f
+                ? System.Math.Min(
+                    configuredMapExtentRadiusMeters,
+                    droneFlightBoundaryRadiusMeters
+                )
+                : configuredMapExtentRadiusMeters;
 
         TryResolveArcGISConverter();
         ResolveModularHouseGenerator();
@@ -54,7 +61,7 @@ public partial class SceneLoaderArcgis
             );
 
             ApplyLayerVisibilityOverrides();
-            EnsureArcGISMapLoading(arcGISMap);
+            StartCoroutine(ConfigureAltitudeReferenceAndLoadMap(arcGISMap));
         }
         else
         {
@@ -74,6 +81,56 @@ public partial class SceneLoaderArcgis
             Debug.LogWarning("⚠️ ArcGISConverter not found in Awake (will keep retrying)");
     }
 
+    IEnumerator ConfigureAltitudeReferenceAndLoadMap(
+        ArcGISMapComponent mapComponent
+    )
+    {
+        // ArcGISMapComponent creates its View in OnEnable. Wait for it before
+        // changing the map's spatial reference, then load the map only after
+        // the hillside level's vertical datum has been applied.
+        float waitStartedAt = Time.realtimeSinceStartup;
+        while (mapComponent != null &&
+               (mapComponent.View == null || mapComponent.View.Map == null) &&
+               Time.realtimeSinceStartup - waitStartedAt < 10f)
+        {
+            yield return null;
+        }
+
+        if (mapComponent == null)
+        {
+            yield break;
+        }
+
+        if (ArcGISAltitudeReference.UsesEgm96ForActiveLevel &&
+            mapComponent.View != null && mapComponent.View.Map != null)
+        {
+            mapComponent.CustomMapSpatialReference =
+                ArcGISAltitudeReference.ForActiveLevel();
+            mapComponent.UseCustomMapSpatialReference = true;
+
+            // A scene-serialized origin can still carry a horizontal-only
+            // WGS84 reference. Reapply its coordinates with EGM96 so the map
+            // origin, streamed terrain, and MAVLink heights share one datum.
+            ArcGISPoint currentOrigin = mapComponent.OriginPosition;
+            if (currentOrigin != null)
+            {
+                mapComponent.OriginPosition = new ArcGISPoint(
+                    currentOrigin.X,
+                    currentOrigin.Y,
+                    currentOrigin.Z,
+                    ArcGISAltitudeReference.ForActiveLevel()
+                );
+            }
+
+            Debug.Log(
+                "🗺️ Hillside map vertical reference set to EGM96 (WKID 5773) " +
+                "to align terrain and ArduPilot MSL altitude."
+            );
+        }
+
+        EnsureArcGISMapLoading(mapComponent);
+    }
+
     void OnDisable()
     {
         // A slow OSM request from the previous level must not overwrite the
@@ -88,6 +145,7 @@ public partial class SceneLoaderArcgis
         configuredMapExtentSource = null;
         hasConfiguredMapExtent = false;
         configuredMapExtentRadiusMeters = 0.0;
+        configuredDroneFlightBoundaryRadiusMeters = 0.0;
     }
 
     void OnDrawGizmosSelected()
@@ -158,7 +216,7 @@ public partial class SceneLoaderArcgis
                     GameManager.homeLon,
                     GameManager.homeLat,
                     GameManager.homeAlt,
-                    ArcGISSpatialReference.WGS84()
+                    ArcGISAltitudeReference.ForActiveLevel()
                 );
 
                 ApplyConfiguredMapExtent(
@@ -198,7 +256,7 @@ public partial class SceneLoaderArcgis
             mapOriginLongitude,
             mapOriginLatitude,
             mapOriginAltitude,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
@@ -385,6 +443,7 @@ public partial class SceneLoaderArcgis
     void Start()
     {
         Debug.Log("🏘 Visible-only village test mode enabled");
+        ApplyNightLevelLook();
 
         if (loadingScreen == null)
         {
@@ -423,6 +482,7 @@ public partial class SceneLoaderArcgis
             "main.py",
             "parser.py",
             "osm.py",
+            "arcgis_buildings.py",
             "elevation.py",
             "features.py",
             "classifier.py"
@@ -717,12 +777,23 @@ public partial class SceneLoaderArcgis
 
         RunPython();
         int backendAttempt = 1;
-        const int maximumBackendAttempts = 2;
+        // LV2 must have delivery houses to teach the survey and delivery loop.
+        // When Overpass returns a valid map with no footprints, its second
+        // network attempt can run long enough to outlast delivery discovery.
+        // Use the generated local village immediately for LV2; retain the
+        // cold-start retry for the other levels.
+        string activeSceneName = SceneManager.GetActiveScene().name;
+        bool isSurveyLevel = string.Equals(activeSceneName, "LV2", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(activeSceneName, "LV3", System.StringComparison.OrdinalIgnoreCase);
+        int maximumBackendAttempts = isSurveyLevel ? 1 : 2;
         float backendAttemptStartedAt = Time.realtimeSinceStartup;
 
         Debug.Log("⏳ Waiting for JSON + ArcGIS (production-safe)...");
 
-        float timeout = 120f;
+        // LV2's ArcGIS terrain can take over two minutes to become usable,
+        // while its enlarged OSM request may need a timeout and endpoint
+        // retry. Keep the loading gate open long enough for both to finish.
+        float timeout = 240f;
         float timer = 0f;
 
         bool jsonReady = !string.IsNullOrWhiteSpace(validatedJsonContent);
@@ -785,8 +856,10 @@ public partial class SceneLoaderArcgis
                             jsonReady = true;
                             TrySetFallbackOriginFromJson(content);
                             Debug.LogWarning(
-                                "⚠️ OSM returned no buildings after two attempts; " +
-                                "using the built-in delivery village."
+                                "⚠️ No building footprints were available after " +
+                                $"backend attempt {backendAttempt}/" +
+                                $"{maximumBackendAttempts}; using the built-in " +
+                                "delivery village."
                             );
                         }
                     }
@@ -866,32 +939,34 @@ public partial class SceneLoaderArcgis
             bool arcGISReadyForGeneration =
                 arcGISConverter != null &&
                 arcGISConverter.IsReady();
+            bool arcGISProjectionReady =
+                arcGISConverter != null &&
+                arcGISConverter.CanProjectCoordinates();
 
             if (!arcgisReady && arcGISReadyForGeneration)
             {
                 arcgisReady = true;
                 Debug.Log("✅ ArcGIS READY");
             }
-            else if (arcgisReady && !arcGISReadyForGeneration)
+            else if (arcgisReady && !arcGISProjectionReady)
             {
-                // Readiness can be lost if ArcGIS starts drawing again. Do not
-                // keep a stale ready result because ArcGISLocationComponent
-                // synchronizes with the native map immediately in OnEnable.
+                // Keep the first stable-map result while ArcGIS streams more
+                // tiles. Revoke it only if the loaded map or geographic
+                // projection itself becomes unavailable.
                 arcgisReady = false;
                 Debug.LogWarning(
-                    "⚠️ ArcGIS resumed loading; delaying level-object generation."
+                    "⚠️ ArcGIS map projection became unavailable; " +
+                    "delaying level-object generation."
                 );
             }
 
-            bool arcGISProjectionReady =
-                arcGISConverter != null &&
-                arcGISConverter.CanProjectCoordinates();
             bool fallbackProjectionReady =
                 !arcGISProjectionReady &&
                 CanUseFallbackProjection() &&
                 timer >= Mathf.Max(5f, arcGISStartupGraceSeconds);
             bool projectionReady =
                 arcGISReadyForGeneration ||
+                (arcgisReady && arcGISProjectionReady) ||
                 fallbackProjectionReady;
 
             if (loadingScreen != null)
@@ -957,18 +1032,18 @@ public partial class SceneLoaderArcgis
                 // running the synchronous generation work.
                 yield return null;
 
-                // The stabilization delay gives ArcGIS another opportunity to
-                // resume drawing. Re-check immediately before any generated
-                // object can add an ArcGISLocationComponent; its OnEnable path
-                // calls native synchronization and is not safe against a
-                // partially initialized or newly invalidated map view.
+                // Re-check map content and coordinate conversion immediately
+                // before generated ArcGISLocationComponents synchronize with
+                // the native map. DrawStatus may return to InProgress while
+                // tiles stream, even though the loaded map remains usable.
                 if (!fallbackProjectionReady &&
-                    (arcGISConverter == null || !arcGISConverter.IsReady()))
+                    (arcGISConverter == null ||
+                     !arcGISConverter.CanProjectCoordinates()))
                 {
                     arcgisReady = false;
                     Debug.LogWarning(
-                        "⚠️ ArcGIS readiness changed during stabilization; " +
-                        "waiting for a stable map before generating objects."
+                        "⚠️ ArcGIS projection became unavailable during " +
+                        "stabilization; waiting before generating objects."
                     );
                     continue;
                 }
@@ -1043,16 +1118,20 @@ public partial class SceneLoaderArcgis
                     Mathf.Max(1f, finalLevelReadyTimeoutSeconds);
                 bool mapReady =
                     !waitForArcGISBeforeHidingLoadingScreen ||
-                    (arcGISConverter != null && arcGISConverter.IsReady()) ||
+                    (arcGISConverter != null &&
+                     (arcGISConverter.IsReady() ||
+                      (arcgisReady &&
+                       arcGISConverter.CanProjectCoordinates()))) ||
                     localTerrainFallbackActive;
                 bool deliveryReady =
                     !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
                     deliveryManager == null ||
                     deliveryManager.IsInitializationComplete;
 
-                // ArcGIS readiness is a strict gate. Never reveal gameplay
-                // while the visible view is still drawing; a slow connection
-                // should extend the loading screen, not expose an empty map.
+                // A completed visible draw must have been observed before
+                // generation. After that, keep the gate satisfied while the
+                // loaded map remains projectable; background tile refinement
+                // should not hold an otherwise usable level on this screen.
                 while (!mapReady || !deliveryReady)
                 {
                     if (arcGISConverter == null)
@@ -1077,7 +1156,10 @@ public partial class SceneLoaderArcgis
 
                     mapReady =
                         !waitForArcGISBeforeHidingLoadingScreen ||
-                        (arcGISConverter != null && arcGISConverter.IsReady()) ||
+                        (arcGISConverter != null &&
+                         (arcGISConverter.IsReady() ||
+                          (arcgisReady &&
+                           arcGISConverter.CanProjectCoordinates()))) ||
                         localTerrainFallbackActive;
                     deliveryReady =
                         !waitForDeliveryTargetsBeforeHidingLoadingScreen ||
@@ -1683,7 +1765,7 @@ public partial class SceneLoaderArcgis
             originWaypoint.lon,
             originWaypoint.lat,
             originWaypoint.alt,
-            ArcGISSpatialReference.WGS84()
+            ArcGISAltitudeReference.ForActiveLevel()
         );
 
         ApplyConfiguredMapExtent(
